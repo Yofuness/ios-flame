@@ -687,7 +687,7 @@ static void cullWhy(int why,NSString *l,const char *extra="") {
  static std::atomic<int> said{0},img{0};if([l hasSuffix:@"Isrc"]?img++>=12:said++>=4)return;   // the wallpaper quad gets its own 12
  char t[300];snprintf(t,sizeof t,"SWEET CULL: not covering #%d %s %s",why,l.UTF8String,extra);sm2_logs(t);
 }
-struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;long cx0=0,cy0=0,cx1=0,cy1=0;};   // c*: the draw's clip (scissor within the target)   // writes: targets the draw may change; over: targets a covering draw overwrites
+struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;long cx0=0,cy0=0,cx1=0,cy1=0;NSString *label=nil;};   // c*: the draw's clip (scissor within the target)   // writes: targets the draw may change; over: targets a covering draw overwrites
 @interface NBRenderEncoder : NBEncoder
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d;
 @end
@@ -709,6 +709,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
 }
 - (void)recDraw:(void (^)(void))b covering:(bool)c {CullEntry e;e.blk=[b copy];e.draw=true;e.covering=c;
  {long r[4];[self clip:r];e.cx0=r[0];e.cy0=r[1];e.cx1=r[2];e.cy1=r[3];}
+ e.label=_pipe.label;
  if(_pipe){e.writes=_pipe.writtenMask&_attMask;e.over=_pipe.opaqueMask&_attMask;}_ops.push_back(e);}
 // sweet cull: is this draw an opaque, exactly-rectangular, full-target draw of a whitelisted pipeline?
 - (bool)coversPrim:(unsigned long)prim start:(NSUInteger)s count:(NSUInteger)n inst:(NSUInteger)inst indexed:(bool)indexed indexType:(MTLIndexType)ik
@@ -779,6 +780,9 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
    if(safe){dead[e]=1;last=std::max(last,d);}
   }
  }
+ {static std::atomic<int> dumps{0};size_t nd=0;bool cov=false;for(auto &o:ops)if(o.draw){nd++;cov|=o.covering;}   // sweet cull: dump the first big passes
+  if(nd>=10&&cov&&dumps++<3)for(size_t i=0;i<ops.size();i++)if(ops[i].draw){const CullEntry &o=ops[i];NSString *lb=o.label?[o.label stringByReplacingOccurrencesOfString:@"com.apple.coreanimation.draw." withString:@""]:@"-";
+   char t[240];snprintf(t,sizeof t,"SWEET CULL: d%zu %s clip %ld,%ld,%ld,%ld w%x o%x cov%d dead%d",i,lb.UTF8String,o.cx0,o.cy0,o.cx1,o.cy1,o.writes,o.over,(int)o.covering,(int)dead[i]);sm2_logs(t);}}
  unsigned culled=0;
  for(size_t i=0;i<ops.size();i++) {
   if(dead[i]){culled++;continue;}
