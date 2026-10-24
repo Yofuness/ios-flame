@@ -432,7 +432,7 @@ static std::string quartzCoreCallers();
 @property(nonatomic) std::string vertexName,fragmentName;   // sweet drawlog: what a draw's pipeline was (only filled when SWEET_DRAWLOG is set)
 @property(nonatomic) BOOL blend;
 @property(nonatomic) NSUInteger writeMask;
-@property(nonatomic) unsigned opaqueMask;   // sweet cull: colour attachments written with blending off and a full write mask
+@property(nonatomic) unsigned opaqueMask,writtenMask;   // sweet cull: colour attachments written with blending off and a full write mask
 @property(nonatomic) NSUInteger vstride;   // sweet cull: stride of vertex layout 1 (0: no vertex descriptor)
 @property(nonatomic) BOOL vpos0;           // sweet cull: vertex descriptor has a float4 attribute at offset 0 of buffer 1
 @end
@@ -687,7 +687,7 @@ static void cullWhy(int why,NSString *l,const char *extra="") {
  static std::atomic<int> said{0};if(said++>=12)return;
  char t[300];snprintf(t,sizeof t,"SWEET CULL: not covering #%d %s %s",why,l.UTF8String,extra);sm2_logs(t);
 }
-struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
+struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;};   // writes: targets the draw may change; over: targets a covering draw overwrites
 @interface NBRenderEncoder : NBEncoder
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d;
 @end
@@ -703,14 +703,15 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  NSUInteger _cvis;
 }
 - (void)rec:(void (^)(void))b {CullEntry e;e.blk=[b copy];_ops.push_back(e);}
-- (void)recDraw:(void (^)(void))b covering:(bool)c {CullEntry e;e.blk=[b copy];e.draw=true;e.covering=c;_ops.push_back(e);}
+- (void)recDraw:(void (^)(void))b covering:(bool)c {CullEntry e;e.blk=[b copy];e.draw=true;e.covering=c;
+ if(_pipe){e.writes=_pipe.writtenMask&_attMask;e.over=_pipe.opaqueMask&_attMask;}_ops.push_back(e);}
 // sweet cull: is this draw an opaque, exactly-rectangular, full-target draw of a whitelisted pipeline?
 - (bool)coversPrim:(unsigned long)prim start:(NSUInteger)s count:(NSUInteger)n inst:(NSUInteger)inst indexed:(bool)indexed indexType:(MTLIndexType)ik
          indexBuffer:(NBBuffer *)ib indexOffset:(NSUInteger)io baseVertex:(NSInteger)bv {
  if(!_defer||_noCull||!_pipe||prim!=MTLPrimitiveTypeTriangle||inst!=1||n!=6||_cvis)return false;
  NSString *l=_pipe.label;
  if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
- if((_pipe.opaqueMask&_attMask)!=_attMask){char t[64];snprintf(t,sizeof t,"opaque %x att %x",_pipe.opaqueMask,_attMask);cullWhy(1,l,t);return false;}   // every bound colour target is overwritten
+ if(!(_pipe.opaqueMask&1)){char t[64];snprintf(t,sizeof t,"opaque %x att %x",_pipe.opaqueMask,_attMask);cullWhy(1,l,t);return false;}   // overwrites target 0 at least; per-draw targets are checked at replay
  if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th)){cullWhy(2,l);return false;}
  if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th)){cullWhy(3,l);return false;}
  if(!_cvb||_cvb.storageMode!=MTLStorageModeShared){cullWhy(4,l);return false;}
@@ -761,6 +762,8 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  std::vector<CullEntry> ops;ops.swap(_ops);
  long last=-1;
  if(!_noCull)for(size_t i=0;i<ops.size();i++)if(ops[i].draw&&ops[i].covering)last=(long)i;
+ // cull only if every earlier draw writes nothing the covering draw doesn't overwrite (a survivor could read what a culled draw left)
+ if(last>=0)for(long i=0;i<last;i++)if(ops[i].draw&&(ops[i].writes&~ops[last].over)){last=-1;break;}
  unsigned culled=0;
  for(size_t i=0;i<ops.size();i++) {
   if(ops[i].draw&&(long)i<last){culled++;continue;}
@@ -1739,7 +1742,8 @@ static char sweetMemoryOwnerKey;
   if([(id)d.vertexFunction isKindOfClass:[NBFunction class]])state.vertexName=((NBFunction *)d.vertexFunction).name.UTF8String?:"";
   if([(id)d.fragmentFunction isKindOfClass:[NBFunction class]])state.fragmentName=((NBFunction *)d.fragmentFunction).name.UTF8String?:"";
   state.blend=d.colorAttachments[0].blendingEnabled;state.writeMask=d.colorAttachments[0].writeMask;
-  {unsigned m=0;for(unsigned i=0;i<8;i++){MTLRenderPipelineColorAttachmentDescriptor *a=d.colorAttachments[i];if(a.pixelFormat!=MTLPixelFormatInvalid&&!a.blendingEnabled&&a.writeMask==MTLColorWriteMaskAll)m|=1u<<i;}state.opaqueMask=m;}
+  {unsigned m=0;for(unsigned i=0;i<8;i++){MTLRenderPipelineColorAttachmentDescriptor *a=d.colorAttachments[i];if(a.pixelFormat!=MTLPixelFormatInvalid&&!a.blendingEnabled&&a.writeMask==MTLColorWriteMaskAll)m|=1u<<i;}state.opaqueMask=m;
+   unsigned w=0;for(unsigned i=0;i<8;i++){MTLRenderPipelineColorAttachmentDescriptor *a=d.colorAttachments[i];if(a.pixelFormat!=MTLPixelFormatInvalid&&a.writeMask!=MTLColorWriteMaskNone)w|=1u<<i;}state.writtenMask=w;}
   if(MTLVertexDescriptor *vd=d.vertexDescriptor) {   // sweet cull: the position layout of vertex buffer 1
    state.vstride=vd.layouts[1].stride;
    for(unsigned i=0;i<31;i++){MTLVertexAttributeDescriptor *a=vd.attributes[i];if(a.bufferIndex==1&&a.offset==0&&a.format==MTLVertexFormatFloat4)state.vpos0=YES;}
