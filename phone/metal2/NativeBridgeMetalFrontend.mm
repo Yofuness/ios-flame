@@ -14,6 +14,7 @@
 #include <atomic>
 #include <mutex>
 #include <pthread.h>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -427,6 +428,9 @@ static std::string quartzCoreCallers();
 @end
 @interface NBRenderPipeline : NBObject
 @property(nonatomic) NmbRenderPipeline *handle;
+@property(nonatomic) std::string vertexName,fragmentName;   // sweet drawlog: what a draw's pipeline was (only filled when SWEET_DRAWLOG is set)
+@property(nonatomic) BOOL blend;
+@property(nonatomic) NSUInteger writeMask;
 @end
 @implementation NBRenderPipeline
 - (void)dealloc {nmb_render_pipeline_release(_handle);}
@@ -614,42 +618,120 @@ static void waitForResource(id resource) {
 - (void)memoryBarrierWithScope:(MTLBarrierScope)s {(void)s;}
 @end
 
+// sweet drawlog (SWEET_DRAWLOG=/path): a text dump of what the big Core Animation passes draw, to see why they are slow. Off (one cached getenv)
+// unless set; only passes with a colour target >= 1000x2000 are recorded, and only the first 20 such passes with >= 10 draws are written.
+static const char *drawLogPath() {
+ static const char *path=[]{const char *p=getenv("SWEET_DRAWLOG");return p&&*p?p:(const char *)nullptr;}();
+ return path;
+}
+static std::atomic<int> gDrawLogBlocks;
+static void dlFloats(std::string &out,const void *p,size_t bytes,unsigned maxFloats) {
+ char t[32];const float *f=(const float *)p;size_t n=bytes/4;if(n>maxFloats)n=maxFloats;
+ for(size_t i=0;i<n;i++){float v;memcpy(&v,f+i,4);snprintf(t,sizeof t,"%s%g",i?",":"",v);out+=t;}
+}
+struct DrawLog {
+ unsigned long w=0,h=0,format=0,load=0,store=0;bool depth=false;
+ std::string text;unsigned draws=0;
+ std::string pipeline="-";bool blend=false;unsigned long mask=0;
+ struct VB {__unsafe_unretained NBBuffer *b=nil;unsigned long offset=0;} vbs[31];
+ struct FT {__unsafe_unretained NBTexture *t=nil;bool sampler=false;} fts[16];
+ bool viewport=false,scissor=false;double vp[6]={};unsigned long sc[4]={};
+ std::string vbytes,fbytes;   // setVertexBytes / setFragmentBytes calls since the previous draw
+ void bytes(std::string &out,const void *p,NSUInteger n,NSUInteger i,unsigned maxFloats) {
+  char t[48];snprintf(t,sizeof t," [%lu len=%lu: ",(unsigned long)i,(unsigned long)n);out+=t;dlFloats(out,p,n,maxFloats);out+="]";
+ }
+ void draw(unsigned long prim,unsigned long start,unsigned long count,unsigned long inst,bool indexed) {
+  char t[160];
+  snprintf(t,sizeof t,"draw %u prim=%lu %s=%lu/%lu inst=%lu blend=%d mask=%lu pipe=",draws,prim,indexed?"idx":"vtx",start,count,inst,(int)blend,mask);
+  text+=t;text+=pipeline;
+  if(viewport){snprintf(t,sizeof t," vp=%g,%g,%g,%g",vp[0],vp[1],vp[2],vp[3]);text+=t;}
+  if(scissor){snprintf(t,sizeof t," sc=%lu,%lu,%lu,%lu",sc[0],sc[1],sc[2],sc[3]);text+=t;}
+  text+="\n";
+  if(!vbytes.empty()){text+="  vbytes:"+vbytes+"\n";vbytes.clear();}
+  for(unsigned i=0;i<31;i++)if(vbs[i].b) {
+   NBBuffer *b=vbs[i].b;snprintf(t,sizeof t,"  vbuf %u off=%lu len=%lu",i,vbs[i].offset,(unsigned long)b.length);text+=t;
+   void *c=b.storageMode==MTLStorageModeShared?b.contents:nullptr;
+   if(c && vbs[i].offset<b.length){text+=" f=";dlFloats(text,(const char *)c+vbs[i].offset,b.length-vbs[i].offset,16);}
+   text+="\n";
+  }
+  for(unsigned i=0;i<16;i++)if(fts[i].t||fts[i].sampler) {
+   if(fts[i].t){NBTexture *x=fts[i].t;snprintf(t,sizeof t,"  ftex %u %lux%lu fmt=%lu mips=%lu",i,(unsigned long)x.width,(unsigned long)x.height,(unsigned long)x.pixelFormat,(unsigned long)x.mipmapLevelCount);}
+   else snprintf(t,sizeof t,"  ftex %u none",i);
+   text+=t;if(fts[i].sampler)text+=" sampler";text+="\n";
+  }
+  if(!fbytes.empty()){text+="  fbytes:"+fbytes+"\n";fbytes.clear();}
+  draws++;
+ }
+ void finish() {
+  if(w<1000||h<2000||draws<10||gDrawLogBlocks>=20)return;
+  gDrawLogBlocks++;
+  if(FILE *f=fopen(drawLogPath(),"a")) {
+   fprintf(f,"=== pass %lux%lu fmt=%lu load=%lu store=%lu depthstencil=%d draws=%u\n%s",w,h,format,load,store,(int)depth,draws,text.c_str());
+   fclose(f);
+  }
+ }
+};
 @interface NBRenderEncoder : NBEncoder
+- (void)drawLogStart:(MTLRenderPassDescriptor *)d;
 @end
-@implementation NBRenderEncoder
+@implementation NBRenderEncoder {
+ std::unique_ptr<DrawLog> _dl;   // sweet drawlog: null unless this pass is a big one and SWEET_DRAWLOG is set
+}
+- (void)drawLogStart:(MTLRenderPassDescriptor *)d {
+ if(!drawLogPath() || gDrawLogBlocks>=20)return;
+ id<MTLTexture> t=d.colorAttachments[0].texture;
+ if(!t || t.width<1000 || t.height<2000)return;
+ _dl.reset(new DrawLog());_dl->w=t.width;_dl->h=t.height;_dl->format=t.pixelFormat;
+ _dl->load=d.colorAttachments[0].loadAction;_dl->store=d.colorAttachments[0].storeAction;
+ _dl->depth=d.depthAttachment.texture||d.stencilAttachment.texture;
+}
+- (void)endEncoding {
+ if(_dl){_dl->finish();_dl.reset();}
+ [super endEncoding];
+}
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state {
  if(![(id)state isKindOfClass:[NBRenderPipeline class]]){[self.commandBuffer refuse:@"foreign render pipeline"];return;}
+ if(_dl){NBRenderPipeline *p=(NBRenderPipeline *)state;   // sweet drawlog
+  _dl->pipeline=(p.label.length?p.label.UTF8String:"-");_dl->pipeline+=" v="+p.vertexName+" f="+p.fragmentName;_dl->blend=p.blend;_dl->mask=p.writeMask;}
  [self check:nmb_render_set_pipeline(self.handle,[(NBRenderPipeline *)state handle]) what:"setRenderPipelineState"];
 }
-- (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o atIndex:(NSUInteger)i {[self buffer:b offset:o index:i stage:1];}
+- (void)dlVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o index:(NSUInteger)i {   // sweet drawlog
+ if(_dl && i<31 && (!b || [(id)b isKindOfClass:[NBBuffer class]])){_dl->vbs[i].b=(NBBuffer *)b;_dl->vbs[i].offset=o;}
+}
+- (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o atIndex:(NSUInteger)i {[self dlVertexBuffer:b offset:o index:i];[self buffer:b offset:o index:i stage:1];}
 - (void)setFragmentBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o atIndex:(NSUInteger)i {[self buffer:b offset:o index:i stage:2];}
-- (void)setVertexBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i {[self offset:o index:i stage:1];}
+- (void)setVertexBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i {if(_dl && i<31)_dl->vbs[i].offset=o;[self offset:o index:i stage:1];}
 - (void)setFragmentBufferOffset:(NSUInteger)o atIndex:(NSUInteger)i {[self offset:o index:i stage:2];}
 - (void)setVertexBuffers:(const id<MTLBuffer> __unsafe_unretained [])b offsets:(const NSUInteger [])o withRange:(NSRange)r {
- for(NSUInteger k=0;k<r.length;k++)[self buffer:b[k] offset:o[k] index:r.location+k stage:1];
+ for(NSUInteger k=0;k<r.length;k++){[self dlVertexBuffer:b[k] offset:o[k] index:r.location+k];[self buffer:b[k] offset:o[k] index:r.location+k stage:1];}
 }
 - (void)setFragmentBuffers:(const id<MTLBuffer> __unsafe_unretained [])b offsets:(const NSUInteger [])o withRange:(NSRange)r {
  for(NSUInteger k=0;k<r.length;k++)[self buffer:b[k] offset:o[k] index:r.location+k stage:2];
 }
-- (void)setVertexBytes:(const void *)p length:(NSUInteger)n atIndex:(NSUInteger)i {[self bytes:p length:n index:i stage:1];}
-- (void)setFragmentBytes:(const void *)p length:(NSUInteger)n atIndex:(NSUInteger)i {[self bytes:p length:n index:i stage:2];}
+- (void)setVertexBytes:(const void *)p length:(NSUInteger)n atIndex:(NSUInteger)i {if(_dl)_dl->bytes(_dl->vbytes,p,n,i,16);[self bytes:p length:n index:i stage:1];}
+- (void)setFragmentBytes:(const void *)p length:(NSUInteger)n atIndex:(NSUInteger)i {if(_dl)_dl->bytes(_dl->fbytes,p,n,i,8);[self bytes:p length:n index:i stage:2];}
 - (void)setVertexTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {[self texture:t index:i stage:1];}
-- (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {[self texture:t index:i stage:2];}
+- (void)dlFragmentTexture:(id<MTLTexture>)t index:(NSUInteger)i {   // sweet drawlog
+ if(_dl && i<16 && (!t || [(id)t isKindOfClass:[NBTexture class]]))_dl->fts[i].t=(NBTexture *)t;
+}
+- (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {[self dlFragmentTexture:t index:i];[self texture:t index:i stage:2];}
 - (void)setFragmentTextures:(const id<MTLTexture> __unsafe_unretained [])t withRange:(NSRange)r {
- for(NSUInteger k=0;k<r.length;k++)[self texture:t[k] index:r.location+k stage:2];
+ for(NSUInteger k=0;k<r.length;k++){[self dlFragmentTexture:t[k] index:r.location+k];[self texture:t[k] index:r.location+k stage:2];}
 }
 - (void)setVertexSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {[self sampler:s index:i stage:1];}
-- (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {[self sampler:s index:i stage:2];}
+- (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {if(_dl && i<16)_dl->fts[i].sampler=s!=nil;[self sampler:s index:i stage:2];}
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)state {
  if(state && ![(id)state isKindOfClass:[NBDepthStencil class]]){[self.commandBuffer refuse:@"foreign depth/stencil state"];return;}
  [self check:nmb_render_set_depth_stencil(self.handle,state?[(NBDepthStencil *)state handle]:nullptr) what:"setDepthStencilState"];
 }
 - (void)setViewport:(MTLViewport)v {
  const double values[6]={v.originX,v.originY,v.width,v.height,v.znear,v.zfar};
+ if(_dl){_dl->viewport=true;memcpy(_dl->vp,values,sizeof values);}   // sweet drawlog
  [self check:nmb_render_set_viewport(self.handle,values) what:"setViewport"];
 }
 - (void)setScissorRect:(MTLScissorRect)r {
  const uint64_t values[4]={r.x,r.y,r.width,r.height};
+ if(_dl){_dl->scissor=true;for(int k=0;k<4;k++)_dl->sc[k]=values[k];}   // sweet drawlog
  [self check:nmb_render_set_scissor(self.handle,values) what:"setScissorRect"];
 }
 // The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults until each is set.
@@ -687,6 +769,7 @@ static void waitForResource(id resource) {
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i baseInstance:(NSUInteger)b {
  gDraws++;self.commandBuffer->encodedWork.draws++;
+ if(_dl)_dl->draw(t,s,n,i,false);   // sweet drawlog
  [self check:nmb_render_draw(self.handle,t,(uint32_t)s,(uint32_t)n,(uint32_t)i,(uint32_t)b) what:"drawPrimitives"];
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i {
@@ -700,6 +783,7 @@ static void waitForResource(id resource) {
  if(![(id)b isKindOfClass:[NBBuffer class]]){[self.commandBuffer refuse:@"foreign index buffer"];return;}
  [self.commandBuffer.resourceOwners addObject:b];
  gDraws++;self.commandBuffer->encodedWork.draws++;
+ if(_dl)_dl->draw(t,o,n,i,true);   // sweet drawlog (idx=offset/count)
  [self check:nmb_render_draw_indexed(self.handle,t,(uint32_t)n,k,[(NBBuffer *)b handle],o,(uint32_t)i,(int32_t)v,(uint32_t)bi) what:"drawIndexedPrimitives"];
 }
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)t indexCount:(NSUInteger)n indexType:(MTLIndexType)k indexBuffer:(id<MTLBuffer>)b indexBufferOffset:(NSUInteger)o
@@ -864,7 +948,9 @@ static void scheduled(void *context);
   [_resourceOwners addObject:d.visibilityResultBuffer];
   pass.visibility=[(NBBuffer *)d.visibilityResultBuffer handle];
  }
- return [self encoder:[NBRenderEncoder new] handle:self.committed?nullptr:nmb_render_encoder_new(_handle,&pass) what:@"renderCommandEncoder"];
+ NBRenderEncoder *encoder=[NBRenderEncoder new];
+ [encoder drawLogStart:d];   // sweet drawlog
+ return [self encoder:encoder handle:self.committed?nullptr:nmb_render_encoder_new(_handle,&pass) what:@"renderCommandEncoder"];
 }
 - (void)addScheduledHandler:(MTLCommandBufferHandler)block {if(block)@synchronized(self){[_scheduledHandlers addObject:[block copy]];}}
 - (void)addCompletedHandler:(MTLCommandBufferHandler)block {if(block)@synchronized(self){[_completedHandlers addObject:[block copy]];}}
@@ -1486,7 +1572,14 @@ static char sweetMemoryOwnerKey;
  NmbRenderPipeline *handle=nmb_render_pipeline_new_with_options(gDevice,p,&creation);delete p;gTimePipeline.add(pipelineBegan);
  journalRenderPipeline(d,pipelineBegan,handle?nullptr:nmb_last_error(),gJournalPath.empty()?std::string():NBCost::now().since(costBegan));
  if(!handle)return failWith<id<MTLRenderPipelineState>>(error,@"render pipeline",nil);
- NBRenderPipeline *state=[NBRenderPipeline new];state.handle=handle;gPipelines++;if(error)*error=nil;return (id<MTLRenderPipelineState>)state;
+ NBRenderPipeline *state=[NBRenderPipeline new];state.handle=handle;gPipelines++;if(error)*error=nil;
+ if(drawLogPath()) {   // sweet drawlog
+  state.label=d.label;
+  if([(id)d.vertexFunction isKindOfClass:[NBFunction class]])state.vertexName=((NBFunction *)d.vertexFunction).name.UTF8String?:"";
+  if([(id)d.fragmentFunction isKindOfClass:[NBFunction class]])state.fragmentName=((NBFunction *)d.fragmentFunction).name.UTF8String?:"";
+  state.blend=d.colorAttachments[0].blendingEnabled;state.writeMask=d.colorAttachments[0].writeMask;
+ }
+ return (id<MTLRenderPipelineState>)state;
 }
 - (id<MTLBinaryArchive>)newBinaryArchiveWithDescriptor:(MTLBinaryArchiveDescriptor *)d error:(NSError **)error {
  if(d.url && !d.url.isFileURL){if(error)*error=nbError(@"a file URL is required");return nil;}
