@@ -7,6 +7,7 @@
 #   netsvc   SystemConfiguration network service for an IF    nettest  DNS, TCP, then HTTPS
 #   oslog    stream the unified log                           prefs    CFPreferences read/write (no defaults)
 #   imgtest  does ImageIO decode real pixels (HEIC: no)       membw    CPU memory bandwidth
+#   vtdecode FILE [SEC]: AVAssetReader/VideoToolbox decode fps, hardware or not
 #   expt, exq, runmigrator: one-off probes of ExtensionFoundation and DataMigration (runmigrator needs
 #   com.apple.migrationpluginwrapper's entitlements, not in git)
 set -euo pipefail
@@ -28,6 +29,7 @@ for m in expt exq nettest openapp oslog prefs runmigrator; do build $m $m.m -fob
 build imgtest imgtest.m -fobjc-arc -framework Foundation -framework ImageIO -framework CoreGraphics
 build lsreg lsreg.m -fobjc-arc -framework Foundation -framework MobileCoreServices
 build netsvc netsvc.m -fobjc-arc -framework Foundation -framework SystemConfiguration
+build vtdecode vtdecode.m -fobjc-arc -framework Foundation -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 build memwarn memwarn.c
 build pmem pmem.c
 build a2s a2s.c
