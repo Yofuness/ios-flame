@@ -66,10 +66,11 @@
 - **If retried:** keep the bridge's shadow copy for those textures (it is only ~3 ms/frame), or pad the IOSurface allocation itself instead of relaxing Turnip.
 - Removed from `patches/` so CI builds without it.
 
-## Step 3: GPU memory leak (stability)
-- **Problem:** backboardd leaks small BOs (~340 per app switch). The pool hitting 944 MB caused the old freezes.
-- **Census:** run the Turnip BO census. `mkdir /var/local/tubos; chmod 777` turns it on (patch 0101 prints every 300 submits).
-- **Next:** compare with the bridge (`SWEET_M2V_MESSAGES`) to find the owner.
+## Step 3: GPU memory leak (mostly NOT a leak, measured 2026-10-24)
+- **Method:** `tools/sunfish-m2env-bench.sh census TUDBG=bos` (census goes to `/var/local/tubos/backboardd-PID.log`; `mkdir` + `chmod 777` that dir first), then `flame-cmd tap 200 450` + `swipe 540 2300 540 1000` (open an app, go home) in a loop. Pull the file with `flame-files.py get`.
+- **Result (kernel37, k3 boot):** idle swipe bench is flat at ~630 BOs / 157 MB. The first 6 app switches took it to 1380 BOs / 248 MB peak, which settled at 1318 / 204 MB. 12 more switches: 1335, then 1353 BOs (207, 208 MB), i.e. ~1.5 BOs and ~0.2 MB per switch. GPU pool stays ~250 MB (peak 317), far from the 944 MB that froze it.
+- **Where the warm-up growth is:** Turnip command streams (cmd cs +158, draw cs +200, draw sub cs +204, tile store cs +103, small) and a few 8-11 MB heap blocks; likely cmd-pool caches, not a leak.
+- **Left:** the ~1.5 BOs/switch drift is small; only chase it if the pool grows over a long soak (`tools/sunfish-soak.sh`). Use Instagram/Safari with long scrolling as the heavier test.
 
 ## Step 4: Charger
 - **Problem:** the phone drains about 0.5 A while benching, even on the charger. The kernel reads the charger but never configures it.
