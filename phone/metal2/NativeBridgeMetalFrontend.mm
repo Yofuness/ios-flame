@@ -432,6 +432,7 @@ static std::string quartzCoreCallers();
 @property(nonatomic) std::string vertexName,fragmentName;   // sweet drawlog: what a draw's pipeline was (only filled when SWEET_DRAWLOG is set)
 @property(nonatomic) BOOL blend;
 @property(nonatomic) NSUInteger writeMask;
+@property(nonatomic) unsigned opaqueMask;   // sweet cull: colour attachments written with blending off and a full write mask
 @property(nonatomic) NSUInteger vstride;   // sweet cull: stride of vertex layout 1 (0: no vertex descriptor)
 @property(nonatomic) BOOL vpos0;           // sweet cull: vertex descriptor has a float4 attribute at offset 0 of buffer 1
 @end
@@ -689,7 +690,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  std::unique_ptr<DrawLog> _dl;   // sweet drawlog: null unless this pass is a big one and SWEET_DRAWLOG is set
  // sweet cull
  BOOL _defer,_noCull,_vpSet,_scSet;
- unsigned long _tw,_th;
+ unsigned long _tw,_th;unsigned _attMask;
  std::vector<CullEntry> _ops;
  NBRenderPipeline *_pipe;
  NBBuffer *_cvb;NSUInteger _cvbOff;
@@ -704,7 +705,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  if(!_defer||_noCull||!_pipe||prim!=MTLPrimitiveTypeTriangle||inst!=1||n!=6||_cvis)return false;
  NSString *l=_pipe.label;
  if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
- if(_pipe.blend||_pipe.writeMask!=MTLColorWriteMaskAll)return false;
+ if((_pipe.opaqueMask&_attMask)!=_attMask)return false;   // every bound colour target is overwritten
  if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th))return false;
  if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th))return false;
  if(!_cvb||_cvb.storageMode!=MTLStorageModeShared)return false;
@@ -795,8 +796,8 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
 }
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d {
  if(cullEnabled()) {   // sweet cull: defer only single-colour-target passes without depth/stencil or visibility results
-  id<MTLTexture> t0=d.colorAttachments[0].texture;bool single=t0!=nil;
-  for(unsigned i=1;i<8;i++)if(d.colorAttachments[i].texture)single=false;
+  id<MTLTexture> t0=d.colorAttachments[0].texture;bool single=t0!=nil;_attMask=0;   // "single": all colour targets match target 0's size
+  for(unsigned i=0;i<8;i++){id<MTLTexture> x=d.colorAttachments[i].texture;if(!x)continue;_attMask|=1u<<i;if(!t0||x.width!=t0.width||x.height!=t0.height)single=false;}
   if(single&&!d.depthAttachment.texture&&!d.stencilAttachment.texture&&!d.visibilityResultBuffer){_defer=YES;_tw=t0.width;_th=t0.height;}
   static std::atomic<int> big{0};if(t0&&t0.width>=1000&&big++<2){char t[400];int o=snprintf(t,sizeof t,"SWEET CULL: big pass");   // sweet cull: one-time attachment dump
    for(unsigned i=0;i<8&&o<350;i++){id<MTLTexture> x=d.colorAttachments[i].texture;if(x)o+=snprintf(t+o,sizeof t-o," c%u=%lux%lu/f%lu/l%lu",i,(unsigned long)x.width,(unsigned long)x.height,(unsigned long)x.pixelFormat,(unsigned long)d.colorAttachments[i].loadAction);}
@@ -1732,6 +1733,7 @@ static char sweetMemoryOwnerKey;
   if([(id)d.vertexFunction isKindOfClass:[NBFunction class]])state.vertexName=((NBFunction *)d.vertexFunction).name.UTF8String?:"";
   if([(id)d.fragmentFunction isKindOfClass:[NBFunction class]])state.fragmentName=((NBFunction *)d.fragmentFunction).name.UTF8String?:"";
   state.blend=d.colorAttachments[0].blendingEnabled;state.writeMask=d.colorAttachments[0].writeMask;
+  {unsigned m=0;for(unsigned i=0;i<8;i++){MTLRenderPipelineColorAttachmentDescriptor *a=d.colorAttachments[i];if(a.pixelFormat!=MTLPixelFormatInvalid&&!a.blendingEnabled&&a.writeMask==MTLColorWriteMaskAll)m|=1u<<i;}state.opaqueMask=m;}
   if(MTLVertexDescriptor *vd=d.vertexDescriptor) {   // sweet cull: the position layout of vertex buffer 1
    state.vstride=vd.layouts[1].stride;
    for(unsigned i=0;i<31;i++){MTLVertexAttributeDescriptor *a=vd.attributes[i];if(a.bufferIndex==1&&a.offset==0&&a.format==MTLVertexFormatFloat4)state.vpos0=YES;}
