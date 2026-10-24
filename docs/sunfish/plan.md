@@ -77,9 +77,11 @@
 - **Where the warm-up growth is:** Turnip command streams (cmd cs +158, draw cs +200, draw sub cs +204, tile store cs +103, small) and a few 8-11 MB heap blocks; likely cmd-pool caches, not a leak.
 - **Left:** the ~1.5 BOs/switch drift is small; only chase it if the pool grows over a long soak (`tools/sunfish-soak.sh`). Use Instagram/Safari with long scrolling as the heavier test.
 
-## Step 4: Charger
-- **Problem:** the phone drains about 0.5 A while benching, even on the charger. The kernel reads the charger but never configures it.
-- **Next:** find the PMIC charger current-limit registers (sm7150, pm6150), read-only first. Write up the findings before poking anything.
+## Step 4: Charger (read-only dump done 2026-10-24; findings, not a config bug)
+- **Dump:** xnu 0162 (`SweetBattery.cpp`) logs `SWEET CHARGER:` rows for the PM6150 SMB5 blocks at the third poll and every 20th; data in `docs/sunfish/charger-regs.md`. SID 0 reads 0x1000-0x137f fine; 0x1500 (TYPEC) and 0x1600 (MISC) fail.
+- **Decoded (smb5 register map, my reading):** BATTERY_CHARGER_STATUS_1 (0x1006) = 3 (fast charge); CHARGING_ENABLE_CMD (0x1042) = 1; FAST_CHARGE_CURRENT_CFG (0x1061) = 0x28 = 2.0 A; USBIN_CURRENT_LIMIT_CFG (0x1370) = 0x1e = 1.5 A. So the charger is enabled, in fast charge, with a 1.5 A input limit: nothing to "configure".
+- **Why it still drains under load:** at 5 V a 1.5 A limit is at most 7.5 W, and a USB host port on the PC gives less (SDP/CDP). The phone draws more than that while benching with the screen on and the GPU busy. This is a power-budget limit of the source, not a missing setup.
+- **Next:** check what the phone is plugged into (PC port vs wall charger). To raise the limit the source must be a real charger; whether the USB data link can stay up with one is untested. Writing ICL is not worth it (the source decides). If wanted, dump again on a wall charger and compare 0x1370 and the APSD result.
 
 ## Verification (each step)
 - `tools/sunfish-cfgbench.sh` twice per config. Record swaps/s and panel updates/s in a table in docs/workday.md.

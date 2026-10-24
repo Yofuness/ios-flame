@@ -162,3 +162,7 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 
 ## [10:30] Step 1B (second ringbuffer): not feasible, no code
 - sweet_a6xx.c sets up RB0 only and has no preemption support (no preempt records, CP_CONTEXT_SWITCH_*, pseudo-regs). A second ring would never be fetched without a software context switch; real preemption is a multi-day bring-up. Parked; alternative ideas (panel-size surface, CPU scaler, blit timing) are in plan.md step 1.
+
+## [10:25] Step 1B skipped, step 4 charger dump (kernel38 = kernel37 + 0162, read-only)
+- CI first skipped 0162 ("already exists in working directory"): `git add -A` in work/src/xnu had committed the whole untracked tree into the patch. Re-committed with only SweetBattery.cpp. In work/src/xnu always `git add` single files.
+- Dump (docs/sunfish/charger-regs.md): status 3 (fast charge), charging enabled, FCC 2.0 A, USBIN limit 1.5 A, battery -70 mA at 3762 mV with screen on. TYPEC/MISC blocks not readable. Drain is the source's power budget, not a charger setup bug. Details in plan.md step 4.
