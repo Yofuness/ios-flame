@@ -158,3 +158,8 @@ Kernels:
 - **kernel35:** up to 0159
 - **kernel36:** up to 0160
 - **kernel37:** up to 0161. **Best: kernel37 with `sweetpresentwait=1`.**
+
+## Per-frame timeline (xnu 0163)
+- Boot with `sweettrace=1` (works with `sweetpresentwait=1`). The kernel logs `SWEET TL:` lines (events: swap, vsync tick, notified, present begin/end, every submit, each landed submit's CP start/end, a mach/CP clock pair every 30 ticks).
+- `tools/sunfish-timeline.py ../logs/usb-live.log "bench TAG start" "bench TAG end"` joins them: swap-to-swap histogram (60 Hz metric: share <= 17 ms), GPU time per submit by pid (0 = kernel present), and the per-stage gaps. Mach time and the CP always-on counter both run at 24 MHz here.
+- Tracing overhead is not visible in the bench (22.3 / 21.7 updates/s vs 21-24 without).

@@ -180,3 +180,19 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Safari to http://192.168.7.1:8000 (local test page) is refused: "not connected to the internet" (USB ethernet is not an iOS network). A Safari test needs Wi-Fi: run tools/sunfish-install-wifi.sh yourself (credentials stay out of git and out of chat), or measure decode in-process by feeding VT sessions from a parsed mp4 (not done).
 - Webcam note: phone sits rotated 90 deg (top toward the right of the image); flame-cmd taps are in portrait panel coordinates; flame-shot returned a garbled image today.
 - Phone is on the 1800 s reboot cycle (k38d booted 11:00).
+
+## [11:30] Step 1 done: per-frame timeline (xnu 0163 on kernel39, boot args sweetpresentwait=1 sweettrace=1)
+- Wi-Fi install tool was run by the user (credentials stay out of git). Charger on the TB4 port, 4125 mV at boot.
+- Bench tl1/tl2 (Settings swipes, 30 s): 23.4 / 22.5 swaps/s, 22.3 / 21.7 panel updates/s with tracing on. Timeline (both runs agree):
+| metric | p50 | p95 | max |
+|---|---|---|---|
+| swap-to-swap | 26.5 ms | 80 ms | 968-1100 ms |
+| backboardd GPU per submit | 4.6-4.7 ms | 32 ms | 33-35 ms |
+| present blit GPU | 1.9 ms | 2.05 ms | 2.4 ms |
+| backboardd GPU end -> swap | 23 ms | 76 ms | 85-97 ms |
+| swap -> present call (tick wait) | 8.5 ms | 23-28 ms | 63-85 ms |
+| present call duration | 0.55 ms | 34 ms | 67 ms |
+| present submit -> blit GPU start | 0 | 91 ms | 130 ms |
+- Frame intervals: 30-32% <= 17 ms, 74-76% <= 34 ms, 18-19% > 50 ms.
+- Reading: the GPU is not the main gap. 23 ms from backboardd's last GPU end to the swap (CA/CPU side) and the bimodal 32 ms GPU frames dominate; the present wait (p95 34 ms) hits ~5% of ticks.
+- Fix made in the tool: the CP counter and mach time both run at 24 MHz here (ratio 1.0000), not 19.2.
