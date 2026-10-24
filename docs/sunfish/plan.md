@@ -81,7 +81,9 @@
 - **Dump:** xnu 0162 (`SweetBattery.cpp`) logs `SWEET CHARGER:` rows for the PM6150 SMB5 blocks at the third poll and every 20th; data in `docs/sunfish/charger-regs.md`. SID 0 reads 0x1000-0x137f fine; 0x1500 (TYPEC) and 0x1600 (MISC) fail.
 - **Decoded (smb5 register map, my reading):** BATTERY_CHARGER_STATUS_1 (0x1006) = 3 (fast charge); CHARGING_ENABLE_CMD (0x1042) = 1; FAST_CHARGE_CURRENT_CFG (0x1061) = 0x28 = 2.0 A; USBIN_CURRENT_LIMIT_CFG (0x1370) = 0x1e = 1.5 A. So the charger is enabled, in fast charge, with a 1.5 A input limit: nothing to "configure".
 - **Why it still drains under load:** at 5 V a 1.5 A limit is at most 7.5 W, and a USB host port on the PC gives less (SDP/CDP). The phone draws more than that while benching with the screen on and the GPU busy. This is a power-budget limit of the source, not a missing setup.
-- **Next:** check what the phone is plugged into (PC port vs wall charger). To raise the limit the source must be a real charger; whether the USB data link can stay up with one is untested. Writing ICL is not worth it (the source decides). If wanted, dump again on a wall charger and compare 0x1370 and the APSD result.
+- **RESOLVED 2026-10-24 by the cable/port:** on the laptop's free Thunderbolt 4 port with a 240 W USB4 cable, the phone charges at +968 mA idle and +948 mA during a 60 s swipe bench (22-23 panel updates/s), against about 0 to -250 mA on the previous port. The registers read the same (ICL 0x1370 = 0x1e, FCC 0x28), so the source was the limit and no kernel change is needed.
+- **Gotcha:** the USB link does not survive an unplug/replug (PC side shows RX errors, phone silent). Move the cable only while the phone is off or in fastboot, then boot.
+- Step 4 is done. Charger writes are not needed.
 
 ## Verification (each step)
 - `tools/sunfish-cfgbench.sh` twice per config. Record swaps/s and panel updates/s in a table in docs/workday.md.
