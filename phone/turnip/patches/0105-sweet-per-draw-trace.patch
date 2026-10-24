@@ -1,0 +1,76 @@
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 60ad3a8ef90..541b9f8487f 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -8319,6 +8319,7 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
+       cmd->state.program.stage_blake3[MESA_SHADER_TESS_EVAL],
+       cmd->state.program.stage_blake3[MESA_SHADER_GEOMETRY],
+       cmd->state.program.stage_blake3[MESA_SHADER_FRAGMENT]);
++   cmd->state.sweet_instance_count = 0; /* sweet 0105: consumed by the tracepoint above */
+ 
+    /* Emit state first, because it's needed for bandwidth calculations */
+    uint32_t dynamic_draw_state_dirty = 0;
+@@ -8775,6 +8776,7 @@ tu_CmdDraw(VkCommandBuffer commandBuffer,
+ 
+    tu6_emit_vs_params(cmd, 0, firstVertex, firstInstance);
+ 
++   cmd->state.sweet_instance_count = instanceCount; /* sweet 0105 */
+    tu6_draw_common<CHIP>(cmd, cs, false, vertexCount);
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 3);
+@@ -8849,6 +8851,7 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+ 
+    tu6_emit_vs_params(cmd, 0, vertexOffset, firstInstance);
+ 
++   cmd->state.sweet_instance_count = instanceCount; /* sweet 0105 */
+    tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
+ 
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.h b/src/freedreno/vulkan/tu_cmd_buffer.h
+index 17bebebd135..ab3dbe8975d 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.h
++++ b/src/freedreno/vulkan/tu_cmd_buffer.h
+@@ -631,6 +631,9 @@ struct tu_cmd_state
+    uint32_t total_renderpasses;
+    uint32_t total_dispatches;
+ 
++   /* sweet 0105: instance count of the draw being recorded, for the draw tracepoint (0 = indirect). */
++   uint32_t sweet_instance_count;
++
+    unsigned tile_render_pass_count;
+    bool renderpass_cb_disabled;
+ };
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index 527a4d4380d..f604d510fc8 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -3197,6 +3197,10 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+    device->use_lrz = !TU_DEBUG_START(NOLRZ);
+ 
+    tu_gpu_tracepoint_config_variable();
++   /* sweet 0105: TU_SWEET_DRAW_TRACE=1 records a GPU timestamp pair around every draw (MESA_GPU_TRACES=print).
++    * Off by default: no extra commands are emitted. */
++   if (debug_get_num_option("TU_SWEET_DRAW_TRACE", 0))
++      tu_gpu_tracepoint |= TU_GPU_TRACEPOINT_DRAW;
+ 
+    device->submit_count = 0;
+    list_inithead(&device->copy_timestamp_cs_pool);
+diff --git a/src/freedreno/vulkan/tu_tracepoints.py b/src/freedreno/vulkan/tu_tracepoints.py
+index 7a3b21038bf..8b38a362f88 100644
+--- a/src/freedreno/vulkan/tu_tracepoints.py
++++ b/src/freedreno/vulkan/tu_tracepoints.py
+@@ -163,7 +163,13 @@ begin_end_tp('draw',
+                   copy_func='strcpy'),
+               Arg(type='tu_sha1_str', var='fs_sha1',  c_format='%s',
+                   copy_func='strcpy'),
+-              ], tp_default_enabled=False)
++              ],
++             # sweet 0105: draw index in the render pass, instance count (0 = indirect), blend of RT0.
++             # TU_SWEET_DRAW_TRACE=1 turns this tracepoint on (tu_device.cc).
++             tp_struct=[Arg(type='uint32_t', name='draw_idx',  var='cmd->state.rp.drawcall_count',   c_format='%u'),
++                        Arg(type='uint32_t', name='instances', var='cmd->state.sweet_instance_count', c_format='%u'),
++                        Arg(type='uint8_t',  name='blend0',    var='cmd->vk.dynamic_graphics_state.cb.attachments[0].blend_enable', c_format='%u'),],
++             tp_default_enabled=False)
+ 
+ begin_end_tp('binning_ib')
+ begin_end_tp('concurrent_binning_ib')
