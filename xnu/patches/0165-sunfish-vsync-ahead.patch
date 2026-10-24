@@ -1,0 +1,49 @@
+From 0f09baa095c763ceb34d35da20e5346d4d9b4a03 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 24 Oct 2026 19:59:14 -0400
+Subject: [PATCH] 0165 sunfish: sweetvsyncahead=US (report vsync times later so
+ CA doesn't skip ticks)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 017e3cc..67f0167 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -114,6 +114,7 @@ class AppleCLCD : public IOMobileFramebuffer {
+ 	uint64_t            fVsyncCount;
+ 	uint64_t            fNextVsync;     /* absolute deadline of the next tick */
+ 	uint64_t            fVsyncAbs;      /* tick period in absolute time units */
++	uint64_t            fVsyncAheadAbs; /* 0165: added to the vsync time CA is told (sweetvsyncahead=us) */
+ 	uint64_t            fStatSwaps, fStatPresents, fStatPresentAbs;
+ 
+ 	static void vsyncFired(OSObject *owner, IOTimerEventSource *sender);
+@@ -248,6 +249,14 @@ AppleCLCD::start(IOService *provider)
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
++	/*
++	 * 0165: CA's vsync_callback renders only if the vsync time is at or after a threshold it sets to "end of the
++	 * last render + one period"; a render that ends ~6 ms after a tick makes it skip the next tick (~30/s cap).
++	 * sweetvsyncahead=US reports each tick US microseconds later. Default 0: unchanged.
++	 */
++	uint32_t ahead = 0;
++	PE_parse_boot_argn("sweetvsyncahead", &ahead, sizeof(ahead));
++	nanoseconds_to_absolutetime(ahead * 1000ULL, &fVsyncAheadAbs);
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 	/*
+ 	 * 0149: panel copies on their own thread. On the vsync tick a GPU present waited ~30 ms behind the render
+@@ -316,7 +325,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 	uint64_t period = fb->fVsyncAbs;
+ 	uint64_t values[6] = {
+ 		(uint32_t)count, (uint32_t)(count >> 32),
+-		(uint32_t)now, (uint32_t)(now >> 32),
++		(uint32_t)(now + fb->fVsyncAheadAbs), (uint32_t)((now + fb->fVsyncAheadAbs) >> 32),
+ 		(uint32_t)period, (uint32_t)(period >> 32),
+ 	};
+ 
+-- 
+2.56.0
+
