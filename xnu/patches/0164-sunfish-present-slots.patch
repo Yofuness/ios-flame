@@ -1,4 +1,4 @@
-From 1e33e709586eccdb7cef227058573bd3091d39d2 Mon Sep 17 00:00:00 2001
+From 661d0055aa18fed9705cfa5f49a7425bf5d846d9 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sat, 24 Oct 2026 11:28:49 -0400
 Subject: [PATCH] 0164 sunfish: sweetpresentslots=N presents in flight (default
@@ -9,10 +9,18 @@ Subject: [PATCH] 0164 sunfish: sweetpresentslots=N presents in flight (default
  1 file changed, 20 insertions(+), 4 deletions(-)
 
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index fef9cc0..4b9d459 100644
+index fef9cc0..7671169 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
-@@ -663,8 +663,9 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+@@ -60,6 +60,7 @@ int sweet_gpu_submit_user(uint64_t ib_iova, uint32_t dwords, uint32_t timeout_ms
+ /* Panel mapping for touch (SweetHID.cpp): zero extents = CPU crop, otherwise the GPU's fitted rectangle. */
+ int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ 
++#define PRESENT_SLOTS_MAX 8     /* 0164 */
+ static struct a6_gpu gpu;
+ static vm_offset_t pool_kva;
+ /* More GPU page tables than the pool's arena (~250 tables = 500 MB mapped): 2048 more (4 GB) */
+@@ -663,8 +664,9 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
  		}
  	}
  	lck_mtx_lock(&sweet_gpu_lock);
@@ -24,7 +32,7 @@ index fef9cc0..4b9d459 100644
  	int rc = a6_map_pages(&gpu, SLOT_IOVA(s), pages, npages, page_size);
  	a6_tlb_flush(&gpu);
  	lck_mtx_unlock(&sweet_gpu_lock);
-@@ -684,7 +685,14 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+@@ -684,7 +686,13 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
  #define IB_OFF          A6_OFF_FREE     /* the present IBs in the pool (two, PRESENT_IB) */
  #define PRESENT_IB(k)   (IB_OFF + 0x4000ULL * (k))
  
@@ -34,7 +42,6 @@ index fef9cc0..4b9d459 100644
 + * a long backboardd job leaves no free slot and the next tick is put off; the blit reads the surface when it runs,
 + * so extra queued blits show the newest frame and cost ~2.4 ms of GPU each.
 + */
-+#define PRESENT_SLOTS_MAX 8
 +static uint32_t present_slots = 2;
 +static uint32_t present_fence[PRESENT_SLOTS_MAX];      /* of the present last queued from each IB slot */
  static uint32_t present_next;
