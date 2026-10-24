@@ -1,0 +1,62 @@
+From 44a67060550092eec2c987587fead05d2458bbbd Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 24 Oct 2026 08:06:00 -0400
+Subject: [PATCH] 0161 sunfish: present on swap (sweetfb_onswap=1)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index a034d54..33a4b85 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -139,6 +139,7 @@ public:
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+ 	bool          fPresentReq;    /* 0149: vsync asked the present thread for the latest frame */
+ 	bool          fPresentThread; /* 0149: the present thread runs (else: present on the vsync tick) */
++	bool          fOnSwap;        /* 0161: present on swap (sweetfb_onswap) */
+ 	uint8_t      *fPresentRec;    /* 0149: the present thread's copy of the swap record */
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+@@ -253,8 +254,11 @@ AppleCLCD::start(IOService *provider)
+ 	fPresentRec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
+ 	int pt = 1;
+ 	PE_parse_boot_argn("sweetfb_thread", &pt, sizeof(pt));
+-	if (pt && fPresentRec != NULL && IOCreateThread(&AppleCLCD::presentLoop, this) != NULL) {
++	uint32_t onswap = 0;
++	PE_parse_boot_argn("sweetfb_onswap", &onswap, sizeof(onswap));
++	if ((pt || onswap) && fPresentRec != NULL && IOCreateThread(&AppleCLCD::presentLoop, this) != NULL) {
+ 		fPresentThread = true;
++		fOnSwap = onswap != 0;
+ 	}
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+@@ -336,7 +340,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		}
+ 		return;
+ 	}
+-	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
++	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0 && !fb->fOnSwap;
+ 	uint8_t *rec = NULL;
+ 	if (flush && fb->fPresentThread) {
+ 		fb->fPresentReq = true;
+@@ -441,6 +445,15 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	IOLockLock(fLock);
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
++	/*
++	 * 0161 (sweetfb_onswap=1, with the present thread): present now, not on the next vsync tick. CA swaps a
++	 * frame its GPU work already finished, so the blit has nothing queued ahead of it; on the tick it waited
++	 * 10-17 ms behind CA's next frame and made every vsync notification that late.
++	 */
++	if (fOnSwap && fPresentThread) {
++		fPresentReq = true;
++		IOLockWakeup(fLock, &fPresentReq, true);
++	}
+ 	IOLockUnlock(fLock);
+ 	if ((++sweet_fb_swap_count % 1000) == 0) {
+ 		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
+-- 
+2.56.0
+
