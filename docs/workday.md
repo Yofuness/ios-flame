@@ -170,3 +170,13 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 ## [10:45] Charger: Thunderbolt 4 port fixes the drain
 - Moved the cable to the laptop's free TB4 port (240 W USB4 cable) while the phone was running: screen stayed on (32%, charging bolt) but the USB link died (RX errors 55604, 0 packets). Forced fastboot, rebooted as k38c with the cable left in place.
 - Same charger registers (status 3, ICL 0x1e = 1.5 A, FCC 2.0 A). Battery: +968 mA idle at 3986 mV, +948 mA during the 60 s bench (tb4b: 24.1 swaps/s, 23.0 panel updates/s; tb4: 23.4 / 22.1). Before: about 0 to -250 mA. The source was the limit.
+
+## [11:30] Step 0 (video spike), partial; new plan written
+- Plan archived to docs/sunfish/plans/2026-10-24-present-path.md; new docs/sunfish/plan.md (video spike, per-frame timeline xnu 0163, backboardd GPU time, ordering).
+- New tool phone/tools/vtdecode (AVAssetReader + VideoToolbox probe; userland CI). On kernel38 + current bundle:
+  - H.264 and HEVC 1080x1920: VTIsHardwareDecodeSupported = 0; VTDecompressionSession with RequireHardwareAcceleratedVideoDecoder -> OSStatus -12906 (no hardware decoder, as expected).
+  - VTDecompressionSession without that requirement -> OSStatus 0, UsingHardwareAcceleratedVideoDecoder = no: a software decoder exists for both codecs.
+  - Decode fps NOT measured: AVAssetReader fails "Cannot Access URL ... sandbox extension was not issued" (file in /var/local/tmp or /var/mobile/Media/vt, run as root over ssh; an entitlements plist did not help).
+- Safari to http://192.168.7.1:8000 (local test page) is refused: "not connected to the internet" (USB ethernet is not an iOS network). A Safari test needs Wi-Fi: run tools/sunfish-install-wifi.sh yourself (credentials stay out of git and out of chat), or measure decode in-process by feeding VT sessions from a parsed mp4 (not done).
+- Webcam note: phone sits rotated 90 deg (top toward the right of the image); flame-cmd taps are in portrait panel coordinates; flame-shot returned a garbled image today.
+- Phone is on the 1800 s reboot cycle (k38d booted 11:00).
