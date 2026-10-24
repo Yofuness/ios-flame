@@ -798,6 +798,12 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
   id<MTLTexture> t0=d.colorAttachments[0].texture;bool single=t0!=nil;
   for(unsigned i=1;i<8;i++)if(d.colorAttachments[i].texture)single=false;
   if(single&&!d.depthAttachment.texture&&!d.stencilAttachment.texture&&!d.visibilityResultBuffer){_defer=YES;_tw=t0.width;_th=t0.height;}
+  static std::atomic<int> big{0};if(t0&&t0.width>=1000&&big++<2){char t[400];int o=snprintf(t,sizeof t,"SWEET CULL: big pass");   // sweet cull: one-time attachment dump
+   for(unsigned i=0;i<8&&o<350;i++){id<MTLTexture> x=d.colorAttachments[i].texture;if(x)o+=snprintf(t+o,sizeof t-o," c%u=%lux%lu/f%lu/l%lu",i,(unsigned long)x.width,(unsigned long)x.height,(unsigned long)x.pixelFormat,(unsigned long)d.colorAttachments[i].loadAction);}
+   if(d.depthAttachment.texture)o+=snprintf(t+o,sizeof t-o," depth f%lu",(unsigned long)d.depthAttachment.texture.pixelFormat);
+   if(d.stencilAttachment.texture)o+=snprintf(t+o,sizeof t-o," stencil f%lu",(unsigned long)d.stencilAttachment.texture.pixelFormat);
+   if(d.visibilityResultBuffer)o+=snprintf(t+o,sizeof t-o," vis");
+   sm2_logs(t);}
   static std::atomic<bool> said{false};if(!said.exchange(true)){char t[160];snprintf(t,sizeof t,"SWEET CULL: first pass %lux%lu single=%d defer=%d",(unsigned long)(t0?t0.width:0),(unsigned long)(t0?t0.height:0),(int)single,(int)_defer);sm2_logs(t);}   // sweet cull: one-time check
  }
  if(!drawLogPath() || gDrawLogBlocks>=20)return;
