@@ -230,3 +230,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - USB network not reachable after boot (link flaps "link up" every second, ssh: No route to host, no fastboot). Phone work blocked until someone can reboot it by hand.
 - Webcams here: Iriun = /dev/video0 (iPhone over USB), laptop camera = /dev/video1.
 - Wi-Fi does not join at this location (user report); left for later.
+
+## [15:40] Bridge drawlog (metal2 run 40123962779, commit 0472fb8, SWEET_DRAWLOG)
+- dl1 bench with drawlog on: 23.4 swaps/s, 22.6 panel updates/s. After reset, dl1check gave 9.6 / 9.2 (not explained yet; re-check on a fresh boot).
+- 20 big passes logged (../logs/dl1-drawlog.txt). The slow 17-draw pass: draws 0-2 = PBGRAXm_A2Xhf, opaque solid fill, three identical full-width quads; draw 3 = PBGRAXm_TimgA2Xhfn_Isrc, opaque wallpaper quad at x -185..1310 that covers the whole target. So draws 0-2 are dead (~10 of 26 traced ms). Draws 15/16 (fs 780adfdf) use programmable blend (Bdso/Bvcm, read the destination), so they can't be culled and don't cover anything.
+- Every CA draw uses one uber shader (fixed_vert_lph_spc / fixed_frag_lph_cph) specialised per pipeline; a solid fill costs ~0.08 ms per 288x224 bin (~0.8 Gpx/s), so the shaders are heavy in general. Possible later lever.
+- Next: SWEET_CULL in the frontend (defer the encoder's calls, skip draws under a whitelisted opaque full-target quad).
