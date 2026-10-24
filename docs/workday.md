@@ -224,3 +224,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - ~14 ms per slow pass is outside the draws (per-bin overhead/timestamp waits).
 - Reading: overdraw of stacked opaque full-screen layers plus one heavier shader (780adfdf, blur candidate). Next: disassemble those fragment shaders to see what they sample, and check why CA stacks three opaque full-screen quads.
 - [12:45] Stopped for the day (user unplugging). State: phone booted as pd1b (kernel40, sweetpresentwait=1 flamereboot=0, so no auto-reboot), mtl2-env empty (tracing off), turnip 0105 bundle installed (inert without TU_SWEET_DRAW_TRACE). Traces in ../logs/pd2-trace.log, gt1-trace.log; parsers in the session scratchpad (lost on reboot of the PC). Next: shader disassembly of fs f8357eea / 780adfdf.
+
+## [15:00] New location; phone booted as "demo"
+- Booted kernel40 (sweetpresentwait=1 flamereboot=0) at 4005 mV. UI fine on the webcam (home screen, 33% charging), kernel log shows 18-34 swaps/s at boot.
+- USB network not reachable after boot (link flaps "link up" every second, ssh: No route to host, no fastboot). Phone work blocked until someone can reboot it by hand.
+- Webcams here: Iriun = /dev/video0 (iPhone over USB), laptop camera = /dev/video1.
+- Wi-Fi does not join at this location (user report); left for later.
