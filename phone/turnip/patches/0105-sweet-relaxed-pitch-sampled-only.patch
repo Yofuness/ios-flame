@@ -1,0 +1,42 @@
+diff --git a/src/freedreno/fdl/fd6_layout.c b/src/freedreno/fdl/fd6_layout.c
+index 67491abe611..e6c6fc3cf4d 100644
+--- a/src/freedreno/fdl/fd6_layout.c
++++ b/src/freedreno/fdl/fd6_layout.c
+@@ -218,6 +218,8 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
+    if (explicit_layout) {
+       offset = explicit_layout->offset;
+       layout->pitch0 = explicit_layout->pitch;
++      if (explicit_layout->relaxed_pitch && !layout->tile_mode)
++         layout->pitchalign = 4;
+       if (align(layout->pitch0, 1 << layout->pitchalign) != layout->pitch0)
+          return false;
+    }
+diff --git a/src/freedreno/fdl/freedreno_layout.h b/src/freedreno/fdl/freedreno_layout.h
+index d0e482d6e92..715b4ac7607 100644
+--- a/src/freedreno/fdl/freedreno_layout.h
++++ b/src/freedreno/fdl/freedreno_layout.h
+@@ -73,6 +73,8 @@ struct fdl_slice {
+ struct fdl_explicit_layout {
+    uint32_t offset;
+    uint32_t pitch;
++   /* sweet 0105: sampled-only image, pitch only needs 16-byte alignment */
++   bool relaxed_pitch;
+ };
+ 
+ /**
+diff --git a/src/freedreno/vulkan/tu_image.cc b/src/freedreno/vulkan/tu_image.cc
+index b763c357e78..b6428d34e05 100644
+--- a/src/freedreno/vulkan/tu_image.cc
++++ b/src/freedreno/vulkan/tu_image.cc
+@@ -742,6 +742,11 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
+ 
+          plane_layout.offset = plane_layouts[i].offset;
+          plane_layout.pitch = plane_layouts[i].rowPitch;
++         /* sweet 0105: sampled-only linear images (CA's 16/32-byte-pitch buffer textures) keep their
++          * pitch instead of being refused and shadow-copied by the bridge */
++         plane_layout.relaxed_pitch =
++            !(image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
++                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
+          /* note: use plane_layouts[0].arrayPitch to support array formats */
+       }
+ 
