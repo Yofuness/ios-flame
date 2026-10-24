@@ -1,0 +1,223 @@
+diff --git a/crates/metal2vulkan-runtime/src/shader_cache/mod.rs b/crates/metal2vulkan-runtime/src/shader_cache/mod.rs
+index 513fe37f..49f39e38 100644
+--- a/crates/metal2vulkan-runtime/src/shader_cache/mod.rs
++++ b/crates/metal2vulkan-runtime/src/shader_cache/mod.rs
+@@ -217,6 +217,11 @@ pub(crate) fn this_build() -> Hash256 {
+     hash.update(metal2vulkan::cache::SEMANTICS_VERSION.to_le_bytes());
+     hash.update(metal2vulkan::cache::SOURCE_DIGEST.as_bytes());
+     hash.update(env!("M2V_RUNTIME_SOURCE_ID").as_bytes());
++    // sweet half-relaxed: appended only when on, so the build id with it off is unchanged and the
++    // cache never serves SPIR-V compiled under the other setting.
++    if metal2vulkan::env_vars::half_relaxed() {
++        hash.update(b"sweet-half-relaxed\0");
++    }
+     hash.finalize().into()
+ }
+ 
+diff --git a/crates/metal2vulkan/src/env_vars.rs b/crates/metal2vulkan/src/env_vars.rs
+index ebb04f4f..6f445b4d 100644
+--- a/crates/metal2vulkan/src/env_vars.rs
++++ b/crates/metal2vulkan/src/env_vars.rs
+@@ -34,6 +34,14 @@ pub const REGISTRY: &[EnvVar] = &[
+                  validation with shader accesses; `load-store`: load operations after earlier \
+                  stores)",
+     },
++    EnvVar {
++        name: "METAL2VULKAN_HALF_RELAXED",
++        default: "unset (off)",
++        effect: "sweet half-relaxed: set to `1`, `half` values stay widened in `f32` but are not \
++                 rounded after each operation, and every SPIR-V result held as `half` is decorated \
++                 `RelaxedPrecision`, so a driver with 16-bit ALUs may run it at 16 bits. Changes \
++                 the SPIR-V (and every cache key)",
++    },
+     EnvVar {
+         name: "METAL2VULKAN_LOG_PIPELINES",
+         default: "unset (off)",
+@@ -76,6 +84,15 @@ pub fn log_pipelines() -> bool {
+         .is_some_and(|value| !value.is_empty() && value != "0")
+ }
+ 
++/// sweet half-relaxed: whether `half` values skip their per-operation rounding and carry
++/// `RelaxedPrecision` (`REGISTRY`): the variable is `1`. Read once per process. Unlike the other
++/// variables this one changes what the library compiles, so every cache key includes it
++/// (`pipeline::compile::key`, the runtime's shader cache build id).
++pub fn half_relaxed() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("METAL2VULKAN_HALF_RELAXED").is_some_and(|v| v == "1"))
++}
++
+ /// Optional path override for an external tool `cmd` (`llvm-as`, `spirv-val`, …), read from
+ /// `METAL2VULKAN_<CMD>` (uppercased, `-`→`_`). A dynamic family — one var per tool the binary or
+ /// the crate's test support runs — documented in `REGISTRY` as a single `METAL2VULKAN_<TOOL>`
+diff --git a/crates/metal2vulkan/src/lower/arith/narrow.rs b/crates/metal2vulkan/src/lower/arith/narrow.rs
+index d42bc072..35c21e1e 100644
+--- a/crates/metal2vulkan/src/lower/arith/narrow.rs
++++ b/crates/metal2vulkan/src/lower/arith/narrow.rs
+@@ -80,6 +80,10 @@ pub fn round_words(f: Form) -> u32 {
+ /// `bfloat`.
+ pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
+     let lanes = u32::from(f.lanes);
++    // sweet half-relaxed: no rounding is emitted for `half`.
++    if f.float_fmt() == Some(FloatFmt::Half) && crate::env_vars::half_relaxed() {
++        return 0;
++    }
+     match (f.float_fmt(), q) {
+         (Some(FloatFmt::Half), QuantizeForm::Integer) => 200 + 12 * lanes,
+         (Some(FloatFmt::Half), QuantizeForm::Device | QuantizeForm::Converted) => 64 + 4 * lanes,
+@@ -99,6 +103,11 @@ pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
+ /// [`scaled`]'s. A NaN compares unequal to zero and keeps `q`. [`QuantizeForm:: Converted`]:
+ /// [`converted`]'s alone, which is the same value where the device's conversion is Metal's.
+ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
++    // sweet half-relaxed: the value stays unrounded; its result is decorated `RelaxedPrecision`
++    // instead (`FunctionBuilder::mark_relaxed`) and the device rounds as it computes.
++    if f.held == Held::Float(FloatFmt::Half) && crate::env_vars::half_relaxed() {
++        return Ok(x);
++    }
+     match f.held {
+         Held::Float(FloatFmt::Half) => {
+             let wide = f.with(Held::Float(FloatFmt::F32));
+diff --git a/crates/metal2vulkan/src/lower/emit.rs b/crates/metal2vulkan/src/lower/emit.rs
+index 8c650b6a..7743762c 100644
+--- a/crates/metal2vulkan/src/lower/emit.rs
++++ b/crates/metal2vulkan/src/lower/emit.rs
+@@ -678,6 +678,19 @@ impl<'a> Emitter<'a> {
+         vars: &StructVars,
+     ) -> BResult<()> {
+         self.emit_inst(fb, id, v)?;
++        // sweet half-relaxed: the result of an instruction whose AIR type is `half` (scalar or
++        // vector) carries `RelaxedPrecision`.
++        if crate::env_vars::half_relaxed() {
++            if let (Some(inst), Some(Some(x))) = (
++                self.cx.body.insts.get(id),
++                self.cx.env.get(v.index()).copied(),
++            ) {
++                let f = arith::legal::form_of(self.cx.entry.module.types(), inst.ty);
++                if f.is_ok_and(|f| f.float_fmt() == Some(crate::lower::arith::FloatFmt::Half)) {
++                    fb.mark_relaxed(x)?;
++                }
++            }
++        }
+         self.cx.on_spine(fb);
+         if let Some(var) = vars.demoted_var(v) {
+             let x = self.cx.operand(fb, v)?;
+diff --git a/crates/metal2vulkan/src/pipeline/compile/key.rs b/crates/metal2vulkan/src/pipeline/compile/key.rs
+index 835f77e1..3e99ecf3 100644
+--- a/crates/metal2vulkan/src/pipeline/compile/key.rs
++++ b/crates/metal2vulkan/src/pipeline/compile/key.rs
+@@ -56,6 +56,10 @@ impl KeyHasher {
+         h.update(domain);
+         h.update([0]);
+         h.update(SEMANTICS_VERSION.to_le_bytes());
++        // sweet half-relaxed: appended only when on, so keys with it off are unchanged.
++        if crate::env_vars::half_relaxed() {
++            h.update(b"sweet-half-relaxed\0");
++        }
+         KeyHasher(h)
+     }
+ 
+diff --git a/crates/metal2vulkan/src/spirv/builder/function.rs b/crates/metal2vulkan/src/spirv/builder/function.rs
+index d1d0fd64..b02a3130 100644
+--- a/crates/metal2vulkan/src/spirv/builder/function.rs
++++ b/crates/metal2vulkan/src/spirv/builder/function.rs
+@@ -61,6 +61,27 @@ impl<'m> FunctionBuilder<'m> {
+             .and_then(|f| f.blocks.first().copied())
+     }
+ 
++    /// sweet half-relaxed: decorate instruction result `x` `RelaxedPrecision` when it is an `f32`
++    /// or a vector of `f32` (a narrow float held widened). Any other value (a constant, a
++    /// parameter, a pointer, an integer) is left alone.
++    pub fn mark_relaxed(&mut self, x: Value) -> BResult<()> {
++        let ty = self.m.value_ty(x)?;
++        let float32 = |t: &Type| matches!(t, Type::Float { width: 32 });
++        let wide = match self.m.types().get(ty)? {
++            Type::Vector { elem, .. } => float32(self.m.types().get(*elem)?),
++            t => float32(t),
++        };
++        let inst = self
++            .m
++            .values
++            .get(x.index())
++            .is_some_and(|d| matches!(d.origin, ValueOrigin::Inst(_)));
++        if wide && inst {
++            self.m.relaxed.insert(x);
++        }
++        Ok(())
++    }
++
+     /// The type of a value.
+     pub fn value_ty(&self, v: Value) -> BResult<TypeId> {
+         self.m.value_ty(v)
+diff --git a/crates/metal2vulkan/src/spirv/builder/module.rs b/crates/metal2vulkan/src/spirv/builder/module.rs
+index c5228cb6..1cc3b8dd 100644
+--- a/crates/metal2vulkan/src/spirv/builder/module.rs
++++ b/crates/metal2vulkan/src/spirv/builder/module.rs
+@@ -96,6 +96,8 @@ pub struct ModuleBuilder {
+     /// Every result that carries a non-uniform descriptor element (`Inst::carries_non_uniform`):
+     /// decorated `NonUniform`, and refused where it would reach an undecorated operand.
+     pub(super) non_uniform: BTreeSet<Value>,
++    /// sweet half-relaxed: results decorated `RelaxedPrecision` (`FunctionBuilder::mark_relaxed`).
++    pub(super) relaxed: BTreeSet<Value>,
+     /// The `Function` variables the emitter holds workgroup uniform by construction
+     /// (`FunctionBuilder::note_uniform_var`). Nothing emitted depends on it: a record for the
+     /// checks of `spirv::testing::barriers`, kept only where they build.
+@@ -1262,6 +1264,7 @@ impl ModuleBuilder {
+             volatile: self.volatile,
+             enabling: self.enabling,
+             non_uniform: self.non_uniform,
++            relaxed: self.relaxed,
+             #[cfg(test)]
+             uniform_vars: self.uniform_vars,
+         })
+diff --git a/crates/metal2vulkan/src/spirv/ir/edit.rs b/crates/metal2vulkan/src/spirv/ir/edit.rs
+index 1a56aa42..341bba4d 100644
+--- a/crates/metal2vulkan/src/spirv/ir/edit.rs
++++ b/crates/metal2vulkan/src/spirv/ir/edit.rs
+@@ -404,6 +404,7 @@ impl TypedModule {
+         };
+         let values = &self.values;
+         self.non_uniform.retain(|v| !removed(v, values));
++        self.relaxed.retain(|v| !removed(v, values));
+         self.loops.retain(|l| at(&bmap, l.header.index()).is_some());
+         for l in &mut self.loops {
+             l.header = block(l.header);
+diff --git a/crates/metal2vulkan/src/spirv/ir/module.rs b/crates/metal2vulkan/src/spirv/ir/module.rs
+index d5b050ec..f24899c3 100644
+--- a/crates/metal2vulkan/src/spirv/ir/module.rs
++++ b/crates/metal2vulkan/src/spirv/ir/module.rs
+@@ -1383,6 +1383,8 @@ pub struct TypedModule {
+     /// The values decorated `NonUniform`: every result that carries a non-uniform descriptor
+     /// element ([`Inst::carries_non_uniform`]), recorded as the builder appends it.
+     pub(in crate::spirv) non_uniform: std::collections::BTreeSet<Value>,
++    /// sweet half-relaxed: the results decorated `RelaxedPrecision` (`FunctionBuilder::mark_relaxed`).
++    pub(in crate::spirv) relaxed: std::collections::BTreeSet<Value>,
+     /// The `Function` variables the emitter holds workgroup uniform by construction: the `cont`
+     /// flag of a predicated loop that iterates together, which the lowering's uniformity analysis
+     /// proved. An in-memory record for checks (`spirv::testing::barriers`), kept only where they
+diff --git a/crates/metal2vulkan/src/spirv/serialize/mod.rs b/crates/metal2vulkan/src/spirv/serialize/mod.rs
+index d65b76f5..c7580a30 100644
+--- a/crates/metal2vulkan/src/spirv/serialize/mod.rs
++++ b/crates/metal2vulkan/src/spirv/serialize/mod.rs
+@@ -1644,6 +1644,10 @@ impl Ser<'_> {
+                     {
+                         self.decorate(w, self.val(r)?, Decoration::NoContraction, &[])?;
+                     }
++                    // sweet half-relaxed: a result held as `half` (`Emitter::inst`).
++                    if m.relaxed.contains(&r) {
++                        self.decorate(w, self.val(r)?, Decoration::RelaxedPrecision, &[])?;
++                    }
+                     // A value carrying a non-uniform descriptor element to its consumer
+                     // (VUID-RuntimeSpirv-NonUniform-06274).
+                     if m.non_uniform.contains(&r) && non_uniform.insert(self.val(r)?) {
+diff --git a/crates/metal2vulkan/src/spv.rs b/crates/metal2vulkan/src/spv.rs
+index f78ad48f..a6a524e2 100644
+--- a/crates/metal2vulkan/src/spv.rs
++++ b/crates/metal2vulkan/src/spv.rs
+@@ -5843,6 +5843,8 @@ pub enum ImageFormat {
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+ #[repr(u32)]
+ pub enum Decoration {
++    /// sweet half-relaxed: `RelaxedPrecision`.
++    RelaxedPrecision = 0,
+     SpecId = 1,
+     Block = 2,
+     ColMajor = 5,
