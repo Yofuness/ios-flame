@@ -713,7 +713,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
  if(!(_pipe.opaqueMask&1)){char t[64];snprintf(t,sizeof t,"opaque %x att %x",_pipe.opaqueMask,_attMask);cullWhy(1,l,t);return false;}   // overwrites target 0 at least; per-draw targets are checked at replay
  if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th)){cullWhy(2,l);return false;}
- if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th)){cullWhy(3,l);return false;}
+ if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]>=_tw&&_csc[3]>=_th)){char t[96];snprintf(t,sizeof t,"sc %llu,%llu,%llu,%llu tw %lu th %lu",(unsigned long long)_csc[0],(unsigned long long)_csc[1],(unsigned long long)_csc[2],(unsigned long long)_csc[3],_tw,_th);cullWhy(3,l,t);return false;}
  if(!_cvb||_cvb.storageMode!=MTLStorageModeShared){cullWhy(4,l);return false;}
  const char *vc=(const char *)_cvb.contents;if(!vc){cullWhy(5,l);return false;}
  NSUInteger stride=48;   // assumed (drawlog); the vertex descriptor, when present, must agree on a float4 position at offset 0
