@@ -1,0 +1,219 @@
+From c355ff81bf6f50273d4d3404cadd875d862153fb Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 24 Oct 2026 11:13:12 -0400
+Subject: [PATCH] 0163 sunfish: per-frame timeline (sweettrace=1)
+
+---
+ bsd/dev/sweet_a6xx.c                  | 10 +++
+ bsd/dev/sweet_a6xx.h                  |  1 +
+ bsd/dev/sweet_gpu.c                   | 96 +++++++++++++++++++++++++++
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 10 +++
+ 4 files changed, 117 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 966ebb5..a7e2000 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -976,6 +976,16 @@ uint64_t a6_submit_time(const struct a6_gpu *g, uint32_t fence)
+ 	return t[1] > t[0] ? t[1] - t[0] : 0;
+ }
+ 
++/* 0163: CP_ALWAYS_ON stamps before the IBs and once idle (ticks of 19.2 MHz); false when the slot is empty */
++bool a6_submit_ts(const struct a6_gpu *g, uint32_t fence, uint64_t *t0, uint64_t *t1)
++{
++	uint64_t t[2] = { 0, 0 };
++	a6_read(a6_pool_pa(g, A6_OFF_SCRATCH + A6_TS_OFF) + 16ull * (fence % A6_TS_SLOTS), t, 16);
++	*t0 = t[0];
++	*t1 = t[1];
++	return t[1] >= t[0] && t[0] != 0;
++}
++
+ uint64_t a6_timestamp(const struct a6_gpu *g)
+ {
+ 	(void)g;
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index 2ae7440..c55332f 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -115,6 +115,7 @@ uint64_t a6_timestamp(const struct a6_gpu *g);
+ #define A6_TS_OFF	0x1000ull	/* in the scratch page: 16-byte slots by fence */
+ #define A6_TS_SLOTS	256u
+ uint64_t a6_submit_time(const struct a6_gpu *g, uint32_t fence);
++bool a6_submit_ts(const struct a6_gpu *g, uint32_t fence, uint64_t *t0, uint64_t *t1);
+ 
+ /* 4K pages (AP=01, NC) at iova -> pa; tables from the arena. Then a6_tlb_flush. */
+ int a6_map(struct a6_gpu *g, uint64_t iova, uint64_t pa, uint64_t size);
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 50c15b0..fef9cc0 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -372,6 +372,101 @@ static uint64_t progress_abs;
+ static uint64_t recoveries;
+ static struct { uint32_t lo, hi; } lost[LOST_RING];
+ 
++
++/*
++ * 0163 (boot-arg sweettrace=1): per-frame timeline. Records go into a ring (swap, vsync tick, notify, present
++ * begin/end from SweetFramebuffer.cpp; every submit here) and sweet_tl_flush(), called from the vsync tick every
++ * 30 ticks, prints them as "SWEET TL:" lines together with each landed submit's CP start/end stamps and one
++ * (mach, CP) clock pair, which tools/sunfish-timeline.py uses to put both on one time axis.
++ * Record: ev,t,a,b,c in hex. ev 1 swap(a count) 2 tick(a count) 3 notified 4 present begin 5 present end(a busy,
++ * b rc) 6 submit(a fence, b pid) 7 gpu span(t,c = CP start,end; a fence, b pid) 8 clock(t mach, c CP).
++ */
++static int gstat_pid[A6_TS_SLOTS];
++#define TL_N 8192u
++static struct { uint64_t t, c; uint32_t ev, a, b; } tl_ring[TL_N];
++static volatile uint32_t tl_head, tl_tail;
++static int tl_on = -1;
++static uint32_t tl_next_fence = 1;
++static uint32_t tl_dropped;
++
++void
++sweet_tl(uint32_t ev, uint32_t a, uint32_t b)
++{
++	if (tl_on < 0) {
++		uint32_t v = 0;
++		PE_parse_boot_argn("sweettrace", &v, sizeof(v));
++		tl_on = v != 0;
++	}
++	if (!tl_on) {
++		return;
++	}
++	uint32_t i = __sync_fetch_and_add(&tl_head, 1);
++	if (i - tl_tail >= TL_N) {
++		tl_dropped++;
++		return;
++	}
++	i %= TL_N;
++	tl_ring[i].t = mach_absolute_time();
++	tl_ring[i].c = 0;
++	tl_ring[i].a = a;
++	tl_ring[i].b = b;
++	tl_ring[i].ev = ev;
++}
++
++static void tl_print(const char *buf)
++{
++	printf("SWEET TL: %s\n", buf);
++}
++
++void
++sweet_tl_flush(void)
++{
++	if (tl_on <= 0 || !gpu_ready) {
++		return;
++	}
++	/* GPU spans of the submits that landed since the last flush */
++	lck_mtx_lock(&sweet_gpu_lock);
++	uint32_t done = a6_fence_read(&gpu);
++	if ((int32_t)(done - tl_next_fence) >= (int32_t)A6_TS_SLOTS) {
++		tl_next_fence = done - A6_TS_SLOTS + 1;
++	}
++	uint64_t mach = mach_absolute_time(), cp = a6_timestamp(&gpu);
++	for (; (int32_t)(done - tl_next_fence) >= 0; tl_next_fence++) {
++		uint64_t t0, t1;
++		if (!a6_submit_ts(&gpu, tl_next_fence, &t0, &t1)) {
++			continue;
++		}
++		uint32_t i = __sync_fetch_and_add(&tl_head, 1);
++		if (i - tl_tail >= TL_N) {
++			tl_dropped++;
++			continue;
++		}
++		i %= TL_N;
++		tl_ring[i].t = t0;
++		tl_ring[i].c = t1;
++		tl_ring[i].a = tl_next_fence;
++		tl_ring[i].b = (uint32_t)gstat_pid[tl_next_fence % A6_TS_SLOTS];
++		tl_ring[i].ev = 7;
++	}
++	lck_mtx_unlock(&sweet_gpu_lock);
++	char buf[256];
++	snprintf(buf, sizeof(buf), "8,%llx,0,0,%llx dropped %u", mach, cp, tl_dropped);
++	tl_print(buf);
++	uint32_t head = tl_head;
++	while ((int32_t)(head - tl_tail) > 0) {
++		unsigned n = 0, k = 0;
++		buf[0] = 0;
++		while (k < 5 && (int32_t)(head - tl_tail) > 0) {
++			uint32_t i = tl_tail % TL_N;
++			n += snprintf(buf + n, sizeof(buf) - n, "%s%x,%llx,%x,%x,%llx", k ? " " : "", tl_ring[i].ev,
++			    tl_ring[i].t, tl_ring[i].a, tl_ring[i].b, tl_ring[i].c);
++			tl_tail++;
++			k++;
++		}
++		tl_print(buf);
++	}
++}
++
+ /*
+  * GPU time of the submits that landed (their CP_ALWAYS_ON stamps, 19.2 MHz), by the process that queued them
+  * (pid 0 = the kernel's presents), summed on every submit and logged every 5 s. Fences that fall out of the
+@@ -390,6 +485,7 @@ gpu_owner_locked(uint32_t fence, int pid)
+ {
+ 	if (fence) {
+ 		gstat_pid[fence % A6_TS_SLOTS] = pid;
++		sweet_tl(6, fence, (uint32_t)pid);
+ 	}
+ }
+ 
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 33a4b85..017e3cc 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -48,6 +48,8 @@ int sweet_gpu_present(int slot, uintptr_t kva, uint32_t offset, uint32_t w, uint
+ 	uint32_t fb_pitch, uint32_t corner_radius, uint32_t *out_dx, uint32_t *out_dy,
+ 	uint32_t *out_dw, uint32_t *out_dh);
+ void sweet_gpu_panel_stride(uint32_t stride);
++void sweet_tl(uint32_t ev, uint32_t a, uint32_t b);
++void sweet_tl_flush(void);
+ extern int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ }
+ #define SWEET_FB_GPU_ROWBYTES           4352    /* the 2D engine writes 64-byte multiples */
+@@ -278,6 +280,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 	AppleCLCD *fb = (AppleCLCD *)owner;
+ 	uint64_t now = mach_absolute_time();
+ 	uint64_t count = ++fb->fVsyncCount;
++	sweet_tl(2, (uint32_t)count, 0);
+ 	/*
+ 	 * Fixed-rate ticks: re-arm from the previous deadline before any work.
+ 	 * Re-arming 16.7 ms after the panel copy made "60 Hz" vsync run at
+@@ -340,6 +343,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		}
+ 		return;
+ 	}
++	sweet_tl(3, 0, 0);
+ 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0 && !fb->fOnSwap;
+ 	uint8_t *rec = NULL;
+ 	if (flush && fb->fPresentThread) {
+@@ -358,7 +362,9 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 	if (rec != NULL) {
+ 		uint64_t t0 = mach_absolute_time();
+ 		fb->fPresentBusy = false;
++		sweet_tl(4, 0, 0);
+ 		fb->present(rec);
++		sweet_tl(5, fb->fPresentBusy, 0);
+ 		fb->fStatPresentAbs += mach_absolute_time() - t0;
+ 		if (fb->fPresentBusy) {
+ 			IOLockLock(fb->fLock);
+@@ -369,6 +375,9 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		}
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
+ 	}
++	if ((count % 30) == 0) {
++		sweet_tl_flush();
++	}
+ }
+ 
+ void
+@@ -445,6 +454,7 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	IOLockLock(fLock);
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
++	sweet_tl(1, (uint32_t)sweet_fb_swap_count, 0);
+ 	/*
+ 	 * 0161 (sweetfb_onswap=1, with the present thread): present now, not on the next vsync tick. CA swaps a
+ 	 * frame its GPU work already finished, so the blit has nothing queued ahead of it; on the tick it waited
+-- 
+2.56.0
+
