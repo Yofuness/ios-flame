@@ -25,7 +25,7 @@ Boots RAM-only via `tools/sunfish-boot.sh`; stop below 3600 mV; no MDP register 
    Non-blocking keeps vsync on time and CA runs faster, but the blit queues behind backboardd's heavy jobs (present submit -> blit start p95 114 ms), so slots stay full and frames are skipped; more slots help only a little. Panel updates are capped by swaps (20-24/s) either way, and swaps are limited by the CA/CPU side (GPU end -> swap p50 29 ms) plus the bimodal 40 ms GPU frames. Default stays `sweetpresentwait=1`, `sweetpresentslots=2`.
 
 2. **Cut backboardd GPU time (16 ms -> <=10 ms):** profile under swipes; 40 ms outliers; sysmem vs gmem under load; cheaper batched shadow copies; panel-size render only if fill-bound. [in progress]
-   gt1 trace (2026-10-24): 166/1569 passes take 20-40 ms, all full-screen; draw_ib_gmem >95% even with 21 draws -> a few expensive draws per bin (fill/shader). Plus ~10 ms of copy_buffer_to_image batches in the same submits. Next: per-draw split of the long passes.
+   gt1 trace (2026-10-24): 166/1569 passes take 20-40 ms, all full-screen; draw_ib_gmem >95% even with 21 draws -> a few expensive draws per bin (fill/shader). Plus ~10 ms of copy_buffer_to_image batches in the same submits. Per-bin split: slow passes cost ~0.7-1.3 ms in nearly every bin (fast ~0.08), so full-screen expensive draws. Next: find which layer (blur/backdrop?) via per-draw trace or CA layer dump.
 3. **Pipeline ordering from the timeline:** non-blocking present, present on GPU idle, tearing fix. Only after step 2. [ ]
 4. **Stability soak (1 h):** Safari scrolling + app switches with BO census; chase create/destroy only if the pool passes ~400 MB. [ ]
 5. **Unscoped:** shader/pipeline cache persistence, CPU profile of SpringBoard/Safari. [ ]
