@@ -15,6 +15,6 @@ echo "=== $name $(basename "$(dirname "$k")") $* $(date +%T)" >> ../logs/usb-liv
 timeout 150 tools/sunfish-boot.sh "$name" "$k" flamereboot=1800 "$@" >/dev/null 2>&1
 for i in $(seq 40); do timeout 10 tools/sunfish-ssh true 2>/dev/null && break; sleep 5; done
 sleep 50
-tools/sunfish-dim.sh 10 >/dev/null
+[ -n "$DIM" ] && tools/sunfish-dim.sh "$DIM" >/dev/null
 BENCH_TIGHT=1 tools/sunfish-fpsbench.sh "$name-a" 20
 BENCH_TIGHT=1 tools/sunfish-fpsbench.sh "$name-b" 20
