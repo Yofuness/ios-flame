@@ -1,0 +1,261 @@
+--- a/crates/metal2vulkan-runtime/src/enables.rs
++++ b/crates/metal2vulkan-runtime/src/enables.rs
+@@ -400,6 +400,9 @@
+     /// `VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT`, outside the vocabulary: linked only
+     /// by [`Enables::enable_graphics_pipeline_library`].
+     GraphicsPipelineLibrary,
++    /// `VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR` (sweet pipestats), outside the
++    /// vocabulary: linked only by [`Enables::enable_pipeline_executable_properties`].
++    PipelineExecutableProperties,
+ }
+ 
+ /// Vulkan 1.4.
+@@ -471,7 +474,8 @@
+             | Structure::LinearColorAttachment
+             | Structure::PipelineBinary
+             | Structure::InternalCacheControl
+-            | Structure::GraphicsPipelineLibrary => None,
++            | Structure::GraphicsPipelineLibrary
++            | Structure::PipelineExecutableProperties => None,
+         }
+     }
+ 
+@@ -524,7 +528,8 @@
+             | Structure::LinearColorAttachment
+             | Structure::PipelineBinary
+             | Structure::InternalCacheControl
+-            | Structure::GraphicsPipelineLibrary => &[],
++            | Structure::GraphicsPipelineLibrary
++            | Structure::PipelineExecutableProperties => &[],
+         }
+     }
+ }
+@@ -583,6 +588,7 @@
+     pipeline_binary: PipelineBinaryFeatures,
+     internal_cache_control: InternalCacheControl,
+     graphics_pipeline_library: vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT<'static>,
++    pipeline_executable_properties: vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR<'static>,
+ }
+ 
+ /// One `VkBool32` member of a [`FeatureChain`] structure, named by the vocabulary.
+@@ -1074,7 +1080,8 @@
+             LinearColorAttachment => linear_color_attachment,
+             PipelineBinary => pipeline_binary,
+             InternalCacheControl => internal_cache_control,
+-            GraphicsPipelineLibrary => graphics_pipeline_library
++            GraphicsPipelineLibrary => graphics_pipeline_library,
++            PipelineExecutableProperties => pipeline_executable_properties
+         )
+     };
+     (@ $info:ident, $chain:ident, $linked:ident; $($variant:ident => $field:ident),*) => {
+@@ -1238,6 +1245,15 @@
+         self.push_name(PIPELINE_BINARY.to_owned());
+     }
+ 
++    /// sweet pipestats: enables `VK_KHR_pipeline_executable_properties` with `pipelineExecutableInfo`.
++    pub(super) fn enable_pipeline_executable_properties(&mut self) {
++        self.chain
++            .pipeline_executable_properties
++            .pipeline_executable_info = vk::TRUE;
++        self.linked.insert(Structure::PipelineExecutableProperties);
++        self.push_name(ash::khr::pipeline_executable_properties::NAME.to_owned());
++    }
++
+     /// Enables `VK_EXT_graphics_pipeline_library` with its `graphicsPipelineLibrary`, and
+     /// `VK_KHR_pipeline_library`, which it requires: the runtime's own need outside the
+     /// vocabulary, where the device links libraries fast (`create.rs`): a render variant's
+--- a/crates/metal2vulkan-runtime/src/lib.rs
++++ b/crates/metal2vulkan-runtime/src/lib.rs
+@@ -138,6 +138,7 @@
+ mod owned_kernel;
+ mod pending_dispatch;
+ mod pipeline;
++mod pipestats; // sweet pipestats
+ mod pixel_format_info;
+ mod predication;
+ mod private_properties;
+--- a/crates/metal2vulkan-runtime/src/device/create.rs
++++ b/crates/metal2vulkan-runtime/src/device/create.rs
+@@ -1177,6 +1177,20 @@
+     if graphics_pipeline_library {
+         enables.enable_graphics_pipeline_library();
+     }
++    // sweet pipestats: the driver's shader statistics, where asked and the device has them.
++    if crate::pipestats::requested()
++        && listed.contains(ash::khr::pipeline_executable_properties::NAME)
++    {
++        let mut executable = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
++        let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut executable);
++        // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and lists the
++        // extension.
++        unsafe { instance.raw.get_physical_device_features2(physical, &mut features) };
++        if executable.pipeline_executable_info == vk::TRUE {
++            enables.enable_pipeline_executable_properties();
++            crate::pipestats::set_enabled();
++        }
++    }
+     // The runtime's own need, outside the vocabulary: the device's pipelines are cached in the
+     // shader cache's records alone, the driver's internal cache off where it allows; else the
+     // device says once that the driver keeps it.
+--- a/crates/metal2vulkan-runtime/src/pipeline/creation_log.rs
++++ b/crates/metal2vulkan-runtime/src/pipeline/creation_log.rs
+@@ -196,7 +196,14 @@
+             (_, false) => std::time::Duration::ZERO,
+         };
+         let start = Instant::now();
++        // sweet pipestats: name the pipeline for its statistics lines.
++        if crate::pipestats::active() {
++            crate::pipestats::set_label(&self.head);
++        }
+         let made = make();
++        if crate::pipestats::active() {
++            crate::pipestats::set_label("");
++        }
+         let turn = super::budget::take_waited();
+         let elapsed = start.elapsed().saturating_sub(turn);
+         let waited = queued + turn;
+--- a/crates/metal2vulkan-runtime/src/pipeline/graphics.rs
++++ b/crates/metal2vulkan-runtime/src/pipeline/graphics.rs
+@@ -887,7 +887,11 @@
+         let graphics = &pipeline.graphics;
+         let content = self.graphics_content(pipeline, key)?;
+         let shared = self.device.shared();
+-        let libraries = shared.libraries.as_ref().filter(|_| content.links());
++        // sweet pipestats: whole pipelines only, so each has its own executables to report.
++        let libraries = shared
++            .libraries
++            .as_ref()
++            .filter(|_| content.links() && !crate::pipestats::active());
+         // Whether the making's cache held it and each of its stages, where the making reports
+         // them (`shader_cache::found_in_cache`): its stages' feedback where it has at most
+         // `REPORTED_STAGES`, none where more (a count of 0 is valid, one equal to `stageCount`
+@@ -935,8 +939,14 @@
+                     if driver_reports {
+                         info = info.push_next(&mut feedback);
+                     }
++                    // sweet pipestats: capture statistics, no cache (a cache hit may skip them).
++                    let stats = crate::pipestats::active();
++                    if stats {
++                        info = info.flags(vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR);
++                    }
+                     shared
+                         .make_pipelines(making, |cache| {
++                            let cache = if stats { vk::PipelineCache::null() } else { cache };
+                             // SAFETY: every pointer in `info` outlives the call; the pipeline
+                             // cache is the making's own, destroyed once the call returned.
+                             unsafe { shared.vk().create_graphics_pipelines(cache, &[info], None) }
+@@ -955,6 +965,9 @@
+         shared.counts.driver_diagnostics_withheld(withheld);
+         let (raw, linked) = created?;
+         let created_in = started.elapsed();
++        if crate::pipestats::active() {
++            crate::pipestats::report(&self.device, raw);
++        }
+         drop(turn);
+         shared.counts.variant_pipeline_made();
+         if driver_reports {
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/pipestats.rs
+@@ -0,0 +1,102 @@
++//! sweet pipestats (`SWEET_PIPESTATS=1`, off by default): the driver's compiled-shader statistics
++//! (`VK_KHR_pipeline_executable_properties`) of every render `VkPipeline` the device makes, one
++//! `PIPESTAT` line per executable through the device's message sink (id name `sweet-pipestats`).
++
++use crate::Device;
++use ash::vk;
++use std::cell::RefCell;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::OnceLock;
++
++/// Whether `SWEET_PIPESTATS` asks for the statistics.
++pub(crate) fn requested() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var_os("SWEET_PIPESTATS").is_some_and(|value| !value.is_empty() && value != "0")
++    })
++}
++
++/// Whether the device was made with `pipelineExecutableInfo`.
++static ENABLED: AtomicBool = AtomicBool::new(false);
++
++pub(crate) fn set_enabled() {
++    ENABLED.store(true, Ordering::Relaxed);
++}
++
++/// Whether pipelines are made to capture statistics and report them.
++pub(crate) fn active() -> bool {
++    requested() && ENABLED.load(Ordering::Relaxed)
++}
++
++thread_local! {
++    /// The state label and functions of the pipeline this thread is making (`creation_log.rs`).
++    static LABEL: RefCell<String> = const { RefCell::new(String::new()) };
++}
++
++/// Name the pipeline this thread makes next; empty when done.
++pub(crate) fn set_label(label: &str) {
++    LABEL.with(|current| {
++        let mut current = current.borrow_mut();
++        current.clear();
++        current.push_str(label);
++    });
++}
++
++/// Log the statistics of `pipeline`, one line per executable.
++pub(crate) fn report(device: &Device, pipeline: vk::Pipeline) {
++    let shared = device.shared();
++    let functions = ash::khr::pipeline_executable_properties::Device::new(
++        &shared.instance.raw,
++        shared.vk(),
++    );
++    let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
++    // SAFETY: `pipeline` was just made on this device with the capture flag, and the device has
++    // the feature (`active`).
++    let Ok(executables) = (unsafe { functions.get_pipeline_executable_properties(&info) }) else {
++        return;
++    };
++    let label = LABEL.with(|label| label.borrow().clone());
++    for (index, executable) in executables.iter().enumerate() {
++        let executable_info = vk::PipelineExecutableInfoKHR::default()
++            .pipeline(pipeline)
++            .executable_index(index as u32);
++        // SAFETY: as above, `index` from the driver's own list.
++        let Ok(statistics) =
++            (unsafe { functions.get_pipeline_executable_statistics(&executable_info) })
++        else {
++            continue;
++        };
++        let mut line = format!(
++            "PIPESTAT {label} {}",
++            executable
++                .name_as_c_str()
++                .unwrap_or_default()
++                .to_string_lossy()
++                .replace(' ', "_")
++        );
++        for statistic in &statistics {
++            let name = statistic
++                .name_as_c_str()
++                .unwrap_or_default()
++                .to_string_lossy()
++                .replace(' ', "_");
++            // SAFETY: the union member read is the one `format` names.
++            let value = unsafe {
++                match statistic.format {
++                    vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
++                        (statistic.value.b32 != 0).to_string()
++                    }
++                    vk::PipelineExecutableStatisticFormatKHR::INT64 => {
++                        statistic.value.i64.to_string()
++                    }
++                    vk::PipelineExecutableStatisticFormatKHR::UINT64 => {
++                        statistic.value.u64.to_string()
++                    }
++                    _ => statistic.value.f64.to_string(),
++                }
++            };
++            line.push_str(&format!(" {name}={value}"));
++        }
++        device.inform("sweet-pipestats", line);
++    }
++}

@@ -201,8 +201,21 @@ fn log_message(message: &DebugMessage) {
     let _ = writeln!(file, "[{} {}] {:?} {}", std::process::id(), std::env::args().next().unwrap_or_default(), message.severity, key);
 }
 
+// sweet pipestats (SWEET_PIPESTATS=1): the runtime's "PIPESTAT <label> <stage> name=value ..." lines go to /var/local/mtl2.log like sm2_logs's.
+fn log_pipestat(text: &str) {
+    use std::io::Write;
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    let file = FILE.get_or_init(|| std::fs::OpenOptions::new().append(true).open("/var/local/mtl2.log").ok().map(std::sync::Mutex::new));
+    let Some(Ok(mut file)) = file.as_ref().map(|f| f.lock()) else { return };
+    let _ = writeln!(file, "MTL2[{} {}]: {}", std::process::id(), std::env::args().next().unwrap_or_default(), text);
+}
+
 fn observe_message(message: &DebugMessage) {
     use std::sync::atomic::Ordering::Relaxed;
+    if message.id_name == "sweet-pipestats" {
+        log_pipestat(&message.text);
+        return;
+    }
     if message.id_name == "metal2vulkan-pipeline-creation" {
         let made = millis_after(&message.text, " made in ");
         let us = made.or_else(|| millis_after(&message.text, " failed in ")).map_or(0, |ms| (ms * 1000.0) as u64);
