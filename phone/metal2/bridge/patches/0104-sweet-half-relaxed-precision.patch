@@ -1,3 +1,153 @@
+diff --git a/crates/metal2vulkan-runtime/src/pipestats.rs b/crates/metal2vulkan-runtime/src/pipestats.rs
+new file mode 100644
+index 00000000..c65171d8
+--- /dev/null
++++ b/crates/metal2vulkan-runtime/src/pipestats.rs
+@@ -0,0 +1,144 @@
++//! sweet pipestats (`SWEET_PIPESTATS=1`, off by default): the driver's compiled-shader statistics
++//! (`VK_KHR_pipeline_executable_properties`) of every render `VkPipeline` the device makes, one
++//! `PIPESTAT` line per executable through the device's message sink (id name `sweet-pipestats`).
++
++use crate::Device;
++use ash::vk;
++use std::cell::RefCell;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::OnceLock;
++
++/// Whether `SWEET_PIPESTATS` asks for the statistics.
++pub(crate) fn requested() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| {
++        std::env::var_os("SWEET_PIPESTATS").is_some_and(|value| !value.is_empty() && value != "0")
++    })
++}
++
++/// One line straight into `/var/local/mtl2.log` and `/dev/console`, as the frontend's `sm2_logs`
++/// does, so it never depends on the message sink. Only with `SWEET_PIPESTATS` set.
++pub(crate) fn note(text: &str) {
++    use std::io::Write;
++    use std::sync::Mutex;
++    if !requested() {
++        return;
++    }
++    static FILES: OnceLock<Vec<Mutex<std::fs::File>>> = OnceLock::new();
++    let files = FILES.get_or_init(|| {
++        ["/dev/console", "/var/local/mtl2.log"]
++            .iter()
++            .filter_map(|path| std::fs::OpenOptions::new().append(true).open(path).ok())
++            .map(Mutex::new)
++            .collect()
++    });
++    let line = format!(
++        "MTL2[{} {}]: {text}\n",
++        std::process::id(),
++        std::env::args().next().unwrap_or_default()
++    );
++    for file in files {
++        if let Ok(mut file) = file.lock() {
++            let _ = file.write_all(line.as_bytes());
++        }
++    }
++}
++
++/// Whether the device was made with `pipelineExecutableInfo`.
++static ENABLED: AtomicBool = AtomicBool::new(false);
++
++pub(crate) fn set_enabled() {
++    ENABLED.store(true, Ordering::Relaxed);
++}
++
++/// Whether pipelines are made to capture statistics and report them.
++pub(crate) fn active() -> bool {
++    requested() && ENABLED.load(Ordering::Relaxed)
++}
++
++thread_local! {
++    /// The state label and functions of the pipeline this thread is making (`creation_log.rs`).
++    static LABEL: RefCell<String> = const { RefCell::new(String::new()) };
++}
++
++/// Name the pipeline this thread makes next; empty when done.
++pub(crate) fn set_label(label: &str) {
++    LABEL.with(|current| {
++        let mut current = current.borrow_mut();
++        current.clear();
++        current.push_str(label);
++    });
++}
++
++/// Log the statistics of `pipeline`, one line per executable.
++pub(crate) fn report(device: &Device, pipeline: vk::Pipeline) {
++    let shared = device.shared();
++    static FIRST: AtomicBool = AtomicBool::new(true);
++    let first = FIRST.swap(false, Ordering::Relaxed);
++    let functions = ash::khr::pipeline_executable_properties::Device::new(
++        &shared.instance.raw,
++        shared.vk(),
++    );
++    let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
++    // SAFETY: `pipeline` was just made on this device with the capture flag, and the device has
++    // the feature (`active`).
++    let executables = unsafe { functions.get_pipeline_executable_properties(&info) };
++    if first {
++        note(&format!(
++            "PIPESTAT first query: properties {:?}",
++            executables.as_ref().map(Vec::len)
++        ));
++    }
++    let Ok(executables) = executables else {
++        return;
++    };
++    let label = LABEL.with(|label| label.borrow().clone());
++    for (index, executable) in executables.iter().enumerate() {
++        let executable_info = vk::PipelineExecutableInfoKHR::default()
++            .pipeline(pipeline)
++            .executable_index(index as u32);
++        // SAFETY: as above, `index` from the driver's own list.
++        let statistics = unsafe { functions.get_pipeline_executable_statistics(&executable_info) };
++        if first && index == 0 {
++            note(&format!(
++                "PIPESTAT first query: statistics {:?}",
++                statistics.as_ref().map(Vec::len)
++            ));
++        }
++        let Ok(statistics) = statistics else {
++            continue;
++        };
++        let mut line = format!(
++            "PIPESTAT {label} {}",
++            executable
++                .name_as_c_str()
++                .unwrap_or_default()
++                .to_string_lossy()
++                .replace(' ', "_")
++        );
++        for statistic in &statistics {
++            let name = statistic
++                .name_as_c_str()
++                .unwrap_or_default()
++                .to_string_lossy()
++                .replace(' ', "_");
++            // SAFETY: the union member read is the one `format` names.
++            let value = unsafe {
++                match statistic.format {
++                    vk::PipelineExecutableStatisticFormatKHR::BOOL32 => {
++                        (statistic.value.b32 != 0).to_string()
++                    }
++                    vk::PipelineExecutableStatisticFormatKHR::INT64 => {
++                        statistic.value.i64.to_string()
++                    }
++                    vk::PipelineExecutableStatisticFormatKHR::UINT64 => {
++                        statistic.value.u64.to_string()
++                    }
++                    _ => statistic.value.f64.to_string(),
++                }
++            };
++            line.push_str(&format!(" {name}={value}"));
++        }
++        note(&line);
++    }
++}
 diff --git a/crates/metal2vulkan-runtime/src/shader_cache/mod.rs b/crates/metal2vulkan-runtime/src/shader_cache/mod.rs
 index 513fe37f..49f39e38 100644
 --- a/crates/metal2vulkan-runtime/src/shader_cache/mod.rs
@@ -15,7 +165,7 @@ index 513fe37f..49f39e38 100644
  }
  
 diff --git a/crates/metal2vulkan/src/env_vars.rs b/crates/metal2vulkan/src/env_vars.rs
-index ebb04f4f..07c97494 100644
+index ebb04f4f..62e9e86c 100644
 --- a/crates/metal2vulkan/src/env_vars.rs
 +++ b/crates/metal2vulkan/src/env_vars.rs
 @@ -34,6 +34,14 @@ pub const REGISTRY: &[EnvVar] = &[
@@ -33,7 +183,7 @@ index ebb04f4f..07c97494 100644
      EnvVar {
          name: "METAL2VULKAN_LOG_PIPELINES",
          default: "unset (off)",
-@@ -76,6 +84,72 @@ pub fn log_pipelines() -> bool {
+@@ -76,6 +84,115 @@ pub fn log_pipelines() -> bool {
          .is_some_and(|value| !value.is_empty() && value != "0")
  }
  
@@ -81,6 +231,49 @@ index ebb04f4f..07c97494 100644
 +    }
 +}
 +
++/// sweet half-relaxed: with `METAL2VULKAN_SPV_DUMP=<dir>` set, write the final (relocated) SPIR-V
++/// of the first 20 modules this process links to `<dir>/<n>-<entry name>.spv` (`n` from 1; mode
++/// 0644). The entry name is the first `OpEntryPoint`'s.
++pub fn half_relaxed_dump(words: &[u32]) {
++    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
++    static N: AtomicU64 = AtomicU64::new(0);
++    let Some(dir) = std::env::var_os("METAL2VULKAN_SPV_DUMP").filter(|d| !d.is_empty()) else {
++        return;
++    };
++    if N.load(Relaxed) >= 20 {
++        return;
++    }
++    let n = N.fetch_add(1, Relaxed) + 1;
++    if n > 20 {
++        return;
++    }
++    let mut name = String::from("module");
++    let mut i = 5usize;
++    while i < words.len() {
++        let (op, len) = (words[i] & 0xFFFF, (words[i] >> 16) as usize);
++        if len == 0 {
++            break;
++        }
++        if op == 15 && i + 3 < words.len() {
++            let bytes: Vec<u8> = words[i + 3..(i + len).min(words.len())]
++                .iter()
++                .flat_map(|w| w.to_le_bytes())
++                .take_while(|b| *b != 0)
++                .collect();
++            name = String::from_utf8_lossy(&bytes)
++                .chars()
++                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
++                .collect();
++            break;
++        }
++        i += len;
++    }
++    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
++    let path = std::path::Path::new(&dir).join(format!("{n}-{name}.spv"));
++    let wrote = std::fs::write(&path, &bytes);
++    half_relaxed_note(&format!("half-relaxed: spv dump {} {:?}", path.display(), wrote.is_ok()));
++}
++
 +/// sweet half-relaxed: called once per translated function (`lower::emit::emit_module`): the flag
 +/// on the first call, and the process totals every 100 functions.
 +pub fn half_relaxed_count() {
@@ -93,7 +286,7 @@ index ebb04f4f..07c97494 100644
 +            half_relaxed()
 +        ));
 +    }
-+    if n % 100 == 0 {
++    if n <= 5 || n % 10 == 0 {
 +        half_relaxed_note(&format!(
 +            "half-relaxed: translated={n} round_skipped={} marked={} decorated={}",
 +            HR_SKIPPED.load(Relaxed),
@@ -261,10 +454,18 @@ index d5b050ec..f24899c3 100644
      /// flag of a predicated loop that iterates together, which the lowering's uniformity analysis
      /// proved. An in-memory record for checks (`spirv::testing::barriers`), kept only where they
 diff --git a/crates/metal2vulkan/src/spirv/serialize/mod.rs b/crates/metal2vulkan/src/spirv/serialize/mod.rs
-index d65b76f5..c1774546 100644
+index d65b76f5..dd2bf29e 100644
 --- a/crates/metal2vulkan/src/spirv/serialize/mod.rs
 +++ b/crates/metal2vulkan/src/spirv/serialize/mod.rs
-@@ -1611,6 +1611,7 @@ impl Ser<'_> {
+@@ -104,6 +104,7 @@ pub fn relocate(r: &RelocatableModule, link: &impl SymbolTable) -> BResult<Vec<u
+             .ok_or(BuildError::Reloc(RelocRule::Offset(*at)))?;
+         *slot = n;
+     }
++    crate::env_vars::half_relaxed_dump(&words);
+     Ok(words)
+ }
+ 
+@@ -1611,6 +1612,7 @@ impl Ser<'_> {
          // A copy shares its operand's id, so one id may carry several values: each decoration is
          // written once per id.
          let mut non_uniform = std::collections::BTreeSet::new();
@@ -272,7 +473,7 @@ index d65b76f5..c1774546 100644
          for f in &m.functions {
              for p in &f.params {
                  if self.is_psb_pointer(self.value_ty(*p)?)? {
-@@ -1644,6 +1645,12 @@ impl Ser<'_> {
+@@ -1644,6 +1646,12 @@ impl Ser<'_> {
                      {
                          self.decorate(w, self.val(r)?, Decoration::NoContraction, &[])?;
                      }
