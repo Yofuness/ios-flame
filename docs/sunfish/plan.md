@@ -59,11 +59,12 @@
   - Bigger job; do it only if A gives less than +5 updates/s.
 - **Measure:** `tools/sunfish-cfgbench.sh` and the `SWEET FB: 5s ... avg copy` lines.
 
-## Step 2: Remaining per-frame copies (~3 ms/frame)
-- **What's left:** small A8/RGBA8 buffer textures with 32-byte row pitch. Turnip only accepts 64-byte explicit linear pitch.
-- **Change:** add Turnip patch `phone/turnip/patches/0105`. For images without COLOR_ATTACHMENT/STORAGE usage, allow 16-byte alignment in `fdl6_layout_image`'s explicit-layout check (`src/freedreno/fdl/fd6_layout.c`).
-- **Check for corruption:** grab webcam frames of text and icons, using `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1`. Iriun is /dev/video0 now.
-- **Build:** the metal2 CI runs on push. Install with `tools/sunfish-metal2-install.sh DIR --no-restart`.
+## Step 2: Remaining per-frame copies (FAILED 2026-10-24, parked)
+- **Tried:** Turnip 0105 (`phone/turnip/failed/0105-*.patch`): explicit-layout images without color/storage/depth usage accept a 16-byte pitch (`fdl_explicit_layout.relaxed_pitch`).
+- **Result:** refusals went to 0 (34 in the 30 s before), but the GPU took an SMMU translation fault within ~2 s of backboardd restarting (fsr 2, far 0x100e634240, fence hang, reset), then every Metal call returned DeviceLost and the screen stayed black. The bench numbers after that (23.9 / 24.8 updates/s vs 23.6 / 23.1 before) are meaningless.
+- **Likely cause:** the texture unit needs 64-byte-aligned linear pitch; with 16/32-byte pitch it walks past the aliased mapping. Not investigated further.
+- **If retried:** keep the bridge's shadow copy for those textures (it is only ~3 ms/frame), or pad the IOSurface allocation itself instead of relaxing Turnip.
+- Removed from `patches/` so CI builds without it.
 
 ## Step 3: GPU memory leak (stability)
 - **Problem:** backboardd leaks small BOs (~340 per app switch). The pool hitting 944 MB caused the old freezes.
