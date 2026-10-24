@@ -196,3 +196,13 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Rates over the swap span: 20.2-20.3 swaps/s, 19.4-19.5 presents/s, vsync ticks 51.6-52.0/s (nominal 60: after a blocked tick the timer fires late and in bursts).
 - Frame intervals: 21-22% <= 17 ms, 64-65% <= 34 ms, ~21% > 50 ms.
 - Reading: the GPU is not the main gap. 29 ms from backboardd's last GPU end to the swap (CA/CPU side), the bimodal 40 ms GPU frames, and a vsync tick that only delivers ~52/s dominate; the present wait (p95 43 ms) hits ~5% of ticks.
+
+## [11:50] Present-mode comparison with the timeline (kernel39 / kernel40 = + xnu 0164 sweetpresentslots)
+- Same Settings swipe bench, two runs per config, sweettrace=1:
+| config | swaps/s | panel updates/s | ticks/s | present call p95 | put off |
+|---|---|---|---|---|---|
+| presentwait=1 (default) | 20.3 | 21.7-22.3 | 52 | 43 ms | 0 |
+| presentwait=0 (nb1, nb2) | 24.5 / 24.4 | 14.4 / 13.7 | 59 | 1.4 ms | 514 / 523 |
+| presentwait=0 slots=4 (s4a, s4b) | 22.4 / 23.0 | 15.0 / 14.8 | 59 | 1.4 ms | 336 / 407 |
+- Non-blocking fixes the tick (59/s, present never blocks) and lifts swaps, but half the presents are put off because the blit waits behind heavy backboardd jobs (queue wait p95 114 ms); 4 slots recover only ~1 update/s. Default left at presentwait=1, slots=2.
+- Next lever (plan step 2): the ~29 ms from backboardd's last GPU end to SwapEnd and the 40 ms GPU frames; neither is the present path.

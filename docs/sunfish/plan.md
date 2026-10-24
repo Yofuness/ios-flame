@@ -15,6 +15,15 @@ Boots RAM-only via `tools/sunfish-boot.sh`; stop below 3600 mV; no MDP register 
 0. **Video spike (no code):** serve H.264/HEVC mp4 and a long page from the PC over USB; play in Safari; does it decode, at what fps, hardware or CPU? Result decides whether reels are possible. [ ]
 1. **Per-frame timeline (xnu 0163, `sweettrace=1`) [DONE 2026-10-24, kernel39]:** kernel records at swap, submit, CP start/end, present begin/end, vsync; `tools/sunfish-timeline.py LOG "bench TAG start" "bench TAG end"` prints the frame-interval histogram (the 60 Hz metric) and the per-stage gaps. Tracing costs nothing visible (22.3 / 21.7 updates/s with it on). mtl2.log/Turnip trace merge not done yet.
    First numbers (Settings swipe bench, 2 runs agree; mach time and the CP counter run at 19.2 MHz, not 24): 20.2-20.3 swaps/s, vsync ticks only ~52/s (not 60: late ticks come in bursts). swap-to-swap p50 33 ms, p95 100 ms; ~22% of intervals <=17 ms, ~64% <=34 ms, ~21% >50 ms. backboardd GPU per submit is bimodal: p50 5.7-5.9 ms, p95 40 ms, max 41-44 ms. The present blit is 2.4 ms of GPU. Gaps: backboardd GPU end -> swap p50 29 ms / p95 95 ms (CPU/CA side, not GPU); swap -> present call p50 10.7 ms; present call blocks p50 0.7 ms but p95 43 ms (the `sweetpresentwait=1` wait behind heavy jobs); present submit -> blit start p95 114 ms.
+   **Present-mode comparison on the timeline (kernel39/40, same bench, 2 runs each):**
+
+   | config | swaps/s | panel updates/s | vsync ticks/s | present call p95 | put off |
+   |---|---|---|---|---|---|
+   | `sweetpresentwait=1` (default) | 20.3 | 21.7-22.3 | 52 | 43 ms | 0 |
+   | `sweetpresentwait=0` | 24.5 | 13.7-14.4 | 59 | 1.4 ms | ~520 per 37 s |
+   | `sweetpresentwait=0 sweetpresentslots=4` (xnu 0164) | 22.4-23.0 | 14.8-15.0 | 59 | 1.4 ms | 336-407 |
+   Non-blocking keeps vsync on time and CA runs faster, but the blit queues behind backboardd's heavy jobs (present submit -> blit start p95 114 ms), so slots stay full and frames are skipped; more slots help only a little. Panel updates are capped by swaps (20-24/s) either way, and swaps are limited by the CA/CPU side (GPU end -> swap p50 29 ms) plus the bimodal 40 ms GPU frames. Default stays `sweetpresentwait=1`, `sweetpresentslots=2`.
+
 2. **Cut backboardd GPU time (16 ms -> <=10 ms):** profile under swipes; 40 ms outliers; sysmem vs gmem under load; cheaper batched shadow copies; panel-size render only if fill-bound. [ ]
 3. **Pipeline ordering from the timeline:** non-blocking present, present on GPU idle, tearing fix. Only after step 2. [ ]
 4. **Stability soak (1 h):** Safari scrolling + app switches with BO census; chase create/destroy only if the pool passes ~400 MB. [ ]
