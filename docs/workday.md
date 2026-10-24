@@ -245,3 +245,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Ops note: each CI bundle download is 278 MB; /tmp hit its quota after ~12 (files are read-only: chmod -R u+w before rm).
 - [18:00] TU_DEBUG=sysmem under swipes (sys1/sys2): 15.9 / 13.3 ms per backboardd submit, longest 40-45 ms, 18.9 swaps/s: same as GMEM, so tile overhead is not the cause.
 - Reading: a full-damage redraw stacks ~10+ full-screen layers (~40 Mpx) and CA's uber shader shades at ~1 Gpx/s, which is ~40 ms. The lever is shader cost. IR3_SHADER_DEBUG=disasm + MESA_SHADER_CACHE_DISABLE only dumped Turnip's internal blit shaders (CA pipelines come from the m2v cache; disasm goes to stderr). Next: SWEET_PIPESTATS (VK_KHR_pipeline_executable_properties per CA pipeline label), being written.
+
+## [18:40] Bridge 0103 SWEET_PIPESTATS (VK_KHR_pipeline_executable_properties) works
+- First build logged nothing (cause not found by reading); the version that writes straight to mtl2.log works: device enabled, properties Ok(3), statistics Ok(28) per pipeline.
+- 118 fragment pipelines after a restart + swipes: FS instruction count min 0, p50 57, p90 211, max 314 (the solid fill is 5 instructions; downsample_8_frag_lph blur 211-282, 16-19 registers, 10-12 waves).
+- Half-registers_used=0 in every pipeline, although CA's shaders are the "_lph" (low-precision half) variants: the bridge's translation (metal2vulkan) or Turnip turns all half math into 32-bit. A6xx runs half at 2x ALU rate with half the registers.
+- Reading: the solid fill is not shader-bound (5 instr) -> fill/ROP rate for those; the textured/blur layers are ALU-bound at full precision. Next: find where half precision is lost (AIR -> SPIR-V: Float16 or RelaxedPrecision; ir3 lowers mediump only for RelaxedPrecision) and keep it.
+- Labels are missing from the PIPESTAT lines (state N shows only function names).
