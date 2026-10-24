@@ -1,6 +1,7 @@
 @AGENTS.md
 @docs/sunfish/display-perf.md
 @docs/sunfish/plan.md
+@docs/sunfish/status.md
 
 # Sunfish (Pixel 4a) quick rules
 - **Boot and partitions:**
@@ -18,3 +19,19 @@
   - Add new findings or next steps as you find them.
 - **New plan:** move the old one to `docs/sunfish/plans/YYYY-MM-DD-<topic>.md`. Put a short header on it saying
   what was done, what was not, and what replaced it, then write the new `plan.md`.
+- **Sunfish differs from AGENTS.md (which describes flame):**
+  - The kernel tree is `work/src/xnu`. Commit there, then save it as `xnu/patches/NNNN-sunfish-*.patch`.
+  - Build in CI:
+    1. `gh workflow run xnu.yml --ref sunfish`
+    2. `gh run watch ID`
+    3. `gh run download ID -n xnu-kernel -D work/kernelNN`
+  - Milestones go in `docs/sunfish/status.md` and `docs/workday.md`, not in HANDOFF.md.
+- **Metal bundle (Turnip and bridge patches):** pushing `phone/turnip/patches` or `phone/metal2` starts the
+  metal2 CI.
+  1. `gh run download ID -D DIR`
+  2. `tools/sunfish-metal2-install.sh <dir containing SweetMetal2.bundle> --no-restart`
+- **Phone tools:** pushing `phone/tools` starts the userland CI.
+  1. `gh run download ID -n ios-userland -D DIR`
+  2. `python3 -I tools/flame-files.py put DIR/NAME /var/local/bin/NAME 755`
+- **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
+  provides the USB network link.

@@ -1,6 +1,6 @@
 # iOS on Pixel 4a (sunfish) — status
 
-Updated 2026-10-23 06:20. Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
+Updated 2026-10-24 09:30 (rows below are current; the dated "Update" sections at the end are history). Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
 github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 
 ## Working
@@ -8,16 +8,20 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 |---|---|---|
 | Boot | ✅ | RAM-only `fastboot boot`; iOS 16.7.16 (iPhone X userland) root on userdata |
 | CPUs | ✅ | 8 cores; A55 1804 MHz, A76 2208 MHz (read from OSM registers) |
-| Display | ✅ | 1080x2340, ABL splash buffer 0x9c000000, CPU-rendered ~25 fps |
+| Display | ✅ | 1080x2340, ABL splash buffer 0x9c000000; GPU-composited (Metal → Turnip), vsync-paced ~21 updates/s; brightness: `tools/sunfish-dim.sh N` |
+| GPU | ✅ | Adreno 618 at 565 MHz, Metal via SweetMetal2 (metal2vulkan + Turnip); see docs/sunfish/display-perf.md |
 | Touch | ✅ | ST FTM5 over SE7 I²C 0x49 (patch 0125, `sweettouch=2`) |
 | Buttons | ✅ | power, vol-down (PON), vol-up (PM6150L GPIO2, patch 0126) |
 | USB | ✅ | Ethernet 192.168.7.2, live kernel log (UDP 5140, full backlog: 0127) |
 | SSH | ✅ | dropbear + dash + toybox; `port/tools/sunfish-ssh` |
 | Real time | ✅ | PM6150 RTC + `sweetrtcoff` (`port/work/rtc-offset`) |
 | Stock apps | ✅ | 32 staged apps installed in /Applications |
-| Wi-Fi scan | ✅ | modem + WLAN fw boot from userland (`wland`); Settings lists networks |
+| Wi-Fi | ✅ | scan + join + DHCP (MSA 2 MB fix); network saved in Settings; Safari works |
 
 ## Partial / in progress
+- **Smoothness** — next steps are in docs/sunfish/plan.md (present path, the last texture copies).
+- **GPU memory leak** — backboardd leaks small BOs on app switches; a full pool caused the freezes.
+- **Charging** — the battery drains ~0.5 A under load even on the charger (the charger isn't configured).
 - **Battery %** — real reading works; was jumpy (voltage-only estimate). Patch 0128: IR-compensated,
   averaged, 1%/30 s, direction from measured current, no 100% flash. Booted as `k10`; **needs checking**.
 - **Wi-Fi join** — fails. WLAN firmware crashes at vdev start (first TX/channel setup):
@@ -28,8 +32,7 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 - **`flamereboot=0`** — used for k10 to disable the auto-reboot; meaning unverified.
 
 ## Not started
-GPU (Adreno 618; driver is A640-specific: chip ID, GMU, GPU clock controller, power domains —
-firmware already extracted to `restore/fw/vendor`), audio, Bluetooth, cellular, camera, sensors.
+Audio, Bluetooth, cellular, camera, sensors.
 
 ## Key fixes found during the port
 - ABL leaves UFS powered down → shim sends START STOP UNIT to W-LUN 0xd0.
@@ -41,7 +44,7 @@ firmware already extracted to `restore/fw/vendor`), audio, Bluetooth, cellular, 
 
 ## How to boot (from fastboot)
 ```
-port/tools/sunfish-boot.sh k10 port/work/kernel5/kernel.development.sweet sweettouch=2
+cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet sweetpresentwait=1
 ```
 Tools: `flame-cmd.py reboot|swipe|tap`, `flame-files.py get|put`, `flame-shot OUT.png`,
 `sunfish-install-ssh.sh`, `sunfish-install-wifi.sh`, `sunfish-livelog.sh` (log → logs/usb-live.log).
