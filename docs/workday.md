@@ -206,3 +206,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 | presentwait=0 slots=4 (s4a, s4b) | 22.4 / 23.0 | 15.0 / 14.8 | 59 | 1.4 ms | 336 / 407 |
 - Non-blocking fixes the tick (59/s, present never blocks) and lifts swaps, but half the presents are put off because the blit waits behind heavy backboardd jobs (queue wait p95 114 ms); 4 slots recover only ~1 update/s. Default left at presentwait=1, slots=2.
 - Next lever (plan step 2): the ~29 ms from backboardd's last GPU end to SwapEnd and the 40 ms GPU frames; neither is the present path.
+
+## [12:30] Step 2: Turnip GPU trace under swipes (gt1, MESA_GPU_TRACES=print; kernel already running, 4184 mV charging)
+- Bench with tracing: 19.3 swaps/s, 18.0 panel updates/s. Timeline: backboardd GPU/submit p50 9.0 ms, p95 39 ms; GPU end -> swap p50 26.7 ms.
+- 1569 render passes: <5 ms 1212, 5-10 173, 10-20 18, 20-40 166, >40 0. All long passes are full-screen 1125x2436 GMEM (44 bins 288x224).
+- 5 longest passes: 33-36 ms with only 21-92 draws; draw_ib_gmem is >95% of it, gmem load/store ~1 ms each, binning 0.1-0.3 ms. So a few expensive draws (fill/shader: likely blur or backdrop), not draw count or size.
+- copy_buffer_to_image: 10018 copies, 3.5 s total (0.35 ms each); 44-50 copies (~10 ms) ride in the same submits as long passes.
