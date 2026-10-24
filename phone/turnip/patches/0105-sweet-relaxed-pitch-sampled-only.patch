@@ -28,7 +28,7 @@ diff --git a/src/freedreno/vulkan/tu_image.cc b/src/freedreno/vulkan/tu_image.cc
 index b763c357e78..b6428d34e05 100644
 --- a/src/freedreno/vulkan/tu_image.cc
 +++ b/src/freedreno/vulkan/tu_image.cc
-@@ -742,6 +742,11 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
+@@ -742,6 +742,13 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
  
           plane_layout.offset = plane_layouts[i].offset;
           plane_layout.pitch = plane_layouts[i].rowPitch;
@@ -36,7 +36,9 @@ index b763c357e78..b6428d34e05 100644
 +          * pitch instead of being refused and shadow-copied by the bridge */
 +         plane_layout.relaxed_pitch =
 +            !(image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
++                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
++         mesa_logw("sweet 0105: explicit pitch %u usage 0x%x relaxed %d", (unsigned)plane_layout.pitch,
++                   (unsigned)image->vk.usage, (int)plane_layout.relaxed_pitch);
           /* note: use plane_layouts[0].arrayPitch to support array formats */
        }
  
