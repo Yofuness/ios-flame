@@ -12,6 +12,7 @@
 #import <objc/runtime.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <pthread.h>
 #include <memory>
@@ -431,6 +432,8 @@ static std::string quartzCoreCallers();
 @property(nonatomic) std::string vertexName,fragmentName;   // sweet drawlog: what a draw's pipeline was (only filled when SWEET_DRAWLOG is set)
 @property(nonatomic) BOOL blend;
 @property(nonatomic) NSUInteger writeMask;
+@property(nonatomic) NSUInteger vstride;   // sweet cull: stride of vertex layout 1 (0: no vertex descriptor)
+@property(nonatomic) BOOL vpos0;           // sweet cull: vertex descriptor has a float4 attribute at offset 0 of buffer 1
 @end
 @implementation NBRenderPipeline
 - (void)dealloc {nmb_render_pipeline_release(_handle);}
@@ -671,13 +674,130 @@ struct DrawLog {
   }
  }
 };
+// sweet cull (SWEET_CULL=1): dead-draw culling. Off (one cached getenv) unless set. A render pass with one colour target and no depth/stencil defers
+// every encoder call; at endEncoding, draws before the last full-target opaque rectangle draw (whitelisted Core Animation pipelines) are skipped.
+static bool cullEnabled() {
+ static const bool on=[]{const char *p=getenv("SWEET_CULL");return p&&atoi(p)!=0;}();
+ return on;
+}
+static std::atomic<unsigned> gCullPasses,gCullDraws;
+struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
 @interface NBRenderEncoder : NBEncoder
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d;
 @end
 @implementation NBRenderEncoder {
  std::unique_ptr<DrawLog> _dl;   // sweet drawlog: null unless this pass is a big one and SWEET_DRAWLOG is set
+ // sweet cull
+ BOOL _defer,_noCull,_vpSet,_scSet;
+ unsigned long _tw,_th;
+ std::vector<CullEntry> _ops;
+ NBRenderPipeline *_pipe;
+ NBBuffer *_cvb;NSUInteger _cvbOff;
+ double _cvp[6];unsigned long _csc[4];
+ NSUInteger _cvis;
+}
+- (void)rec:(void (^)(void))b {CullEntry e;e.blk=[b copy];_ops.push_back(e);}
+- (void)recDraw:(void (^)(void))b covering:(bool)c {CullEntry e;e.blk=[b copy];e.draw=true;e.covering=c;_ops.push_back(e);}
+// sweet cull: is this draw an opaque, exactly-rectangular, full-target draw of a whitelisted pipeline?
+- (bool)coversPrim:(unsigned long)prim start:(NSUInteger)s count:(NSUInteger)n inst:(NSUInteger)inst indexed:(bool)indexed indexType:(MTLIndexType)ik
+         indexBuffer:(NBBuffer *)ib indexOffset:(NSUInteger)io baseVertex:(NSInteger)bv {
+ if(!_defer||_noCull||!_pipe||prim!=MTLPrimitiveTypeTriangle||inst!=1||n!=6||_cvis)return false;
+ NSString *l=_pipe.label;
+ if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
+ if(_pipe.blend||_pipe.writeMask!=MTLColorWriteMaskAll)return false;
+ if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th))return false;
+ if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th))return false;
+ if(!_cvb||_cvb.storageMode!=MTLStorageModeShared)return false;
+ const char *vc=(const char *)_cvb.contents;if(!vc)return false;
+ NSUInteger stride=48;   // assumed (drawlog); the vertex descriptor, when present, must agree on a float4 position at offset 0
+ if(_pipe.vstride){if(!_pipe.vpos0)return false;stride=_pipe.vstride;}
+ if(stride<16)return false;
+ long vid[6];
+ for(unsigned k=0;k<6;k++) {
+  if(!indexed)vid[k]=(long)(s+k);
+  else {
+   if(!ib||ib.storageMode!=MTLStorageModeShared||!ib.contents)return false;
+   const NSUInteger isz=ik==MTLIndexTypeUInt16?2:4;
+   if(io+(k+1)*isz>ib.length)return false;
+   uint32_t ix;const char *ip=(const char *)ib.contents+io+k*isz;
+   if(isz==2){uint16_t t;memcpy(&t,ip,2);ix=t;}else memcpy(&ix,ip,4);
+   vid[k]=(long)ix+(long)bv;
+  }
+ }
+ float p[6][2];
+ for(unsigned k=0;k<6;k++) {
+  if(vid[k]<0)return false;
+  const NSUInteger off=_cvbOff+(NSUInteger)vid[k]*stride;
+  if(off+16>_cvb.length)return false;
+  float v[4];memcpy(v,vc+off,16);
+  if(!std::isfinite(v[0])||!std::isfinite(v[1])||v[3]!=1.0f)return false;   // pixel space: w == 1
+  p[k][0]=v[0];p[k][1]=v[1];
+ }
+ float x0=p[0][0],x1=x0,y0=p[0][1],y1=y0;
+ for(unsigned k=1;k<6;k++){x0=std::min(x0,p[k][0]);x1=std::max(x1,p[k][0]);y0=std::min(y0,p[k][1]);y1=std::max(y1,p[k][1]);}
+ if(!(x0<x1&&y0<y1))return false;
+ unsigned id[6];
+ for(unsigned k=0;k<6;k++) {
+  if(!(p[k][0]==x0||p[k][0]==x1)||!(p[k][1]==y0||p[k][1]==y1))return false;
+  id[k]=(p[k][0]==x1?1u:0u)|(p[k][1]==y1?2u:0u);
+ }
+ // two triangles, each three distinct corners, sharing a diagonal: together exactly the rectangle
+ if(id[0]==id[1]||id[0]==id[2]||id[1]==id[2]||id[3]==id[4]||id[3]==id[5]||id[4]==id[5])return false;
+ unsigned ma=(1u<<id[0])|(1u<<id[1])|(1u<<id[2]),mb=(1u<<id[3])|(1u<<id[4])|(1u<<id[5]);
+ if((ma|mb)!=15||__builtin_popcount(ma&mb)!=2)return false;
+ unsigned sh=ma&mb,a=(unsigned)__builtin_ctz(sh),b=(unsigned)(31-__builtin_clz(sh));
+ if((a^b)!=3)return false;
+ return x0<=0&&y0<=0&&x1>=(float)_tw&&y1>=(float)_th;
+}
+- (void)cullReplay {
+ _defer=NO;
+ std::vector<CullEntry> ops;ops.swap(_ops);
+ long last=-1;
+ if(!_noCull)for(size_t i=0;i<ops.size();i++)if(ops[i].draw&&ops[i].covering)last=(long)i;
+ unsigned culled=0;
+ for(size_t i=0;i<ops.size();i++) {
+  if(ops[i].draw&&(long)i<last){culled++;continue;}
+  ops[i].blk();
+ }
+ gCullDraws+=culled;
+ const unsigned n=++gCullPasses;
+ if(n%300==0){char t[96];snprintf(t,sizeof t,"SWEET CULL: passes %u culled draws %u",n,gCullDraws.load());sm2_logs(t);}
+}
+- (void)buffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset index:(NSUInteger)index stage:(uint32_t)stage {
+ if(!_defer){[super buffer:buffer offset:offset index:index stage:stage];return;}
+ if(stage==1&&index==1){_cvb=[(id)buffer isKindOfClass:[NBBuffer class]]?(NBBuffer *)buffer:nil;_cvbOff=offset;}   // sweet cull
+ [self rec:^{[super buffer:buffer offset:offset index:index stage:stage];}];
+}
+- (void)offset:(NSUInteger)offset index:(NSUInteger)index stage:(uint32_t)stage {
+ if(!_defer){[super offset:offset index:index stage:stage];return;}
+ if(stage==1&&index==1)_cvbOff=offset;
+ [self rec:^{[super offset:offset index:index stage:stage];}];
+}
+- (void)texture:(id<MTLTexture>)texture index:(NSUInteger)index stage:(uint32_t)stage {
+ if(!_defer){[super texture:texture index:index stage:stage];return;}
+ [self rec:^{[super texture:texture index:index stage:stage];}];
+}
+- (void)sampler:(id<MTLSamplerState>)sampler index:(NSUInteger)index stage:(uint32_t)stage {
+ if(!_defer){[super sampler:sampler index:index stage:stage];return;}
+ [self rec:^{[super sampler:sampler index:index stage:stage];}];
+}
+- (void)bytes:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index stage:(uint32_t)stage {
+ if(!_defer){[super bytes:bytes length:length index:index stage:stage];return;}
+ if(stage==1&&index==1)_cvb=nil;
+ NSData *copy=[NSData dataWithBytes:bytes length:length];   // transient: setVertexBytes/setFragmentBytes contents
+ [self rec:^{[super bytes:copy.bytes length:length index:index stage:stage];}];
+}
+- (void)fence:(id<MTLFence>)fence stages:(uint64_t)stages update:(bool)update {
+ if(!_defer){[super fence:fence stages:stages update:update];return;}
+ _noCull=YES;   // sweet cull: fences order work against draws, keep the pass unchanged
+ [self rec:^{[super fence:fence stages:stages update:update];}];
 }
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d {
+ if(cullEnabled()) {   // sweet cull: defer only single-colour-target passes without depth/stencil or visibility results
+  id<MTLTexture> t0=d.colorAttachments[0].texture;bool single=t0!=nil;
+  for(unsigned i=1;i<8;i++)if(d.colorAttachments[i].texture)single=false;
+  if(single&&!d.depthAttachment.texture&&!d.stencilAttachment.texture&&!d.visibilityResultBuffer){_defer=YES;_tw=t0.width;_th=t0.height;}
+ }
  if(!drawLogPath() || gDrawLogBlocks>=20)return;
  id<MTLTexture> t=d.colorAttachments[0].texture;
  if(!t || t.width<1000 || t.height<2000)return;
@@ -686,6 +806,7 @@ struct DrawLog {
  _dl->depth=d.depthAttachment.texture||d.stencilAttachment.texture;
 }
 - (void)endEncoding {
+ if(_defer)[self cullReplay];   // sweet cull
  if(_dl){_dl->finish();_dl.reset();}
  [super endEncoding];
 }
@@ -693,6 +814,7 @@ struct DrawLog {
  if(![(id)state isKindOfClass:[NBRenderPipeline class]]){[self.commandBuffer refuse:@"foreign render pipeline"];return;}
  if(_dl){NBRenderPipeline *p=(NBRenderPipeline *)state;   // sweet drawlog
   _dl->pipeline=(p.label.length?p.label.UTF8String:"-");_dl->pipeline+=" v="+p.vertexName+" f="+p.fragmentName;_dl->blend=p.blend;_dl->mask=p.writeMask;}
+ if(_defer){NBRenderPipeline *pp=(NBRenderPipeline *)state;_pipe=pp;[self rec:^{[self check:nmb_render_set_pipeline(self.handle,[pp handle]) what:"setRenderPipelineState"];}];return;}   // sweet cull
  [self check:nmb_render_set_pipeline(self.handle,[(NBRenderPipeline *)state handle]) what:"setRenderPipelineState"];
 }
 - (void)dlVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o index:(NSUInteger)i {   // sweet drawlog
@@ -722,31 +844,42 @@ struct DrawLog {
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {if(_dl && i<16)_dl->fts[i].sampler=s!=nil;[self sampler:s index:i stage:2];}
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)state {
  if(state && ![(id)state isKindOfClass:[NBDepthStencil class]]){[self.commandBuffer refuse:@"foreign depth/stencil state"];return;}
+ if(_defer){[self rec:^{[self check:nmb_render_set_depth_stencil(self.handle,state?[(NBDepthStencil *)state handle]:nullptr) what:"setDepthStencilState"];}];return;}   // sweet cull
  [self check:nmb_render_set_depth_stencil(self.handle,state?[(NBDepthStencil *)state handle]:nullptr) what:"setDepthStencilState"];
 }
 - (void)setViewport:(MTLViewport)v {
  const double values[6]={v.originX,v.originY,v.width,v.height,v.znear,v.zfar};
  if(_dl){_dl->viewport=true;memcpy(_dl->vp,values,sizeof values);}   // sweet drawlog
+ if(_defer){_vpSet=YES;memcpy(_cvp,values,sizeof values);   // sweet cull
+  double vv[6];memcpy(vv,values,sizeof vv);[self rec:^{[self check:nmb_render_set_viewport(self.handle,vv) what:"setViewport"];}];return;}
  [self check:nmb_render_set_viewport(self.handle,values) what:"setViewport"];
 }
 - (void)setScissorRect:(MTLScissorRect)r {
  const uint64_t values[4]={r.x,r.y,r.width,r.height};
  if(_dl){_dl->scissor=true;for(int k=0;k<4;k++)_dl->sc[k]=values[k];}   // sweet drawlog
+ if(_defer){_scSet=YES;for(int k=0;k<4;k++)_csc[k]=values[k];   // sweet cull
+  uint64_t sv[4]={values[0],values[1],values[2],values[3]};[self rec:^{[self check:nmb_render_set_scissor(self.handle,sv) what:"setScissorRect"];}];return;}
  [self check:nmb_render_set_scissor(self.handle,values) what:"setScissorRect"];
 }
 // The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults until each is set.
 - (void)raster {
  NSNumber *cull=objc_getAssociatedObject(self,"cull"),*winding=objc_getAssociatedObject(self,"winding"),*fill=objc_getAssociatedObject(self,"fill");
- [self check:nmb_render_set_raster(self.handle,cull.unsignedLongLongValue,winding.unsignedLongLongValue,fill.unsignedLongLongValue) what:"raster state"];
+ const unsigned long long cv=cull.unsignedLongLongValue,wv=winding.unsignedLongLongValue,fv=fill.unsignedLongLongValue;
+ if(_defer){[self rec:^{[self check:nmb_render_set_raster(self.handle,cv,wv,fv) what:"raster state"];}];return;}   // sweet cull
+ [self check:nmb_render_set_raster(self.handle,cv,wv,fv) what:"raster state"];
 }
 - (void)setCullMode:(MTLCullMode)m {objc_setAssociatedObject(self,"cull",@(m),OBJC_ASSOCIATION_RETAIN);[self raster];}
 - (void)setFrontFacingWinding:(MTLWinding)w {objc_setAssociatedObject(self,"winding",@(w),OBJC_ASSOCIATION_RETAIN);[self raster];}
 - (void)setTriangleFillMode:(MTLTriangleFillMode)f {objc_setAssociatedObject(self,"fill",@(f),OBJC_ASSOCIATION_RETAIN);[self raster];}
 - (void)setDepthBias:(float)bias slopeScale:(float)slope clamp:(float)clamp {
+ if(_defer){[self rec:^{[self check:nmb_render_set_depth_bias(self.handle,bias,slope,clamp) what:"setDepthBias"];}];return;}   // sweet cull
  [self check:nmb_render_set_depth_bias(self.handle,bias,slope,clamp) what:"setDepthBias"];
 }
-- (void)setLineWidth:(float)width {[self check:nmb_render_set_line_width(self.handle,width) what:"setLineWidth"];}
+- (void)setLineWidth:(float)width {
+ if(_defer){[self rec:^{[self check:nmb_render_set_line_width(self.handle,width) what:"setLineWidth"];}];return;}   // sweet cull
+ [self check:nmb_render_set_line_width(self.handle,width) what:"setLineWidth"];}
 - (void)setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:(NSUInteger)offset {
+ if(_defer){_cvis=mode;[self rec:^{[self check:nmb_render_set_visibility_mode(self.handle,mode,offset) what:"setVisibilityResultMode"];}];return;}   // sweet cull
  [self check:nmb_render_set_visibility_mode(self.handle,mode,offset) what:"setVisibilityResultMode"];
 }
 - (void)setFragmentTexture:(id<MTLTexture>)t atTextureIndex:(NSUInteger)ti samplerState:(id<MTLSamplerState>)s atSamplerIndex:(NSUInteger)si {
@@ -760,16 +893,25 @@ struct DrawLog {
 - (void)setTileBytes:(const void *)p length:(NSUInteger)n atIndex:(NSUInteger)i {(void)p;(void)n;(void)i;[self.commandBuffer refuse:@"tile shaders are not supported"];}
 - (void)dispatchThreadsPerTile:(MTLSize)size {(void)size;[self.commandBuffer refuse:@"tile shaders are not supported"];}
 - (void)dispatchThreadsPerTile:(MTLSize)size inRegion:(MTLRegion)region {(void)size;(void)region;[self.commandBuffer refuse:@"tile shaders are not supported"];}
-- (void)setStencilReferenceValue:(uint32_t)v {[self check:nmb_render_set_stencil_reference(self.handle,v,v) what:"setStencilReferenceValue"];}
+- (void)setStencilReferenceValue:(uint32_t)v {
+ if(_defer){[self rec:^{[self check:nmb_render_set_stencil_reference(self.handle,v,v) what:"setStencilReferenceValue"];}];return;}   // sweet cull
+ [self check:nmb_render_set_stencil_reference(self.handle,v,v) what:"setStencilReferenceValue"];}
 - (void)setStencilFrontReferenceValue:(uint32_t)f backReferenceValue:(uint32_t)b {
+ if(_defer){[self rec:^{[self check:nmb_render_set_stencil_reference(self.handle,f,b) what:"setStencilReferenceValues"];}];return;}   // sweet cull
  [self check:nmb_render_set_stencil_reference(self.handle,f,b) what:"setStencilReferenceValues"];
 }
 - (void)setBlendColorRed:(float)r green:(float)g blue:(float)b alpha:(float)a {
- const float c[4]={r,g,b,a};[self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];
+ const float c[4]={r,g,b,a};
+ if(_defer){[self rec:^{[self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];}];return;}   // sweet cull
+ [self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i baseInstance:(NSUInteger)b {
  gDraws++;self.commandBuffer->encodedWork.draws++;
  if(_dl)_dl->draw(t,s,n,i,false);   // sweet drawlog
+ if(_defer){   // sweet cull
+  const bool cv=[self coversPrim:t start:s count:n inst:i indexed:false indexType:MTLIndexTypeUInt16 indexBuffer:nil indexOffset:0 baseVertex:0];
+  [self recDraw:^{[self check:nmb_render_draw(self.handle,t,(uint32_t)s,(uint32_t)n,(uint32_t)i,(uint32_t)b) what:"drawPrimitives"];} covering:cv];return;
+ }
  [self check:nmb_render_draw(self.handle,t,(uint32_t)s,(uint32_t)n,(uint32_t)i,(uint32_t)b) what:"drawPrimitives"];
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i {
@@ -784,6 +926,10 @@ struct DrawLog {
  [self.commandBuffer.resourceOwners addObject:b];
  gDraws++;self.commandBuffer->encodedWork.draws++;
  if(_dl)_dl->draw(t,o,n,i,true);   // sweet drawlog (idx=offset/count)
+ if(_defer){   // sweet cull
+  const bool cv=[self coversPrim:t start:0 count:n inst:i indexed:true indexType:k indexBuffer:(NBBuffer *)b indexOffset:o baseVertex:v];
+  [self recDraw:^{[self check:nmb_render_draw_indexed(self.handle,t,(uint32_t)n,k,[(NBBuffer *)b handle],o,(uint32_t)i,(int32_t)v,(uint32_t)bi) what:"drawIndexedPrimitives"];} covering:cv];return;
+ }
  [self check:nmb_render_draw_indexed(self.handle,t,(uint32_t)n,k,[(NBBuffer *)b handle],o,(uint32_t)i,(int32_t)v,(uint32_t)bi) what:"drawIndexedPrimitives"];
 }
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)t indexCount:(NSUInteger)n indexType:(MTLIndexType)k indexBuffer:(id<MTLBuffer>)b indexBufferOffset:(NSUInteger)o
@@ -1573,11 +1719,15 @@ static char sweetMemoryOwnerKey;
  journalRenderPipeline(d,pipelineBegan,handle?nullptr:nmb_last_error(),gJournalPath.empty()?std::string():NBCost::now().since(costBegan));
  if(!handle)return failWith<id<MTLRenderPipelineState>>(error,@"render pipeline",nil);
  NBRenderPipeline *state=[NBRenderPipeline new];state.handle=handle;gPipelines++;if(error)*error=nil;
- if(drawLogPath()) {   // sweet drawlog
+ if(drawLogPath()||cullEnabled()) {   // sweet drawlog / sweet cull
   state.label=d.label;
   if([(id)d.vertexFunction isKindOfClass:[NBFunction class]])state.vertexName=((NBFunction *)d.vertexFunction).name.UTF8String?:"";
   if([(id)d.fragmentFunction isKindOfClass:[NBFunction class]])state.fragmentName=((NBFunction *)d.fragmentFunction).name.UTF8String?:"";
   state.blend=d.colorAttachments[0].blendingEnabled;state.writeMask=d.colorAttachments[0].writeMask;
+  if(MTLVertexDescriptor *vd=d.vertexDescriptor) {   // sweet cull: the position layout of vertex buffer 1
+   state.vstride=vd.layouts[1].stride;
+   for(unsigned i=0;i<31;i++){MTLVertexAttributeDescriptor *a=vd.attributes[i];if(a.bufferIndex==1&&a.offset==0&&a.format==MTLVertexFormatFloat4)state.vpos0=YES;}
+  }
  }
  return (id<MTLRenderPipelineState>)state;
 }
