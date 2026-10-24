@@ -1,7 +1,7 @@
 # Sunfish display and GPU performance: findings and methods
 
 What is known about the frame path on the Pixel 4a (sunfish), how it was found, and what is left. The newest dated
-log is in `docs/workday.md`. The step-by-step next plan is in the session plan file.
+log is in `docs/workday.md`. The step-by-step next plan is in `docs/sunfish/plan.md`.
 
 ## Frame path
 1. **The app or SpringBoard draws its layers.** These are IOSurfaces from SweetSurface; Metal goes through the
@@ -68,6 +68,44 @@ log is in `docs/workday.md`. The step-by-step next plan is in the session plan f
   the charger.
 
 ## Methods and tools (reuse these)
+### Where the data comes from
+- **Live kernel log:**
+  - `tools/sunfish-livelog.sh ../logs/usb-live.log` runs on the PC in the background and appends every kernel log
+    line from the phone. It also brings up the USB network link (phone 192.168.7.2).
+  - If SSH says "No route to host", this listener is probably not running.
+  - Every boot or bench script writes a `=== NAME ...` marker line into it. Slice the log between markers with
+    `grep -n '=== NAME'`, or `sed -n '/=== bench X start/,/=== bench X end/p'`.
+- **Kernel stats lines, every 5 s:**
+  - `SWEET FB: 5s: N swaps (fps), M panel copies, avg copy U us`: what CA sent versus what reached the panel,
+    and the present's wall time.
+  - `SWEET GPU: 5s: N submits, GPU busy X ms (P%), longest, mean; <proc> n/ms ...`: GPU time per process.
+    For backboardd, ms divided by n is the GPU time per frame.
+  - `SWEET GPU: present: N frames, avg cache clean, GPU blit, put off` (every 300 frames).
+  - `SWEET GPU: pool: N MB in use` and the census lines track GPU memory.
+  - `SWEET BATTERY: mV mA ... shown N%` gives the battery level; negative mA means draining.
+- **Benchmark:** `tools/sunfish-fpsbench.sh TAG SECONDS` (BENCH_TIGHT=1)
+  - It swipes between home pages with `flame-cmd swipe`.
+  - It then averages the `SWEET FB: 5s` lines between its markers into "swaps/s, panel updates/s".
+  - `sunfish-cfgbench.sh` and `sunfish-m2env-bench.sh` both call it.
+- **Soak logger:** `tools/sunfish-soak.sh ../logs/soak.log` logs up / unreachable / REBOOTED, battery and new
+  crash lines every 60 s. Use it to catch reboots and hangs while away.
+- **Battery in fastboot:** `fastboot getvar battery-voltage`.
+- **Screen (webcam):**
+  - `ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 snap.jpg`. The Iriun device number can change; check with
+    `v4l2-ctl --list-devices`.
+  - Check every visual change on the webcam.
+- **GPU trace totals:**
+  - Copy the `MESA_GPU_TRACES` log to the PC, then run `tools/gputrace-sum.py` on it.
+  - It prints GPU time per operation, e.g. `copy_buffer_to_image` against `render_pass`.
+- **Bridge telemetry:**
+  - `/var/local/mtl2.log` `K` lines give per commit: `rp` passes, `dr` draws, `kpx` target size, and
+    `ctc` = commit-to-callback (about the GPU time).
+  - Commit timestamps show the frame pacing.
+- **CPU sampling:**
+  - On the phone: `pstack PID >> file` 80× every 0.25 s during a bench.
+  - On the PC: symbolize the addresses with `a2s`, then count leaf and inclusive frames.
+  - Threads with pc 0 or in libsystem_kernel are idle.
+
 ### Metal client experiments without a rebuild
 - **`tools/sunfish-m2env-bench.sh TAG KEY=VAL...`** writes `/var/local/mtl2-env`, restarts backboardd and benches.
   `TUDBG=opts` sets TU_DEBUG.
