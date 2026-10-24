@@ -1,0 +1,62 @@
+From 1e33e709586eccdb7cef227058573bd3091d39d2 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 24 Oct 2026 11:28:49 -0400
+Subject: [PATCH] 0164 sunfish: sweetpresentslots=N presents in flight (default
+ 2)
+
+---
+ bsd/dev/sweet_gpu.c | 24 ++++++++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index fef9cc0..4b9d459 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -663,8 +663,9 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+ 		}
+ 	}
+ 	lck_mtx_lock(&sweet_gpu_lock);
+-	(void)present_wait_locked(0, "surface remap");
+-	(void)present_wait_locked(1, "surface remap");
++	for (uint32_t k = 0; k < PRESENT_SLOTS_MAX; k++) {
++		(void)present_wait_locked(k, "surface remap");
++	}
+ 	int rc = a6_map_pages(&gpu, SLOT_IOVA(s), pages, npages, page_size);
+ 	a6_tlb_flush(&gpu);
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+@@ -684,7 +685,14 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+ #define IB_OFF          A6_OFF_FREE     /* the present IBs in the pool (two, PRESENT_IB) */
+ #define PRESENT_IB(k)   (IB_OFF + 0x4000ULL * (k))
+ 
+-static uint32_t present_fence[2];      /* of the present last queued from each IB slot */
++/*
++ * 0164: boot-arg sweetpresentslots=N (default 2, max 8) presents in flight. With two, a frame whose blit waits behind
++ * a long backboardd job leaves no free slot and the next tick is put off; the blit reads the surface when it runs,
++ * so extra queued blits show the newest frame and cost ~2.4 ms of GPU each.
++ */
++#define PRESENT_SLOTS_MAX 8
++static uint32_t present_slots = 2;
++static uint32_t present_fence[PRESENT_SLOTS_MAX];      /* of the present last queued from each IB slot */
+ static uint32_t present_next;
+ static uint32_t stat_busy;	/* 0158: presents put off a tick (slot still queued) */
+ 
+@@ -839,7 +847,15 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 	 * (a waited present took 15-30 ms with metal2vulkan's frames in the ring, and the vsync notifications
+ 	 * CA paces on came late). Two IB slots: only the one two presents back must have landed.
+ 	 */
+-	uint32_t k = present_next & 1;
++	static bool slots_read;
++	if (!slots_read) {
++		uint32_t v = 0;
++		if (PE_parse_boot_argn("sweetpresentslots", &v, sizeof(v)) && v >= 2 && v <= PRESENT_SLOTS_MAX) {
++			present_slots = v;
++		}
++		slots_read = true;
++	}
++	uint32_t k = present_next % present_slots;
+ 	/*
+ 	 * 0158: never block the vsync tick behind client render jobs. The present of this IB slot (two frames
+ 	 * back) still queued: 1, "busy" — the framebuffer keeps the frame and tries again on the next tick
+-- 
+2.56.0
+
