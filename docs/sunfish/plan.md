@@ -49,10 +49,11 @@
   - The present blit runs inline on the vsync tick and takes 10–17 ms of wall time, but only ~2.4 ms of GPU work.
   - It waits behind backboardd's next GPU job on the single ring, so each vsync notification goes out late.
   - A present thread and present-on-swap (0161) were both worse (~14/s); don't retry them.
-- **Option A (try first):** skip the present when the previous one is still in flight, but send the vsync notification *before* presenting.
+- **Option A: NOT APPLICABLE (checked 2026-10-24).** `vsyncFired` already notifies clients before it presents (`SweetFramebuffer.cpp`, client->notify loop precedes `present(rec)`), and re-arms the timer first. The next tick still slips because the present blocks the same timer thread, which a present thread (worse, ~14.7/s) already tested. No patch 0162.
+- ~~Option A (original text):~~ skip the present when the previous one is still in flight, but send the vsync notification *before* presenting.
   - In `SweetFramebuffer.cpp` `vsyncFired`, move the client notify loop above the present.
   - Patch 0162 with a boot-arg to turn it off.
-- **Option B:** a second ringbuffer at higher priority for the present.
+- **Option B (next for step 1, risky GPU bring-up; ring code is `a6_ring`/CP_RB_CNTL in `bsd/dev/sweet_a6xx.c`, only RB0 is set up today):** a second ringbuffer at higher priority for the present.
   - Turnip/msm use RB0..3 with preemption on a6xx.
   - Look at `bsd/dev/sweet_a6xx.c` ring setup and `sweet_gpu.c` `sweet_gpu_present`.
   - Bigger job; do it only if A gives less than +5 updates/s.
