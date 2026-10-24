@@ -851,14 +851,14 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  const double values[6]={v.originX,v.originY,v.width,v.height,v.znear,v.zfar};
  if(_dl){_dl->viewport=true;memcpy(_dl->vp,values,sizeof values);}   // sweet drawlog
  if(_defer){_vpSet=YES;memcpy(_cvp,values,sizeof values);   // sweet cull
-  double vv[6];memcpy(vv,values,sizeof vv);[self rec:^{[self check:nmb_render_set_viewport(self.handle,vv) what:"setViewport"];}];return;}
+  [self rec:^{const double vv[6]={v.originX,v.originY,v.width,v.height,v.znear,v.zfar};[self check:nmb_render_set_viewport(self.handle,vv) what:"setViewport"];}];return;}
  [self check:nmb_render_set_viewport(self.handle,values) what:"setViewport"];
 }
 - (void)setScissorRect:(MTLScissorRect)r {
  const uint64_t values[4]={r.x,r.y,r.width,r.height};
  if(_dl){_dl->scissor=true;for(int k=0;k<4;k++)_dl->sc[k]=values[k];}   // sweet drawlog
  if(_defer){_scSet=YES;for(int k=0;k<4;k++)_csc[k]=values[k];   // sweet cull
-  uint64_t sv[4]={values[0],values[1],values[2],values[3]};[self rec:^{[self check:nmb_render_set_scissor(self.handle,sv) what:"setScissorRect"];}];return;}
+  [self rec:^{const uint64_t sv[4]={r.x,r.y,r.width,r.height};[self check:nmb_render_set_scissor(self.handle,sv) what:"setScissorRect"];}];return;}
  [self check:nmb_render_set_scissor(self.handle,values) what:"setScissorRect"];
 }
 // The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults until each is set.
@@ -902,7 +902,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
 }
 - (void)setBlendColorRed:(float)r green:(float)g blue:(float)b alpha:(float)a {
  const float c[4]={r,g,b,a};
- if(_defer){[self rec:^{[self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];}];return;}   // sweet cull
+ if(_defer){[self rec:^{const float c2[4]={r,g,b,a};[self check:nmb_render_set_blend_color(self.handle,c2) what:"setBlendColor"];}];return;}   // sweet cull
  [self check:nmb_render_set_blend_color(self.handle,c) what:"setBlendColor"];
 }
 - (void)drawPrimitives:(MTLPrimitiveType)t vertexStart:(NSUInteger)s vertexCount:(NSUInteger)n instanceCount:(NSUInteger)i baseInstance:(NSUInteger)b {
