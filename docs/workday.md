@@ -142,3 +142,15 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Bench (kernel36, thread off): 21.6 swaps/s = 20.8 panel updates/s (no dropped swaps; was 17-19 panel, 19-27 swaps).
   With sweetfb_thread=1: 14.7 panel/s. xnu 0161 present-on-swap (kernel37, sweetfb_onswap=1): 14.1 panel/s. Both off.
 - Present inline on the vsync tick still takes 10-17 ms wall (blit waits behind backboardd's next job): next lever.
+
+## [09:50] Step 1A moot, step 2 (turnip 0105) failed
+- Plan step 1 option A: `vsyncFired` already sends the client notifications before `present()` and re-arms the timer first, so no 0162. The tick still slips because present blocks the timer thread (present thread tested worse earlier).
+- Step 2, turnip 0105 (16-byte pitch for sampled-only explicit-layout images), kernel37 + `sweetpresentwait=1`, BENCH_TIGHT 30 s:
+| config | swaps/s | panel updates/s |
+|---|---|---|
+| baseline (0104 bundle) | 24.7 / 24.5 | 23.6 / 23.1 |
+| 0105, TRANSFER_DST excluded (no effect, still refused 34x) | 24.4 / 24.4 | 23.1 / 23.1 |
+| 0105, TRANSFER_DST allowed | 25.0 / 25.9 | 23.9 / 24.8 (INVALID: device lost) |
+| bundle rebuilt without 0105 | 21.8 / 22.5 | 21.1 / 21.2 |
+- With 0105 allowed: refusals dropped to 0, then within ~2 s of the backboardd restart the GPU hit an SMMU translation fault (fsr 2, far 0x100e634240, fence 19680 vs 19673), reset, and every Metal call returned DeviceLost; screen black. Reinstalling the bundle without 0105 recovered without a reboot.
+- Patch parked in `phone/turnip/failed/`. Baseline drifts ~2/s between sessions (bench noise ±3).
