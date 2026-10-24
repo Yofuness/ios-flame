@@ -761,6 +761,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  }
  gCullDraws+=culled;
  const unsigned n=++gCullPasses;
+ if(n==1||(culled&&gCullDraws.load()==culled)){char t[96];snprintf(t,sizeof t,"SWEET CULL: replay ops %zu last %ld culled %u",ops.size(),last,culled);sm2_logs(t);}   // sweet cull: first replay, first cull
  if(n%300==0){char t[96];snprintf(t,sizeof t,"SWEET CULL: passes %u culled draws %u",n,gCullDraws.load());sm2_logs(t);}
 }
 - (void)buffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset index:(NSUInteger)index stage:(uint32_t)stage {
@@ -797,6 +798,7 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
   id<MTLTexture> t0=d.colorAttachments[0].texture;bool single=t0!=nil;
   for(unsigned i=1;i<8;i++)if(d.colorAttachments[i].texture)single=false;
   if(single&&!d.depthAttachment.texture&&!d.stencilAttachment.texture&&!d.visibilityResultBuffer){_defer=YES;_tw=t0.width;_th=t0.height;}
+  static std::atomic<bool> said{false};if(!said.exchange(true)){char t[160];snprintf(t,sizeof t,"SWEET CULL: first pass %lux%lu single=%d defer=%d",(unsigned long)(t0?t0.width:0),(unsigned long)(t0?t0.height:0),(int)single,(int)_defer);sm2_logs(t);}   // sweet cull: one-time check
  }
  if(!drawLogPath() || gDrawLogBlocks>=20)return;
  id<MTLTexture> t=d.colorAttachments[0].texture;
