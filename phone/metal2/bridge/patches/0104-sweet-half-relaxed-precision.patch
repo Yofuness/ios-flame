@@ -15,7 +15,7 @@ index 513fe37f..49f39e38 100644
  }
  
 diff --git a/crates/metal2vulkan/src/env_vars.rs b/crates/metal2vulkan/src/env_vars.rs
-index ebb04f4f..6f445b4d 100644
+index ebb04f4f..07c97494 100644
 --- a/crates/metal2vulkan/src/env_vars.rs
 +++ b/crates/metal2vulkan/src/env_vars.rs
 @@ -34,6 +34,14 @@ pub const REGISTRY: &[EnvVar] = &[
@@ -33,7 +33,7 @@ index ebb04f4f..6f445b4d 100644
      EnvVar {
          name: "METAL2VULKAN_LOG_PIPELINES",
          default: "unset (off)",
-@@ -76,6 +84,15 @@ pub fn log_pipelines() -> bool {
+@@ -76,6 +84,72 @@ pub fn log_pipelines() -> bool {
          .is_some_and(|value| !value.is_empty() && value != "0")
  }
  
@@ -46,11 +46,68 @@ index ebb04f4f..6f445b4d 100644
 +    *ON.get_or_init(|| std::env::var_os("METAL2VULKAN_HALF_RELAXED").is_some_and(|v| v == "1"))
 +}
 +
++/// sweet half-relaxed diagnostics: per-process counters, reported by [`half_relaxed_count`].
++pub static HR_TRANSLATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static HR_SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static HR_MARKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static HR_DECORATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++/// sweet half-relaxed: one line straight into `/dev/console` and `/var/local/mtl2.log` (as the
++/// frontend's `sm2_logs` does), when `METAL2VULKAN_HALF_RELAXED` or `SWEET_PIPESTATS` is set.
++pub fn half_relaxed_note(text: &str) {
++    use std::io::Write;
++    use std::sync::{Mutex, OnceLock};
++    let set = |n: &str| std::env::var_os(n).is_some_and(|v| !v.is_empty() && v != "0");
++    if !(half_relaxed() || set("SWEET_PIPESTATS")) {
++        return;
++    }
++    static FILES: OnceLock<Vec<Mutex<std::fs::File>>> = OnceLock::new();
++    let files = FILES.get_or_init(|| {
++        ["/dev/console", "/var/local/mtl2.log"]
++            .iter()
++            .filter_map(|p| std::fs::OpenOptions::new().append(true).open(p).ok())
++            .map(Mutex::new)
++            .collect()
++    });
++    let line = format!(
++        "MTL2[{} {}]: {text}\n",
++        std::process::id(),
++        std::env::args().next().unwrap_or_default()
++    );
++    for f in files {
++        if let Ok(mut f) = f.lock() {
++            let _ = f.write_all(line.as_bytes());
++        }
++    }
++}
++
++/// sweet half-relaxed: called once per translated function (`lower::emit::emit_module`): the flag
++/// on the first call, and the process totals every 100 functions.
++pub fn half_relaxed_count() {
++    use std::sync::atomic::Ordering::Relaxed;
++    let n = HR_TRANSLATED.fetch_add(1, Relaxed) + 1;
++    let raw = std::env::var("METAL2VULKAN_HALF_RELAXED").ok();
++    if n == 1 {
++        half_relaxed_note(&format!(
++            "half-relaxed: first translation, half_relaxed()={} env={raw:?}",
++            half_relaxed()
++        ));
++    }
++    if n % 100 == 0 {
++        half_relaxed_note(&format!(
++            "half-relaxed: translated={n} round_skipped={} marked={} decorated={}",
++            HR_SKIPPED.load(Relaxed),
++            HR_MARKED.load(Relaxed),
++            HR_DECORATED.load(Relaxed)
++        ));
++    }
++}
++
  /// Optional path override for an external tool `cmd` (`llvm-as`, `spirv-val`, …), read from
  /// `METAL2VULKAN_<CMD>` (uppercased, `-`→`_`). A dynamic family — one var per tool the binary or
  /// the crate's test support runs — documented in `REGISTRY` as a single `METAL2VULKAN_<TOOL>`
 diff --git a/crates/metal2vulkan/src/lower/arith/narrow.rs b/crates/metal2vulkan/src/lower/arith/narrow.rs
-index d42bc072..35c21e1e 100644
+index d42bc072..90755cb4 100644
 --- a/crates/metal2vulkan/src/lower/arith/narrow.rs
 +++ b/crates/metal2vulkan/src/lower/arith/narrow.rs
 @@ -80,6 +80,10 @@ pub fn round_words(f: Form) -> u32 {
@@ -64,20 +121,21 @@ index d42bc072..35c21e1e 100644
      match (f.float_fmt(), q) {
          (Some(FloatFmt::Half), QuantizeForm::Integer) => 200 + 12 * lanes,
          (Some(FloatFmt::Half), QuantizeForm::Device | QuantizeForm::Converted) => 64 + 4 * lanes,
-@@ -99,6 +103,11 @@ pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
+@@ -99,6 +103,12 @@ pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
  /// [`scaled`]'s. A NaN compares unequal to zero and keeps `q`. [`QuantizeForm:: Converted`]:
  /// [`converted`]'s alone, which is the same value where the device's conversion is Metal's.
  pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
 +    // sweet half-relaxed: the value stays unrounded; its result is decorated `RelaxedPrecision`
 +    // instead (`FunctionBuilder::mark_relaxed`) and the device rounds as it computes.
 +    if f.held == Held::Float(FloatFmt::Half) && crate::env_vars::half_relaxed() {
++        crate::env_vars::HR_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 +        return Ok(x);
 +    }
      match f.held {
          Held::Float(FloatFmt::Half) => {
              let wide = f.with(Held::Float(FloatFmt::F32));
 diff --git a/crates/metal2vulkan/src/lower/emit.rs b/crates/metal2vulkan/src/lower/emit.rs
-index 8c650b6a..7743762c 100644
+index 8c650b6a..f424e273 100644
 --- a/crates/metal2vulkan/src/lower/emit.rs
 +++ b/crates/metal2vulkan/src/lower/emit.rs
 @@ -678,6 +678,19 @@ impl<'a> Emitter<'a> {
@@ -100,6 +158,14 @@ index 8c650b6a..7743762c 100644
          self.cx.on_spine(fb);
          if let Some(var) = vars.demoted_var(v) {
              let x = self.cx.operand(fb, v)?;
+@@ -1241,6 +1254,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
+         .func(e.func)
+         .and_then(|f| f.body.as_ref())
+         .ok_or_else(|| invariant("the entry function has no body"))?;
++    crate::env_vars::half_relaxed_count();
+     let view = EntryView::new(e, body, plan);
+     let structured = crate::structurize::structurize(&view, m)?;
+     let mut mb = ModuleBuilder::new();
 diff --git a/crates/metal2vulkan/src/pipeline/compile/key.rs b/crates/metal2vulkan/src/pipeline/compile/key.rs
 index 835f77e1..3e99ecf3 100644
 --- a/crates/metal2vulkan/src/pipeline/compile/key.rs
@@ -116,10 +182,10 @@ index 835f77e1..3e99ecf3 100644
      }
  
 diff --git a/crates/metal2vulkan/src/spirv/builder/function.rs b/crates/metal2vulkan/src/spirv/builder/function.rs
-index d1d0fd64..b02a3130 100644
+index d1d0fd64..14fdc7f9 100644
 --- a/crates/metal2vulkan/src/spirv/builder/function.rs
 +++ b/crates/metal2vulkan/src/spirv/builder/function.rs
-@@ -61,6 +61,27 @@ impl<'m> FunctionBuilder<'m> {
+@@ -61,6 +61,28 @@ impl<'m> FunctionBuilder<'m> {
              .and_then(|f| f.blocks.first().copied())
      }
  
@@ -140,6 +206,7 @@ index d1d0fd64..b02a3130 100644
 +            .is_some_and(|d| matches!(d.origin, ValueOrigin::Inst(_)));
 +        if wide && inst {
 +            self.m.relaxed.insert(x);
++            crate::env_vars::HR_MARKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 +        }
 +        Ok(())
 +    }
@@ -194,16 +261,26 @@ index d5b050ec..f24899c3 100644
      /// flag of a predicated loop that iterates together, which the lowering's uniformity analysis
      /// proved. An in-memory record for checks (`spirv::testing::barriers`), kept only where they
 diff --git a/crates/metal2vulkan/src/spirv/serialize/mod.rs b/crates/metal2vulkan/src/spirv/serialize/mod.rs
-index d65b76f5..c7580a30 100644
+index d65b76f5..c1774546 100644
 --- a/crates/metal2vulkan/src/spirv/serialize/mod.rs
 +++ b/crates/metal2vulkan/src/spirv/serialize/mod.rs
-@@ -1644,6 +1644,10 @@ impl Ser<'_> {
+@@ -1611,6 +1611,7 @@ impl Ser<'_> {
+         // A copy shares its operand's id, so one id may carry several values: each decoration is
+         // written once per id.
+         let mut non_uniform = std::collections::BTreeSet::new();
++        let mut relaxed_done = std::collections::BTreeSet::new();
+         for f in &m.functions {
+             for p in &f.params {
+                 if self.is_psb_pointer(self.value_ty(*p)?)? {
+@@ -1644,6 +1645,12 @@ impl Ser<'_> {
                      {
                          self.decorate(w, self.val(r)?, Decoration::NoContraction, &[])?;
                      }
 +                    // sweet half-relaxed: a result held as `half` (`Emitter::inst`).
-+                    if m.relaxed.contains(&r) {
++                    if m.relaxed.contains(&r) && relaxed_done.insert(self.val(r)?) {
 +                        self.decorate(w, self.val(r)?, Decoration::RelaxedPrecision, &[])?;
++                        crate::env_vars::HR_DECORATED
++                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 +                    }
                      // A value carrying a non-uniform descriptor element to its consumer
                      // (VUID-RuntimeSpirv-NonUniform-06274).
