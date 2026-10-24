@@ -183,16 +183,16 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 
 ## [11:30] Step 1 done: per-frame timeline (xnu 0163 on kernel39, boot args sweetpresentwait=1 sweettrace=1)
 - Wi-Fi install tool was run by the user (credentials stay out of git). Charger on the TB4 port, 4125 mV at boot.
-- Bench tl1/tl2 (Settings swipes, 30 s): 23.4 / 22.5 swaps/s, 22.3 / 21.7 panel updates/s with tracing on. Timeline (both runs agree):
+- Bench tl1/tl2 (Settings swipes, 30 s): 23.4 / 22.5 swaps/s, 22.3 / 21.7 panel updates/s (bench script) with tracing on. Timeline (both runs agree; first version of the tool used 24 MHz and printed times 20% too short, fixed: mach time and CP counter are 19.2 MHz, 718M ticks in a 37 s bench):
 | metric | p50 | p95 | max |
 |---|---|---|---|
-| swap-to-swap | 26.5 ms | 80 ms | 968-1100 ms |
-| backboardd GPU per submit | 4.6-4.7 ms | 32 ms | 33-35 ms |
-| present blit GPU | 1.9 ms | 2.05 ms | 2.4 ms |
-| backboardd GPU end -> swap | 23 ms | 76 ms | 85-97 ms |
-| swap -> present call (tick wait) | 8.5 ms | 23-28 ms | 63-85 ms |
-| present call duration | 0.55 ms | 34 ms | 67 ms |
-| present submit -> blit GPU start | 0 | 91 ms | 130 ms |
-- Frame intervals: 30-32% <= 17 ms, 74-76% <= 34 ms, 18-19% > 50 ms.
-- Reading: the GPU is not the main gap. 23 ms from backboardd's last GPU end to the swap (CA/CPU side) and the bimodal 32 ms GPU frames dominate; the present wait (p95 34 ms) hits ~5% of ticks.
-- Fix made in the tool: the CP counter and mach time both run at 24 MHz here (ratio 1.0000), not 19.2.
+| swap-to-swap | 33.2 ms | 100 ms | 1210-1376 ms |
+| backboardd GPU per submit | 5.7-5.9 ms | 40 ms | 41-44 ms |
+| present blit GPU | 2.4 ms | 2.6 ms | 2.9 ms |
+| backboardd GPU end -> swap | 29 ms | 95 ms | 96-100 ms |
+| swap -> present call (tick wait) | 10.7 ms | 29-35 ms | 79-106 ms |
+| present call duration | 0.65-0.68 ms | 43 ms | 83-122 ms |
+| present submit -> blit GPU start | 0 | 114 ms | 162 ms |
+- Rates over the swap span: 20.2-20.3 swaps/s, 19.4-19.5 presents/s, vsync ticks 51.6-52.0/s (nominal 60: after a blocked tick the timer fires late and in bursts).
+- Frame intervals: 21-22% <= 17 ms, 64-65% <= 34 ms, ~21% > 50 ms.
+- Reading: the GPU is not the main gap. 29 ms from backboardd's last GPU end to the swap (CA/CPU side), the bimodal 40 ms GPU frames, and a vsync tick that only delivers ~52/s dominate; the present wait (p95 43 ms) hits ~5% of ticks.

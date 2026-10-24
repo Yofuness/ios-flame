@@ -11,12 +11,12 @@ Reads the live log (default ../logs/usb-live.log); with markers, only the lines 
   - gaps along the chain, per swap: last backboardd GPU end -> swap, swap -> present begin,
     present begin -> present end (tick thread blocked), present submit -> GPU start/end
 Records are ev,t,a,b,c in hex: 1 swap 2 tick 3 notified 4 present begin 5 present end 6 submit 7 gpu span 8 clock.
-Mach ticks and the CP_ALWAYS_ON counter both run at 24 MHz here (ratio measured 1.0000); the clock pairs give the offset.
+Mach ticks and the CP_ALWAYS_ON counter both run at 19.2 MHz here (ratio measured 1.0000; 718M ticks in a 37 s bench); the clock pairs give the offset.
 """
 import re, sys, bisect
 
-MACH_HZ = 24_000_000.0
-CP_HZ = 24_000_000.0   # measured: mach and the CP always-on counter tick 1:1 on this kernel
+MACH_HZ = 19_200_000.0   # mach_absolute_time on this kernel (CP always-on counter: same rate, ratio measured 1.0000)
+CP_HZ = 19_200_000.0
 
 def load(path, start, end):
     on = start is None
