@@ -223,3 +223,4 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Over all passes >20 ms: fs f8357eea 94.9 ms (1305 records), 780adfdf 58.2 ms (0.144 ms per bin-draw, 2x the rest), 93ffe710 26.4, 666966cb 17.1.
   - ~14 ms per slow pass is outside the draws (per-bin overhead/timestamp waits).
 - Reading: overdraw of stacked opaque full-screen layers plus one heavier shader (780adfdf, blur candidate). Next: disassemble those fragment shaders to see what they sample, and check why CA stacks three opaque full-screen quads.
+- [12:45] Stopped for the day (user unplugging). State: phone booted as pd1b (kernel40, sweetpresentwait=1 flamereboot=0, so no auto-reboot), mtl2-env empty (tracing off), turnip 0105 bundle installed (inert without TU_SWEET_DRAW_TRACE). Traces in ../logs/pd2-trace.log, gt1-trace.log; parsers in the session scratchpad (lost on reboot of the PC). Next: shader disassembly of fs f8357eea / 780adfdf.
