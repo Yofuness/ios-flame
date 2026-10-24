@@ -213,3 +213,13 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - 5 longest passes: 33-36 ms with only 21-92 draws; draw_ib_gmem is >95% of it, gmem load/store ~1 ms each, binning 0.1-0.3 ms. So a few expensive draws (fill/shader: likely blur or backdrop), not draw count or size.
 - copy_buffer_to_image: 10018 copies, 3.5 s total (0.35 ms each); 44-50 copies (~10 ms) ride in the same submits as long passes.
 - Follow-up (PC only): the trace has one draw_ib_gmem span per bin, no per-draw data. Slow passes are uniformly slow: nearly every one of the 44 bins costs ~0.7-1.3 ms (fast passes ~0.08 ms per bin), even with only 21 draws. So the cost is one or more full-screen expensive draws (blur/backdrop or large texture sampling), spread over the whole screen. Per-draw attribution needs per-draw timestamps in Turnip's trace.
+
+## [12:10] turnip 0105 per-draw trace (metal2 run 40109072496, commit f09fdb5)
+- pd1 bench (TU_SWEET_DRAW_TRACE=1 + MESA_GPU_TRACES=print): 17.6 swaps/s, 16.4 panel updates/s (tracing overhead). 4300 mV.
+- Phone dropped to fastboot right after the bench, at kernel uptime ~1890 s: matches the 1800 s auto-reboot cycle, not a hang (fastboot answered, 4384 mV). Trace was not yet copied; rebooting with flamereboot=0 to fetch it.
+- pd2 (per-draw trace, phone rebooted with flamereboot=0; bench 3.8 swaps/s with this tracing, so absolute times are inflated, shares are what count). 154 passes, 17,786 draw records.
+- Slowest passes (~40 ms wall, ~26.5 ms of draw time, 45 bins): every expensive draw is a 6-vertex quad (full-screen layer), instances=1, blend0=0 (opaque).
+  - Pass 126 top draws: idx16 fs 780adfdf 6.45 ms (16%); idx3 fs 666966cb 4.3 ms; idx0/1/2 all fs f8357eea, 3.2-3.7 ms each: the same opaque full-screen shader three times in a row, each later one covering the earlier.
+  - Over all passes >20 ms: fs f8357eea 94.9 ms (1305 records), 780adfdf 58.2 ms (0.144 ms per bin-draw, 2x the rest), 93ffe710 26.4, 666966cb 17.1.
+  - ~14 ms per slow pass is outside the draws (per-bin overhead/timestamp waits).
+- Reading: overdraw of stacked opaque full-screen layers plus one heavier shader (780adfdf, blur candidate). Next: disassemble those fragment shaders to see what they sample, and check why CA stacks three opaque full-screen quads.
