@@ -53,7 +53,12 @@
 - ~~Option A (original text):~~ skip the present when the previous one is still in flight, but send the vsync notification *before* presenting.
   - In `SweetFramebuffer.cpp` `vsyncFired`, move the client notify loop above the present.
   - Patch 0162 with a boot-arg to turn it off.
-- **Option B (next for step 1, risky GPU bring-up; ring code is `a6_ring`/CP_RB_CNTL in `bsd/dev/sweet_a6xx.c`, only RB0 is set up today):** a second ringbuffer at higher priority for the present.
+- **Option B: NOT FEASIBLE as scoped (checked 2026-10-24, 20 min, no code written).** `bsd/dev/sweet_a6xx.c` programs only RB0 (`CP_RB_BASE/CNTL`, one wptr in `struct a6_gpu`) and has no preemption support at all: no preempt records, no `CP_CONTEXT_SWITCH_*` setup, no `CP_SET_PSEUDO_REG`/preempt-trigger packets, no save areas. On a6xx the SQE only fetches another ring when software triggers a context switch, so a second ring alone would never run, and a present on RB1 would not overtake backboardd's job on RB0. Real preemption (as in Linux `a6xx_preempt.c`) is a multi-day GPU bring-up with hang risk, so it is parked.
+- **Remaining ideas for the present (none tried):**
+  1. **Present at panel size:** make backboardd's surface 1080x2340 (needs a new logical size / device profile), so the present is a CPU memcpy (~1 ms for ~10 MB plus cache clean) and never touches the GPU ring. Biggest UI change.
+  2. **CPU scaler:** scale 1125x2436 -> 1080x2340 on the CPU across several cores. Competes with backboardd for CPU.
+  3. **Time the blit:** submit it right after backboardd's fence lands (idle ring) instead of on the 60 Hz tick; 0161 (present on swap) was worse, so only try with the tick moved, not removed.
+- Original option B text: a second ringbuffer at higher priority for the present.
   - Turnip/msm use RB0..3 with preemption on a6xx.
   - Look at `bsd/dev/sweet_a6xx.c` ring setup and `sweet_gpu.c` `sweet_gpu_present`.
   - Bigger job; do it only if A gives less than +5 updates/s.

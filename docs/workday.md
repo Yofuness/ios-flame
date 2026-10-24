@@ -159,3 +159,6 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Census with TU_DEBUG=bos on backboardd: idle 630 BOs/157 MB; after 6 app switches 1380/248 MB peak, settled 1318/204 MB; after 12 more switches 1335 then 1353 BOs (207, 208 MB). Drift ~1.5 BOs and ~0.2 MB per switch; GPU pool ~250 MB (peak 317).
 - The earlier "340 BOs per switch" was cache warm-up (command-stream BOs), not a steady leak. Step 3 downgraded in plan.md.
 - The phone auto-rebooted to fastboot once at the 1800 s flamereboot timer (expected, not a hang); rebooted as k3 at 3814 mV.
+
+## [10:30] Step 1B (second ringbuffer): not feasible, no code
+- sweet_a6xx.c sets up RB0 only and has no preemption support (no preempt records, CP_CONTEXT_SWITCH_*, pseudo-regs). A second ring would never be fetched without a software context switch; real preemption is a multi-day bring-up. Parked; alternative ideas (panel-size surface, CPU scaler, blit timing) are in plan.md step 1.
