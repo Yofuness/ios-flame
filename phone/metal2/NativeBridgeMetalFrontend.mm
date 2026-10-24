@@ -682,6 +682,11 @@ static bool cullEnabled() {
  return on;
 }
 static std::atomic<unsigned> gCullPasses,gCullDraws;
+// sweet cull: why a whitelisted draw was not covering (first 12 times per process)
+static void cullWhy(int why,NSString *l,const char *extra="") {
+ static std::atomic<int> said{0};if(said++>=12)return;
+ char t[300];snprintf(t,sizeof t,"SWEET CULL: not covering #%d %s %s",why,l.UTF8String,extra);sm2_logs(t);
+}
 struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
 @interface NBRenderEncoder : NBEncoder
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d;
@@ -705,21 +710,21 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  if(!_defer||_noCull||!_pipe||prim!=MTLPrimitiveTypeTriangle||inst!=1||n!=6||_cvis)return false;
  NSString *l=_pipe.label;
  if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
- if((_pipe.opaqueMask&_attMask)!=_attMask)return false;   // every bound colour target is overwritten
- if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th))return false;
- if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th))return false;
- if(!_cvb||_cvb.storageMode!=MTLStorageModeShared)return false;
- const char *vc=(const char *)_cvb.contents;if(!vc)return false;
+ if((_pipe.opaqueMask&_attMask)!=_attMask){char t[64];snprintf(t,sizeof t,"opaque %x att %x",_pipe.opaqueMask,_attMask);cullWhy(1,l,t);return false;}   // every bound colour target is overwritten
+ if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th)){cullWhy(2,l);return false;}
+ if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]==_tw&&_csc[3]==_th)){cullWhy(3,l);return false;}
+ if(!_cvb||_cvb.storageMode!=MTLStorageModeShared){cullWhy(4,l);return false;}
+ const char *vc=(const char *)_cvb.contents;if(!vc){cullWhy(5,l);return false;}
  NSUInteger stride=48;   // assumed (drawlog); the vertex descriptor, when present, must agree on a float4 position at offset 0
- if(_pipe.vstride){if(!_pipe.vpos0)return false;stride=_pipe.vstride;}
- if(stride<16)return false;
+ if(_pipe.vstride){if(!_pipe.vpos0){char t[64];snprintf(t,sizeof t,"vstride %lu",(unsigned long)_pipe.vstride);cullWhy(6,l,t);return false;}stride=_pipe.vstride;}
+ if(stride<16){cullWhy(7,l);return false;}
  long vid[6];
  for(unsigned k=0;k<6;k++) {
   if(!indexed)vid[k]=(long)(s+k);
   else {
-   if(!ib||ib.storageMode!=MTLStorageModeShared||!ib.contents)return false;
+   if(!ib||ib.storageMode!=MTLStorageModeShared||!ib.contents){cullWhy(8,l);return false;}
    const NSUInteger isz=ik==MTLIndexTypeUInt16?2:4;
-   if(io+(k+1)*isz>ib.length)return false;
+   if(io+(k+1)*isz>ib.length){cullWhy(9,l);return false;}
    uint32_t ix;const char *ip=(const char *)ib.contents+io+k*isz;
    if(isz==2){uint16_t t;memcpy(&t,ip,2);ix=t;}else memcpy(&ix,ip,4);
    vid[k]=(long)ix+(long)bv;
@@ -727,28 +732,29 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;};
  }
  float p[6][2];
  for(unsigned k=0;k<6;k++) {
-  if(vid[k]<0)return false;
+  if(vid[k]<0){cullWhy(10,l);return false;}
   const NSUInteger off=_cvbOff+(NSUInteger)vid[k]*stride;
-  if(off+16>_cvb.length)return false;
+  if(off+16>_cvb.length){cullWhy(11,l);return false;}
   float v[4];memcpy(v,vc+off,16);
-  if(!std::isfinite(v[0])||!std::isfinite(v[1])||v[3]!=1.0f)return false;   // pixel space: w == 1
+  if(!std::isfinite(v[0])||!std::isfinite(v[1])||v[3]!=1.0f){cullWhy(12,l);return false;}   // pixel space: w == 1
   p[k][0]=v[0];p[k][1]=v[1];
  }
  float x0=p[0][0],x1=x0,y0=p[0][1],y1=y0;
  for(unsigned k=1;k<6;k++){x0=std::min(x0,p[k][0]);x1=std::max(x1,p[k][0]);y0=std::min(y0,p[k][1]);y1=std::max(y1,p[k][1]);}
- if(!(x0<x1&&y0<y1))return false;
+ if(!(x0<x1&&y0<y1)){cullWhy(13,l);return false;}
  unsigned id[6];
  for(unsigned k=0;k<6;k++) {
-  if(!(p[k][0]==x0||p[k][0]==x1)||!(p[k][1]==y0||p[k][1]==y1))return false;
+  if(!(p[k][0]==x0||p[k][0]==x1)||!(p[k][1]==y0||p[k][1]==y1)){cullWhy(14,l);return false;}
   id[k]=(p[k][0]==x1?1u:0u)|(p[k][1]==y1?2u:0u);
  }
  // two triangles, each three distinct corners, sharing a diagonal: together exactly the rectangle
- if(id[0]==id[1]||id[0]==id[2]||id[1]==id[2]||id[3]==id[4]||id[3]==id[5]||id[4]==id[5])return false;
+ if(id[0]==id[1]||id[0]==id[2]||id[1]==id[2]||id[3]==id[4]||id[3]==id[5]||id[4]==id[5]){cullWhy(15,l);return false;}
  unsigned ma=(1u<<id[0])|(1u<<id[1])|(1u<<id[2]),mb=(1u<<id[3])|(1u<<id[4])|(1u<<id[5]);
- if((ma|mb)!=15||__builtin_popcount(ma&mb)!=2)return false;
+ if((ma|mb)!=15||__builtin_popcount(ma&mb)!=2){cullWhy(16,l);return false;}
  unsigned sh=ma&mb,a=(unsigned)__builtin_ctz(sh),b=(unsigned)(31-__builtin_clz(sh));
- if((a^b)!=3)return false;
- return x0<=0&&y0<=0&&x1>=(float)_tw&&y1>=(float)_th;
+ if((a^b)!=3){cullWhy(17,l);return false;}
+ if(!(x0<=0&&y0<=0&&x1>=(float)_tw&&y1>=(float)_th)){char t[160];snprintf(t,sizeof t,"rect %.1f,%.1f..%.1f,%.1f",x0,y0,x1,y1);cullWhy(99,l,t);return false;}
+ return true;
 }
 - (void)cullReplay {
  _defer=NO;
