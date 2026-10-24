@@ -35,3 +35,23 @@
   2. `python3 -I tools/flame-files.py put DIR/NAME /var/local/bin/NAME 755`
 - **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
   provides the USB network link.
+
+# Delegation (save tokens: the main session orchestrates, subagents do the bulk)
+- **Main session (Opus):**
+  - picks the next step from `docs/sunfish/plan.md`
+  - writes precise specs
+  - judges results
+  - updates the docs and plan
+- **Hand the rest to the agents in `.claude/agents/`:**
+  - `phone-runner` (haiku): boots, benches, webcam, log slicing. It is the only agent that touches the phone.
+  - `ci-builder` (haiku): commit/export patches, push, CI, download, install.
+  - `implementer` (sonnet): writes one patch from a spec.
+  - `investigator` (sonnet): read-only source, binary and log analysis.
+- **Specs:**
+  - Every spec says exactly what to return: numbers and tables, never raw logs.
+  - Run waits (CI, benches) in the background and don't poll them.
+- **Phone access:**
+  - Only one session or agent uses the phone at a time.
+  - If the user says another session is on the phone, don't run `phone-runner`.
+- **Cheapest mode for long, routine runs:** run the main session itself on Sonnet for a whole plan step. Switch to
+  Opus only for design decisions or when stuck after two failed attempts.

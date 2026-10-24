@@ -68,6 +68,7 @@ log is in `docs/workday.md`. The step-by-step next plan is in `docs/sunfish/plan
   the charger.
 
 ## Methods and tools (reuse these)
+Subagents that run these: `.claude/agents/` (phone-runner, ci-builder, implementer, investigator); see CLAUDE.md "Delegation".
 ### Where the data comes from
 - **Live kernel log:**
   - `tools/sunfish-livelog.sh ../logs/usb-live.log` runs on the PC in the background and appends every kernel log
