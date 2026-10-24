@@ -37,6 +37,15 @@ int main(int argc, char **argv)
 		printf("VTDecompressionSession (require hardware): OSStatus %d\n", (int)st);
 		if (s)
 			VTDecompressionSessionInvalidate(s);
+		s = NULL;
+		st = VTDecompressionSessionCreate(NULL, fd, NULL, NULL, NULL, &s);
+		printf("VTDecompressionSession (any decoder, software allowed): OSStatus %d\n", (int)st);
+		if (s) {
+			CFBooleanRef hw = NULL;
+			VTSessionCopyProperty(s, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
+			printf("  using hardware decoder: %s\n", hw == kCFBooleanTrue ? "yes" : "no");
+			VTDecompressionSessionInvalidate(s);
+		}
 
 		NSError *err = nil;
 		AVAssetReader *r = [AVAssetReader assetReaderWithAsset:asset error:&err];
