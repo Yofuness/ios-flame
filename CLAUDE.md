@@ -1,5 +1,6 @@
 @AGENTS.md
 @docs/sunfish/display-perf.md
+@docs/sunfish/plan.md
 
 # Sunfish (Pixel 4a) quick rules
 - **Boot and partitions:**
