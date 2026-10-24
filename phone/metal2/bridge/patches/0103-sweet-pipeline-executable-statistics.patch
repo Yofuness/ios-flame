@@ -76,11 +76,17 @@
  mod private_properties;
 --- a/crates/metal2vulkan-runtime/src/device/create.rs
 +++ b/crates/metal2vulkan-runtime/src/device/create.rs
-@@ -1177,6 +1177,20 @@
+@@ -1177,6 +1177,31 @@
      if graphics_pipeline_library {
          enables.enable_graphics_pipeline_library();
      }
 +    // sweet pipestats: the driver's shader statistics, where asked and the device has them.
++    if crate::pipestats::requested() {
++        crate::pipestats::note(&format!(
++            "PIPESTAT device: extension listed={}",
++            listed.contains(ash::khr::pipeline_executable_properties::NAME)
++        ));
++    }
 +    if crate::pipestats::requested()
 +        && listed.contains(ash::khr::pipeline_executable_properties::NAME)
 +    {
@@ -89,9 +95,14 @@
 +        // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and lists the
 +        // extension.
 +        unsafe { instance.raw.get_physical_device_features2(physical, &mut features) };
++        crate::pipestats::note(&format!(
++            "PIPESTAT device: pipelineExecutableInfo reported={}",
++            executable.pipeline_executable_info == vk::TRUE
++        ));
 +        if executable.pipeline_executable_info == vk::TRUE {
 +            enables.enable_pipeline_executable_properties();
 +            crate::pipestats::set_enabled();
++            crate::pipestats::note("PIPESTAT device: enabled");
 +        }
 +    }
      // The runtime's own need, outside the vocabulary: the device's pipelines are cached in the
@@ -116,11 +127,22 @@
          let waited = queued + turn;
 --- a/crates/metal2vulkan-runtime/src/pipeline/graphics.rs
 +++ b/crates/metal2vulkan-runtime/src/pipeline/graphics.rs
-@@ -887,7 +887,11 @@
+@@ -887,7 +887,22 @@
          let graphics = &pipeline.graphics;
          let content = self.graphics_content(pipeline, key)?;
          let shared = self.device.shared();
 -        let libraries = shared.libraries.as_ref().filter(|_| content.links());
++        if crate::pipestats::requested() {
++            static SAID: AtomicBool = AtomicBool::new(false);
++            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
++                crate::pipestats::note(&format!(
++                    "PIPESTAT first pipeline: active={} libraries_on_device={} links={}",
++                    crate::pipestats::active(),
++                    shared.libraries.is_some(),
++                    content.links()
++                ));
++            }
++        }
 +        // sweet pipestats: whole pipelines only, so each has its own executables to report.
 +        let libraries = shared
 +            .libraries
@@ -129,7 +151,7 @@
          // Whether the making's cache held it and each of its stages, where the making reports
          // them (`shader_cache::found_in_cache`): its stages' feedback where it has at most
          // `REPORTED_STAGES`, none where more (a count of 0 is valid, one equal to `stageCount`
-@@ -935,8 +939,14 @@
+@@ -935,8 +950,14 @@
                      if driver_reports {
                          info = info.push_next(&mut feedback);
                      }
@@ -144,7 +166,7 @@
                              // SAFETY: every pointer in `info` outlives the call; the pipeline
                              // cache is the making's own, destroyed once the call returned.
                              unsafe { shared.vk().create_graphics_pipelines(cache, &[info], None) }
-@@ -955,6 +965,9 @@
+@@ -955,6 +976,9 @@
          shared.counts.driver_diagnostics_withheld(withheld);
          let (raw, linked) = created?;
          let created_in = started.elapsed();
@@ -156,7 +178,7 @@
          if driver_reports {
 --- /dev/null
 +++ b/crates/metal2vulkan-runtime/src/pipestats.rs
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,144 @@
 +//! sweet pipestats (`SWEET_PIPESTATS=1`, off by default): the driver's compiled-shader statistics
 +//! (`VK_KHR_pipeline_executable_properties`) of every render `VkPipeline` the device makes, one
 +//! `PIPESTAT` line per executable through the device's message sink (id name `sweet-pipestats`).
@@ -173,6 +195,34 @@
 +    *ON.get_or_init(|| {
 +        std::env::var_os("SWEET_PIPESTATS").is_some_and(|value| !value.is_empty() && value != "0")
 +    })
++}
++
++/// One line straight into `/var/local/mtl2.log` and `/dev/console`, as the frontend's `sm2_logs`
++/// does, so it never depends on the message sink. Only with `SWEET_PIPESTATS` set.
++pub(crate) fn note(text: &str) {
++    use std::io::Write;
++    use std::sync::Mutex;
++    if !requested() {
++        return;
++    }
++    static FILES: OnceLock<Vec<Mutex<std::fs::File>>> = OnceLock::new();
++    let files = FILES.get_or_init(|| {
++        ["/dev/console", "/var/local/mtl2.log"]
++            .iter()
++            .filter_map(|path| std::fs::OpenOptions::new().append(true).open(path).ok())
++            .map(Mutex::new)
++            .collect()
++    });
++    let line = format!(
++        "MTL2[{} {}]: {text}\n",
++        std::process::id(),
++        std::env::args().next().unwrap_or_default()
++    );
++    for file in files {
++        if let Ok(mut file) = file.lock() {
++            let _ = file.write_all(line.as_bytes());
++        }
++    }
 +}
 +
 +/// Whether the device was made with `pipelineExecutableInfo`.
@@ -204,6 +254,8 @@
 +/// Log the statistics of `pipeline`, one line per executable.
 +pub(crate) fn report(device: &Device, pipeline: vk::Pipeline) {
 +    let shared = device.shared();
++    static FIRST: AtomicBool = AtomicBool::new(true);
++    let first = FIRST.swap(false, Ordering::Relaxed);
 +    let functions = ash::khr::pipeline_executable_properties::Device::new(
 +        &shared.instance.raw,
 +        shared.vk(),
@@ -211,7 +263,14 @@
 +    let info = vk::PipelineInfoKHR::default().pipeline(pipeline);
 +    // SAFETY: `pipeline` was just made on this device with the capture flag, and the device has
 +    // the feature (`active`).
-+    let Ok(executables) = (unsafe { functions.get_pipeline_executable_properties(&info) }) else {
++    let executables = unsafe { functions.get_pipeline_executable_properties(&info) };
++    if first {
++        note(&format!(
++            "PIPESTAT first query: properties {:?}",
++            executables.as_ref().map(Vec::len)
++        ));
++    }
++    let Ok(executables) = executables else {
 +        return;
 +    };
 +    let label = LABEL.with(|label| label.borrow().clone());
@@ -220,9 +279,14 @@
 +            .pipeline(pipeline)
 +            .executable_index(index as u32);
 +        // SAFETY: as above, `index` from the driver's own list.
-+        let Ok(statistics) =
-+            (unsafe { functions.get_pipeline_executable_statistics(&executable_info) })
-+        else {
++        let statistics = unsafe { functions.get_pipeline_executable_statistics(&executable_info) };
++        if first && index == 0 {
++            note(&format!(
++                "PIPESTAT first query: statistics {:?}",
++                statistics.as_ref().map(Vec::len)
++            ));
++        }
++        let Ok(statistics) = statistics else {
 +            continue;
 +        };
 +        let mut line = format!(
@@ -256,6 +320,6 @@
 +            };
 +            line.push_str(&format!(" {name}={value}"));
 +        }
-+        device.inform("sweet-pipestats", line);
++        note(&line);
 +    }
 +}
