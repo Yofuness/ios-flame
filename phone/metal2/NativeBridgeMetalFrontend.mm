@@ -687,7 +687,7 @@ static void cullWhy(int why,NSString *l,const char *extra="") {
  static std::atomic<int> said{0},img{0};if([l hasSuffix:@"Isrc"]?img++>=12:said++>=4)return;   // the wallpaper quad gets its own 12
  char t[300];snprintf(t,sizeof t,"SWEET CULL: not covering #%d %s %s",why,l.UTF8String,extra);sm2_logs(t);
 }
-struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;};   // writes: targets the draw may change; over: targets a covering draw overwrites
+struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;long cx0=0,cy0=0,cx1=0,cy1=0;};   // c*: the draw's clip (scissor within the target)   // writes: targets the draw may change; over: targets a covering draw overwrites
 @interface NBRenderEncoder : NBEncoder
 - (void)drawLogStart:(MTLRenderPassDescriptor *)d;
 @end
@@ -703,7 +703,12 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  NSUInteger _cvis;
 }
 - (void)rec:(void (^)(void))b {CullEntry e;e.blk=[b copy];_ops.push_back(e);}
+- (void)clip:(long *)c {   // sweet cull: scissor within the target
+ c[0]=0;c[1]=0;c[2]=(long)_tw;c[3]=(long)_th;
+ if(_scSet){c[0]=std::max(c[0],(long)_csc[0]);c[1]=std::max(c[1],(long)_csc[1]);c[2]=std::min(c[2],(long)(_csc[0]+_csc[2]));c[3]=std::min(c[3],(long)(_csc[1]+_csc[3]));}
+}
 - (void)recDraw:(void (^)(void))b covering:(bool)c {CullEntry e;e.blk=[b copy];e.draw=true;e.covering=c;
+ {long r[4];[self clip:r];e.cx0=r[0];e.cy0=r[1];e.cx1=r[2];e.cy1=r[3];}
  if(_pipe){e.writes=_pipe.writtenMask&_attMask;e.over=_pipe.opaqueMask&_attMask;}_ops.push_back(e);}
 // sweet cull: is this draw an opaque, exactly-rectangular, full-target draw of a whitelisted pipeline?
 - (bool)coversPrim:(unsigned long)prim start:(NSUInteger)s count:(NSUInteger)n inst:(NSUInteger)inst indexed:(bool)indexed indexType:(MTLIndexType)ik
@@ -712,8 +717,8 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  NSString *l=_pipe.label;
  if(!l||!([l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||[l isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_TimgA2Xhfn_Isrc"]))return false;
  if(!(_pipe.opaqueMask&1)){char t[64];snprintf(t,sizeof t,"opaque %x att %x",_pipe.opaqueMask,_attMask);cullWhy(1,l,t);return false;}   // overwrites target 0 at least; per-draw targets are checked at replay
- if(_vpSet&&!(_cvp[0]==0&&_cvp[1]==0&&_cvp[2]==(double)_tw&&_cvp[3]==(double)_th)){cullWhy(2,l);return false;}
- if(_scSet&&!(_csc[0]==0&&_csc[1]==0&&_csc[2]>=_tw&&_csc[3]>=_th)){char t[96];snprintf(t,sizeof t,"sc %llu,%llu,%llu,%llu tw %lu th %lu",(unsigned long long)_csc[0],(unsigned long long)_csc[1],(unsigned long long)_csc[2],(unsigned long long)_csc[3],_tw,_th);cullWhy(3,l,t);return false;}
+ long cr[4];[self clip:cr];if(cr[0]>=cr[2]||cr[1]>=cr[3])return false;
+ if(_vpSet&&!(_cvp[0]<=cr[0]&&_cvp[1]<=cr[1]&&_cvp[0]+_cvp[2]>=cr[2]&&_cvp[1]+_cvp[3]>=cr[3])){cullWhy(2,l);return false;}
  if(!_cvb||_cvb.storageMode!=MTLStorageModeShared){cullWhy(4,l);return false;}
  const char *vc=(const char *)_cvb.contents;if(!vc){cullWhy(5,l);return false;}
  NSUInteger stride=48;   // assumed (drawlog); the vertex descriptor, when present, must agree on a float4 position at offset 0
@@ -754,19 +759,29 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  if((ma|mb)!=15||__builtin_popcount(ma&mb)!=2){cullWhy(16,l);return false;}
  unsigned sh=ma&mb,a=(unsigned)__builtin_ctz(sh),b=(unsigned)(31-__builtin_clz(sh));
  if((a^b)!=3){cullWhy(17,l);return false;}
- if(!(x0<=0&&y0<=0&&x1>=(float)_tw&&y1>=(float)_th)){char t[160];snprintf(t,sizeof t,"rect %.1f,%.1f..%.1f,%.1f",x0,y0,x1,y1);cullWhy(99,l,t);return false;}
+ if(!(x0<=(float)cr[0]&&y0<=(float)cr[1]&&x1>=(float)cr[2]&&y1>=(float)cr[3])){char t[160];snprintf(t,sizeof t,"rect %.1f,%.1f..%.1f,%.1f",x0,y0,x1,y1);cullWhy(99,l,t);return false;}
  return true;
 }
 - (void)cullReplay {
  _defer=NO;
  std::vector<CullEntry> ops;ops.swap(_ops);
- long last=-1;
- if(!_noCull)for(size_t i=0;i<ops.size();i++)if(ops[i].draw&&ops[i].covering)last=(long)i;
- // cull only if every earlier draw writes nothing the covering draw doesn't overwrite (a survivor could read what a culled draw left)
- if(last>=0)for(long i=0;i<last;i++)if(ops[i].draw&&(ops[i].writes&~ops[last].over)){last=-1;break;}
+ // sweet cull: a draw E is dead if a later covering draw D overwrites E's whole clip on every target E writes,
+ // and no surviving draw between them touches E's clip (it could read what E left, e.g. programmable blending)
+ std::vector<char> dead(ops.size(),0);long last=-1;
+ auto inside=[](const CullEntry &a,const CullEntry &b){return a.cx0>=b.cx0&&a.cy0>=b.cy0&&a.cx1<=b.cx1&&a.cy1<=b.cy1;};
+ auto overlap=[](const CullEntry &a,const CullEntry &b){return a.cx0<b.cx1&&b.cx0<a.cx1&&a.cy0<b.cy1&&b.cy0<a.cy1;};
+ if(!_noCull)for(long d=(long)ops.size()-1;d>=0;d--) {
+  if(!ops[d].draw||!ops[d].covering||dead[d])continue;
+  for(long e=d-1;e>=0;e--) {
+   if(!ops[e].draw||dead[e]||!inside(ops[e],ops[d])||(ops[e].writes&~ops[d].over))continue;
+   bool safe=true;
+   for(long m=e+1;m<d&&safe;m++)if(ops[m].draw&&!dead[m]&&overlap(ops[m],ops[e]))safe=false;
+   if(safe){dead[e]=1;last=std::max(last,d);}
+  }
+ }
  unsigned culled=0;
  for(size_t i=0;i<ops.size();i++) {
-  if(ops[i].draw&&(long)i<last){culled++;continue;}
+  if(dead[i]){culled++;continue;}
   ops[i].blk();
  }
  gCullDraws+=culled;
