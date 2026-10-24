@@ -684,7 +684,7 @@ static bool cullEnabled() {
 static std::atomic<unsigned> gCullPasses,gCullDraws;
 // sweet cull: why a whitelisted draw was not covering (first 12 times per process)
 static void cullWhy(int why,NSString *l,const char *extra="") {
- static std::atomic<int> said{0};if(said++>=12)return;
+ static std::atomic<int> said{0},img{0};if([l hasSuffix:@"Isrc"]?img++>=12:said++>=4)return;   // the wallpaper quad gets its own 12
  char t[300];snprintf(t,sizeof t,"SWEET CULL: not covering #%d %s %s",why,l.UTF8String,extra);sm2_logs(t);
 }
 struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned writes=0xff,over=0;};   // writes: targets the draw may change; over: targets a covering draw overwrites
