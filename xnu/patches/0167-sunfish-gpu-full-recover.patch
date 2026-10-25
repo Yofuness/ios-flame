@@ -1,4 +1,4 @@
-From 53cee8f4fb0d03e7c5e182ce8138f8ad73b35048 Mon Sep 17 00:00:00 2001
+From f680c4f44fab00c7ef0b967ff919ad71a5b8f30e Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sun, 25 Oct 2026 13:43:23 -0400
 Subject: [PATCH] sunfish: full GPU recovery (GX power cycle), hang injector,
@@ -8,9 +8,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  bsd/dev/sweet_a6xx.c                  | 194 +++++++++++++++++++++++---
  bsd/dev/sweet_a6xx.h                  |   2 +
- bsd/dev/sweet_gpu.c                   |  83 +++++++++++
+ bsd/dev/sweet_gpu.c                   |  87 ++++++++++++
  iokit/Kernel/arm/SweetFramebuffer.cpp |  11 ++
- 4 files changed, 267 insertions(+), 23 deletions(-)
+ 4 files changed, 271 insertions(+), 23 deletions(-)
 
 diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
 index a7e2000..8ee5804 100644
@@ -283,20 +283,33 @@ index c55332f..053c4c6 100644
  bool a6_cx_up(void);
  bool a6_gx_up(void);
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index ba2df53..e9d1071 100644
+index ba2df53..349c8df 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
-@@ -18,6 +18,9 @@
+@@ -18,6 +18,10 @@
  #include <sys/param.h>
  #include <sys/systm.h>
  #include <sys/proc.h>
++#include <sys/proc_internal.h>
 +#include <sys/signal.h>
 +#include <sys/signalvar.h>
 +#include <kern/thread_call.h>
  #include <kern/locks.h>
  #include <kern/thread.h>
  #include <kern/clock.h>
-@@ -338,6 +341,14 @@ sweet_gpu_init(void)
+@@ -33,6 +37,11 @@
+ #include "sweet_a6xx.h"
+ #include "../../iokit/Kernel/arm/SweetDisplayMask.h"
+ 
++/* 0167: restart backboardd after a recovery (sweetgpukill=1) */
++static uint32_t gpu_kill;
++static thread_call_t gpu_kill_call;
++static void gpu_kill_fn(thread_call_param_t, thread_call_param_t);
++
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ extern boolean_t pmap_valid_address(uint64_t pa);
+ extern vm_map_address_t phystokv(uint64_t pa);
+@@ -338,6 +347,14 @@ sweet_gpu_init(void)
  		extern int a6_submit_wfi;
  		PE_parse_boot_argn("sweetwfi", &a6_submit_wfi, sizeof(a6_submit_wfi));
  	}
@@ -311,7 +324,7 @@ index ba2df53..e9d1071 100644
  	gpu.perf_level = lvl;
  	pool_kva = va;
  	vm_offset_t pva = 0;
-@@ -582,10 +593,58 @@ gpu_hung_locked(uint32_t hang_ms)
+@@ -582,10 +599,56 @@ gpu_hung_locked(uint32_t hang_ms)
  	return ns > hang_ms * 1000000ULL;
  }
  
@@ -322,8 +335,6 @@ index ba2df53..e9d1071 100644
 + */
 +static uint32_t hangtest_arg, hangtest_count;
 +static bool hangtest_read, hangtest_done;
-+static uint32_t gpu_kill;
-+static thread_call_t gpu_kill_call;
 +static void present_rearm_locked(void);
 +
 +static void
@@ -370,7 +381,7 @@ index ba2df53..e9d1071 100644
  	uint64_t far;
  	uint32_t syn, fsr = a6_fault_status(&gpu, &far, &syn), done = a6_fence_read(&gpu);
  	a6_log("%s: GPU hang or fault (fence %u, done %u, smmu fsr %x far %llx fsynr0 %x): reset\n",
-@@ -598,9 +657,22 @@ gpu_recover_locked(const char *why)
+@@ -598,9 +661,22 @@ gpu_recover_locked(const char *why)
  	lost[recoveries % LOST_RING].lo = done;
  	lost[recoveries % LOST_RING].hi = gpu.fence;
  	recoveries++;
@@ -393,7 +404,7 @@ index ba2df53..e9d1071 100644
  	}
  	a6_fence_force(&gpu);
  	progress_fence = gpu.fence;
-@@ -696,6 +768,14 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+@@ -696,6 +772,14 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
  static uint32_t present_slots = 2;
  static uint32_t present_fence[PRESENT_SLOTS_MAX];      /* of the present last queued from each IB slot */
  static uint32_t present_next;
@@ -408,7 +419,7 @@ index ba2df53..e9d1071 100644
  static uint32_t stat_busy;	/* 0158: presents put off a tick (slot still queued) */
  
  /* With sweet_gpu_lock: the present from IB slot k has landed (or the GPU was reset). 0, or -1 if reset. */
-@@ -880,6 +960,7 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+@@ -880,6 +964,7 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
  	if (rc == 0) {
  		a6_write(a6_pool_pa(&gpu, PRESENT_IB(k)), ib, 4ULL * n);
  		gpu_note_submit_locked();
@@ -416,7 +427,7 @@ index ba2df53..e9d1071 100644
  		present_fence[k] = a6_submit_ib_async(&gpu, a6_pool_va(PRESENT_IB(k)), n, 100);
  		gpu_owner_locked(present_fence[k], 0);
  		rc = present_fence[k] ? 0 : -1;
-@@ -1030,6 +1111,7 @@ sweet_gpu_submit_user_async(uint64_t ib_iova, uint32_t dwords)
+@@ -1030,6 +1115,7 @@ sweet_gpu_submit_user_async(uint64_t ib_iova, uint32_t dwords)
  	}
  	lck_mtx_lock(&sweet_gpu_lock);
  	gpu_note_submit_locked();
@@ -424,7 +435,7 @@ index ba2df53..e9d1071 100644
  	uint32_t fence = a6_submit_ib_async(&gpu, ib_iova, dwords, 1000);
  	gpu_owner_locked(fence, proc_selfpid());
  	lck_mtx_unlock(&sweet_gpu_lock);
-@@ -1272,6 +1354,7 @@ sweet_gpu_submit_v2(const uint64_t *iova, const uint32_t *dwords, unsigned n, bo
+@@ -1272,6 +1358,7 @@ sweet_gpu_submit_v2(const uint64_t *iova, const uint32_t *dwords, unsigned n, bo
  		ring_wait_ms = 2000;
  	lck_mtx_lock(&sweet_gpu_lock);
  	gpu_note_submit_locked();
