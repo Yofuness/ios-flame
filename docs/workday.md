@@ -332,3 +332,19 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Log at the time: every SpringBoard thread sampled at the same pc 0x1e44314f0 (955 s) → SpringBoard stuck; backboardd idle (1 swap per 5 s, 2 GPU submits, GPU 0% busy); no GPU hang/fault/SMMU lines; `lskdd` respawned 630 times in the soak (crash loop).
 - So the first failure is a SpringBoard hang, not the GPU. Lesson: the soak loop must snap the webcam each cycle and stop when swaps/s drops to ~0.
 - Rebooted with `flame-cmd reboot` (4456 mV), booted soak0r with the same args; lock screen fine on the webcam.
+- **Correction after log analysis (investigator):** the 955 s SpringBoard samples are idle stacks (main thread in CFRunLoop/mach_msg, workers in `__workq_kernreturn`), byte-identical to the healthy samples at 115 s. So SpringBoard was not deadlocked.
+- The UI actually stopped at ~222-262 s uptime:
+  - Swaps/s: 17-19 (176-188 s) → ~5 with 40 ms GPU submits (194-217 s) → 0.2 from 262.9 s until the reboot at ~1057 s.
+  - The last good app open was Notes (~223 s). From Calendar on, every open failed with `FBSOpenApplicationServiceErrorDomain Code=5`, and HID swipes kept arriving with no redraw.
+- Signals around the stall:
+  - 187× backboardd `vertexFunction/fragmentFunction is not a MTLFunction` (CA's RT/blur shaders, from 80 s on).
+  - `EXC_CORPSE_NOTIFY` failed for pids 329, 341, 101 (183 s).
+  - `hfs_clonefile: cluster_write failed - 34`.
+  - The GPU pool rose 160 → 293 MB on Safari's launch.
+  - Unbalanced SBSwitcherViewController transitions.
+- Not the cause: no panic, jetsam, watchdog or GPU fault. The lskdd loop (642 execs, every 1.03 s) only starts at 390 s, after the stall. fairplayd.H2, bluetoothd and wifip2pd also respawn every ~10 s.
+- Hypothesis (low confidence): SpringBoard's UI state wedged around the switcher/Safari burst, possibly from the failed CA shaders or a crashed daemon.
+- Next:
+  - Short soak repeating Preferences → Safari → Notes → Calendar.
+  - Auto-stop when swaps drop below 1/s, then pstack SpringBoard, take `launchctl list` and pull the CrashReporter logs at that moment.
+  - Fix the bridge for CA's RT shaders.
