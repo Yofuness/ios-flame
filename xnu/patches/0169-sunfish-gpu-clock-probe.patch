@@ -1,4 +1,4 @@
-From e7f3911f3a5fac582c6e5310c6da2571614e6f5b Mon Sep 17 00:00:00 2001
+From 835166a10904eff21e956dc6ca06b25799bb276b Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sun, 25 Oct 2026 14:41:15 -0400
 Subject: [PATCH] sunfish: GPU core clock probe and clock diag after recovery
@@ -11,7 +11,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  3 files changed, 63 insertions(+), 2 deletions(-)
 
 diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
-index 9bd62b6..337994d 100644
+index 9bd62b6..41cd7e1 100644
 --- a/bsd/dev/sweet_a6xx.c
 +++ b/bsd/dev/sweet_a6xx.c
 @@ -673,6 +673,9 @@ static int hfi_send(struct a6_gpu *g, uint32_t id, uint32_t *msg, uint32_t dword
@@ -46,13 +46,13 @@ index 9bd62b6..337994d 100644
  
 +/*
 + * 0169: GPU core clock probe. RBBM perf counter 0 counts the RBBM "always count" countable (0) in GPU core
-+ * cycles (a6xx.xml: RBBM_PERFCTR_RBBM_SEL_0 0x0507, RBBM_PERFCTR_RBBM_0_LO/HI 0x041a/0x041b; RBBM_PERFCTR_CNTL
++ * cycles (upstream/linux a6xx.xml: RBBM_PERFCTR_RBBM_SEL_0 0x0507, RBBM_PERFCTR_RBBM_0_LO/HI 0x041c/0x041d; RBBM_PERFCTR_CNTL
 + * 0x0500 is in the init table). GX collapse clears them, so gpu_cp_init programs them again.
 + */
 +#define RBBM_PERFCTR_CNTL	0x0500
 +#define RBBM_PERFCTR_RBBM_SEL_0	0x0507
-+#define RBBM_PERFCTR_RBBM_0_LO	0x041a
-+#define RBBM_PERFCTR_RBBM_0_HI	0x041b
++#define RBBM_PERFCTR_RBBM_0_LO	0x041c
++#define RBBM_PERFCTR_RBBM_0_HI	0x041d
 +#define RBBM_CLOCK_CNTL		0x00ae
 +
 +static void a6_clkprobe_start(void)

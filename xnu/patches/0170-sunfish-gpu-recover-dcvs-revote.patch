@@ -1,0 +1,31 @@
+From 14747552dcfcf20134ca5714c088608514ab300c Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 14:56:53 -0400
+Subject: [PATCH] sunfish: GPU recovery: vote another DCVS level first so the
+ GMU reprograms the core clock
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 41cd7e1..921e3dd 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -720,6 +720,12 @@ static int a6_gx_on(struct a6_gpu *g)
+ {
+ 	uint32_t dret;
+ 	int rc = gx_rail_on(gx_vote);
++	/* 0170: the GX collapse leaves the core clock at ~14 MHz and the GMU treats a vote for the unchanged level
++	 * as done, so vote another level first and then the real one to make it reprogram the clock */
++	uint32_t want = g->perf_level;
++	g->perf_level = want > 1 ? want - 1 : want + 1;
++	(void)gx_dcvs(g, &dret);
++	g->perf_level = want;
+ 	int dack = gx_dcvs(g, &dret);
+ 	/* 0168: OOB 0 (gpu_set) again as at the end of gmu_hfi: without it the GMU keeps the GPU at its slumber
+ 	 * clock/bus votes and every submit ran ~10x slower after a recovery */
+-- 
+2.56.0
+
