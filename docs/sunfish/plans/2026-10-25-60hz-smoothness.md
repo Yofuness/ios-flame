@@ -1,0 +1,46 @@
+# Archived 2026-10-25: 60 Hz smoothness plan
+
+- **Done:** per-frame timeline (xnu 0163), present-mode study (0164-0166), step-2 dead ends (culling, sysmem, half precision, DDR vote).
+- **Not done:** steps 0 (video), 4 (soak), 5; cheaper blur; RT shaders in the bridge.
+- **Replaced by:** the stability plan in `docs/sunfish/plan.md` (perf stalled at ~21 updates/s).
+
+# Next steps: 60 Hz smoothness and stability (plan of 2026-10-24)
+
+Old plan: `docs/sunfish/plans/2026-10-24-present-path.md`. Full reasoning: `~/.claude/plans/pasted-content-id-a57c-plan-distributed-newt.md`.
+
+## Measured facts that drive this plan
+- backboardd's own GPU time is 14-20 ms/frame under swipes (not 2.4 ms; that is the blit), GPU 25-37% busy, longest submit ~40 ms. The timeline shows it is bimodal (p50 5.8 ms, p95 40 ms per submit) and that the biggest gap is on the CPU/CA side: GPU end -> swap p50 29 ms; the vsync tick itself delivers only ~52/s. Both rule out 60 Hz.
+- `sweet_gpu_present` is async; the 7-13 ms "avg copy" is `sweetpresentwait=1` waiting behind backboardd's jobs. Cache clean is 0.6-0.8 ms.
+- vsync notify already precedes the present; blit-on-swap (0161) was worse; a second ring needs preemption (not present).
+- Charging is fine on the laptop's TB4 port (+950 mA under load). The USB link does not survive a replug.
+
+## Rules from the old plan still apply
+Boots RAM-only via `tools/sunfish-boot.sh`; stop below 3600 mV; no MDP register access beyond `tools/sunfish-dim.sh`; push only to `sunfish`; one change per boot; log in `docs/workday.md`.
+
+## Steps
+0. **Video spike (no code):** serve H.264/HEVC mp4 and a long page from the PC over USB; play in Safari; does it decode, at what fps, hardware or CPU? Result decides whether reels are possible. [ ]
+1. **Per-frame timeline (xnu 0163, `sweettrace=1`) [DONE 2026-10-24, kernel39]:** kernel records at swap, submit, CP start/end, present begin/end, vsync; `tools/sunfish-timeline.py LOG "bench TAG start" "bench TAG end"` prints the frame-interval histogram (the 60 Hz metric) and the per-stage gaps. Tracing costs nothing visible (22.3 / 21.7 updates/s with it on). mtl2.log/Turnip trace merge not done yet.
+   First numbers (Settings swipe bench, 2 runs agree; mach time and the CP counter run at 19.2 MHz, not 24): 20.2-20.3 swaps/s, vsync ticks only ~52/s (not 60: late ticks come in bursts). swap-to-swap p50 33 ms, p95 100 ms; ~22% of intervals <=17 ms, ~64% <=34 ms, ~21% >50 ms. backboardd GPU per submit is bimodal: p50 5.7-5.9 ms, p95 40 ms, max 41-44 ms. The present blit is 2.4 ms of GPU. Gaps: backboardd GPU end -> swap p50 29 ms / p95 95 ms (CPU/CA side, not GPU); swap -> present call p50 10.7 ms; present call blocks p50 0.7 ms but p95 43 ms (the `sweetpresentwait=1` wait behind heavy jobs); present submit -> blit start p95 114 ms.
+   **Present-mode comparison on the timeline (kernel39/40, same bench, 2 runs each):**
+
+   | config | swaps/s | panel updates/s | vsync ticks/s | present call p95 | put off |
+   |---|---|---|---|---|---|
+   | `sweetpresentwait=1` (default) | 20.3 | 21.7-22.3 | 52 | 43 ms | 0 |
+   | `sweetpresentwait=0` | 24.5 | 13.7-14.4 | 59 | 1.4 ms | ~520 per 37 s |
+   | `sweetpresentwait=0 sweetpresentslots=4` (xnu 0164) | 22.4-23.0 | 14.8-15.0 | 59 | 1.4 ms | 336-407 |
+   Non-blocking keeps vsync on time and CA runs faster, but the blit queues behind backboardd's heavy jobs (present submit -> blit start p95 114 ms), so slots stay full and frames are skipped; more slots help only a little. Panel updates are capped by swaps (20-24/s) either way, and swaps are limited by the CA/CPU side (GPU end -> swap p50 29 ms) plus the bimodal 40 ms GPU frames. Default stays `sweetpresentwait=1`, `sweetpresentslots=2`.
+
+2. **Cut backboardd GPU time (16 ms -> <=10 ms):** profile under swipes; 40 ms outliers; sysmem vs gmem under load; cheaper batched shadow copies; panel-size render only if fill-bound. [in progress]
+   gt1 trace (2026-10-24): 166/1569 passes take 20-40 ms, all full-screen; draw_ib_gmem >95% even with 21 draws -> a few expensive draws per bin (fill/shader). Plus ~10 ms of copy_buffer_to_image batches in the same submits. Per-bin split: slow passes cost ~0.7-1.3 ms in nearly every bin (fast ~0.08), so full-screen expensive draws. turnip 0105 per-draw trace (pd2): slow passes are stacked opaque full-screen quads (fs f8357eea x3 per pass, 3.5 ms each with tracing) plus fs 780adfdf (2x cost per bin). Drawlog (dl1): draws 0-2 are three identical opaque solid fills under an opaque full-cover wallpaper quad (draw 3), so they are dead. SWEET_CULL (bridge, per clip rectangle; CA redraws damage regions) culls them correctly but gains nothing measurable: 13.2-13.4 vs 13.1-15.3 ms/submit, the pattern is ~1 pass in 25, longest submit still ~40 ms; the per-draw trace overstated the fills. [done, no gain]
+   Still open: what makes the ~40 ms submits (~1 ms in every bin even with 21 draws; ~14 ms per slow pass outside the draws). Next: sysmem vs GMEM for the big pass under swipes; the cost of CA's uber-shader (fixed_frag_lph_cph, ~0.8 Gpx/s for a solid fill); the 10 ms of copy_buffer_to_image in the same submits.
+   sysmem under swipes: same 13-16 ms/submit, longest 40-45 ms (not tile overhead). SWEET_PIPESTATS (bridge 0103): FS p50 57 / p90 211 / max 314 instructions; Half-registers_used=0 everywhere although CA uses its half-precision ("_lph") shaders. Bridge 0104 (METAL2VULKAN_HALF_RELAXED) emits RelaxedPrecision correctly, but ir3 already ran much of CA's half math in 16 bit (disasm: thousands of half-register operands without 0104); the PIPESTAT half-register stat reads 0 on a6xx. No gain. [done, no gain]
+   2026-10-24 late (kernel42): timeline shows no overlap inside backboardd's CP spans; the long ones are fixed at 38.6 ms p50 / 40.4 p95 (suspiciously constant). `sweetddr=1` (bus vote MC0/SH0 -> 0, off by default in sunfish-boot.sh) leaves p50/p95 at 5.7/40 ms and drops panel updates to ~17/s: not bandwidth-bound, keep off. Reduce Transparency could not be measured: CA's RT shaders fail in the bridge ("vertexFunction is not a MTLFunction") and the GPU hangs unrecoverably. [done, no gain]
+   Next: (a) read RBBM busy / CP perfcounters, or write a CP timestamp after each render pass, inside the 38.6 ms submits to see whether they work or stall; (b) fix the bridge for CA's RT shaders, then re-measure blur via Reduce Transparency (>=3 ms -> low-res blur in the bridge); (c) empty-draw microbench for the 0.33 ms/draw fixed cost.
+   Where step 2 stands: neither dead-draw culling, sysmem, nor half precision moves the 13 ms/submit or the 40 ms outliers. The 40 ms frames are full-damage redraws (~10+ full-screen layers incl. 211-282-instruction blur passes). Remaining ideas: cheaper blur (downsample_8_frag is the heaviest FS; render blurs at lower resolution), the ~10 ms of copy_buffer_to_image in the same submits, and CPU/CA-side pacing (GPU end -> swap p50 29 ms, step 3).
+3. **Pipeline ordering from the timeline:** non-blocking present, present on GPU idle, tearing fix. [in progress, 2026-10-24]
+   GPU end -> swap (29 ms p50): kernel fence wait and IOMFB are cheap; swaps land 4-8 ms after a vsync notification, one frame in flight. CA uses only vsync (type 5) for pacing (QuartzCore RE). xnu 0165 sweetvsyncahead (report ticks later, to beat CA's vbl threshold): no effect at 8 or 16.7 ms. xnu 0166 sweetcpusample (1 kHz kernel sampler): CA's render thread uses ~10-15 ms CPU per frame, 55-75% on the A76s; all CPUs mostly idle. So the gap is waiting, not CPU work; big-core scheduling would gain little. SWEET_CTL completion stamps: GPU end -> CA's completion handlers < 1 ms; handlers done -> swap 28 ms p50. CA waits for its next usable tick: render (~6 ms CPU) + GPU (13-40 ms) overruns the next tick, so frames land every 2nd-3rd tick. Conclusion: the 29 ms gap is a consequence of GPU time per frame, not a separate delay. Back to step 2 with a target: GPU per frame <= ~10 ms (blur passes, full-damage redraws), or let CA keep 2 frames in flight.
+4. **Stability soak (1 h):** Safari scrolling + app switches with BO census; chase create/destroy only if the pool passes ~400 MB. [ ]
+5. **Unscoped:** shader/pipeline cache persistence, CPU profile of SpringBoard/Safari. [ ]
+
+## Two sessions, one phone
+A: steps 1-3 (xnu, SweetFramebuffer.cpp, sweet_gpu.c, sweet_a6xx.c, tools/sunfish-timeline.py). B: steps 0, 4, 5 and Turnip/bridge fixes (`phone/**`). Take turns on the phone; each appends only its own dated section to `docs/workday.md`.
