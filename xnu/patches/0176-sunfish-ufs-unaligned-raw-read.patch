@@ -1,0 +1,72 @@
+From 58b00b095a7c56c962e81d050c0494ba37342eb7 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 17:55:34 -0400
+Subject: [PATCH] sunfish: UFS raw reads honour sub-sector offsets (bounce
+ path), reject unaligned raw writes
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_ufs.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 1a0150f..5da3323 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -581,9 +581,43 @@ sweet_ufs_psize(__unused dev_t dev)
+ 	return su.ready ? (int)MIN(su.nblocks * UFS_BLOCK / su.secsize, INT_MAX) : -1;
+ }
+ 
++/*
++ * 0176: physio turns the offset into a block number (offset / secsize) and drops the rest, so a raw read that is
++ * not sector-aligned (toybox xxd reads 30 bytes at a time) got the start of its block back. Unaligned reads go
++ * through the bounce buffer one UFS block at a time instead.
++ */
++static int
++sweet_ufs_read_unaligned(struct uio *uio)
++{
++	uint64_t part_bytes = su.nblocks * UFS_BLOCK;
++	int error = 0;
++
++	while (uio_resid(uio) > 0) {
++		uint64_t pos = (uint64_t)uio_offset(uio);
++		if (pos >= part_bytes) {
++			break;
++		}
++		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
++		uint32_t n = (uint32_t)MIN((uint64_t)uio_resid(uio), MIN((uint64_t)(UFS_BLOCK - skip), part_bytes - pos));
++		lck_mtx_lock(&sweet_ufs_lock);
++		error = ufs_read_blocks(su.first_block + pos / UFS_BLOCK, 1);
++		if (!error) {
++			error = uiomove((const char *)(su.dma + DMA_BOUNCE) + skip, (int)n, uio);
++		}
++		lck_mtx_unlock(&sweet_ufs_lock);
++		if (error) {
++			break;
++		}
++	}
++	return error;
++}
++
+ static int
+ sweet_ufs_read(dev_t dev, struct uio *uio, __unused int ioflag)
+ {
++	if (uio_offset(uio) % su.secsize || uio_resid(uio) % su.secsize) {
++		return sweet_ufs_read_unaligned(uio);
++	}
+ 	return physio(sweet_ufs_strategy, NULL, dev, B_READ, minphys, uio, (int)su.secsize);
+ }
+ 
+@@ -593,6 +627,9 @@ sweet_ufs_write(dev_t dev, struct uio *uio, __unused int ioflag)
+ 	if (!su.writable) {
+ 		return EROFS;
+ 	}
++	if (uio_offset(uio) % su.secsize || uio_resid(uio) % su.secsize) {
++		return EINVAL;		/* 0176: physio would write at the wrong offset */
++	}
+ 	return physio(sweet_ufs_strategy, NULL, dev, B_WRITE, minphys, uio, (int)su.secsize);
+ }
+ 
+-- 
+2.56.0
+
