@@ -470,3 +470,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - It happened while the agent was running an SSH `dd` of the last 1153 blocks of the userdata disk, to read the shim rescue log and the XNU ring. The output file is empty.
   - The last kernel lines are routine vsync on/off. There is no panic line, and the log stops instantly.
   - Unknown whether the raw disk read caused it or it is the same reset as soak565. Next time, read the rescue block without touching anything else, and snap the webcam before each step.
+- **[17:00] Correction: a leftover driver kept using the phone.**
+  - When soak565 was stopped at 16:41, the soak agent's `driver.sh` (scratchpad) was still alive. It rebooted the phone into run B and booted soak430 (kernel50, `sweetgpufreq=4`) at 16:41:54, then drove apps until 16:57. It was killed at 17:00.
+  - So the "rst1" reset at 178.7 s was soak430 (430 MHz) resetting silently during app cycle 4, not the userdata `dd`.
+  - **Two silent resets during app soaks: 565 MHz at 468 s and 430 MHz at ~179 s.** Neither left a panic line. Lowering the clock does not prevent them.
+  - The rst2 boot (16:57) collided with the driver. Afterwards the phone showed the ABL unlocked-warning screen with the USB link down.
+- Lesson: stopping an agent does not stop the background scripts it started. Check `ps` for scratchpad scripts after every TaskStop.
