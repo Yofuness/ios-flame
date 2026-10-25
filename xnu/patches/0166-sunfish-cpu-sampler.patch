@@ -1,4 +1,4 @@
-From f467f7d545caaa9e06693acaf8809d7a3949adf8 Mon Sep 17 00:00:00 2001
+From a9e05d04d30014720d152bcd15683f1e280c3358 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sat, 24 Oct 2026 20:29:37 -0400
 Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
@@ -6,10 +6,10 @@ Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
 
 ---
  bsd/conf/files            |    1 +
- bsd/dev/sweet_cpusample.c |  163 ++
+ bsd/dev/sweet_cpusample.c |  165 ++
  bsd/dev/sweet_gpu.c       |    2 +
  osfmk/kern/thread.c       | 4272 +++++++++++++++++++++++++++++++++++++
- 4 files changed, 4438 insertions(+)
+ 4 files changed, 4440 insertions(+)
  create mode 100644 bsd/dev/sweet_cpusample.c
  create mode 100644 osfmk/kern/thread.c
 
@@ -27,10 +27,10 @@ index df7c863..718e6f9 100644
  bsd/dev/sweet_pmem.c			standard
 diff --git a/bsd/dev/sweet_cpusample.c b/bsd/dev/sweet_cpusample.c
 new file mode 100644
-index 0000000..cb804ee
+index 0000000..75bd02e
 --- /dev/null
 +++ b/bsd/dev/sweet_cpusample.c
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,165 @@
 +/*
 + * 0166: CPU use per thread and core type, without stopping anything.
 + *
@@ -176,6 +176,8 @@ index 0000000..cb804ee
 +		uint32_t v = 0;
 +		PE_parse_boot_argn("sweetcpusample", &v, sizeof(v));
 +		state = 1;
++		printf("SWEET CPU: sweetcpusample=%u, boot-args %lu bytes, tail \"%s\"\n", v, strlen(PE_boot_args()),
++		    PE_boot_args() + (strlen(PE_boot_args()) > 60 ? strlen(PE_boot_args()) - 60 : 0));
 +		if (v && (cs_timer = timer_call_alloc(cs_tick, NULL)) != NULL) {
 +			clock_interval_to_deadline(CS_TICK_US, NSEC_PER_USEC, &dl);
 +			timer_call_enter(cs_timer, dl, TIMER_CALL_SYS_CRITICAL);
