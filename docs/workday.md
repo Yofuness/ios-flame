@@ -498,3 +498,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - The decoded fragments show a panic report around 159.8 s, the rst3 xxd reset (lr 0xfffffe0007863940), so rst3 was a panic. The panic string is not readable.
   - /dev/ufsroot0 (the block device) is busy because it is mounted, and xxd's -c is limited to 256.
   - Next: make the raw read path honour the offset within a block (or reject unaligned raw I/O with EINVAL), or add a phone tool that preads whole 4 KB blocks.
+- **[18:10] Rescue log read with kernel51 (no new boot, so it was not overwritten).**
+  - The shim rescues the previous kernel's RAM log on every boot. Read the rescue before rebooting, or it is lost.
+  - Method: `toybox cmp -l /dev/rufsroot0 /dev/zero OFF 0 | toybox head -n 262144`. cmp seeks and reads large aligned chunks and prints each non-zero byte with its position; rebuild on the PC (../logs/rsc-good.txt).
+  - **rst3 was a panic, as suspected.** `panic(cpu 0 ...): Kernel data abort at pc 0xfffffe0007bce8b8, lr 0xfffffe000751b710`, esr 0x9600004f (permission fault), far 0x100767918 = x0 = the user buffer of `toybox xxd`. It happened at 159.79 s, 10 ms after `exec toybox`.
+  - That is the PAN fault on memcpy into a user address, fixed by 0175. The rescue-area layout and the decode both work.
+  - The soak resets' rescue data was overwritten by later boots, so they are still unexplained. Next soak: on a reset, read the rescue with this method right after the next boot (kernel52 also fixes unaligned raw reads, xnu 0176, built and not booted yet).

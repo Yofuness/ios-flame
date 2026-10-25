@@ -59,3 +59,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 rst3 (kernel50): raw read of /dev/rufsroot0 at offset (0xc80ffb-1153)*4 KB (flame's userdata size) → instant silent reset to fastboot, no panic. UFS I/O error path kills the kernel; suspect for the soak resets too.
 - 2026-10-25 UFS read-path review: sunfish userdata 0x1B65FFB blocks (rst3 offset was in range); raw-device reads memcpy into user VA (PAN abort) = likely rst3 cause; soak resets show no UFS errors, cause still open.
 - 2026-10-25 rsc1 (kernel51, xnu 0175): raw rufsroot0 reads no longer crash; SWEETRSC found at block 28728186, but sub-block raw reads return the block start (xxd reads 30 B) → dump garbled. rst3 confirmed as a panic (~159.8 s).
+- 2026-10-25 rescue log (read via toybox cmp -l vs /dev/zero): rst3 = Kernel data abort, esr 0x9600004f, far = toybox xxd user buffer → PAN memcpy bug (fixed 0175). Soak-reset rescues were overwritten.
