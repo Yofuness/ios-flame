@@ -386,3 +386,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - backboardd submits take 100-980 ms each (mean 93-190 ms against ~13 ms before), with the GPU 27-99% busy.
   - Frame rate is 1.2-7.4 swaps/s, and the 20 s benches recorded no FB samples.
   - Suspect: the GPU clock or DCVS level is not restored after GX on (maybe the lowest level), or register state such as HWCG/UCHE was lost with the GX collapse.
+- **xnu 0168 (kernel44, rec3): OOB gpu_set re-sent after GX on — no effect on the speed.**
+  - Recovery was acked (dcvs and OOB gpu_set) and took 23.4 ms. backboardd was respawned.
+  - Before the hang: 19.4 swaps/s, 13.1 ms per submit.
+  - After: 0 swaps/s in both benches, backboardd ~910-990 ms per submit, GPU 100% busy. The screen stayed on the lock screen and the unlock swipe did not take.
+  - So the slow-down is not the missing OOB vote. Next: xnu 0169 measures the real GPU core MHz (RBBM perf counter) and dumps clock/GX state at boot and after recovery.
+- An SMMU fault repeats on the USB path before the hang (cb fsr 400, every ~5.6 s from 46.8 s, `busERR addr 0`). This is new and unexplained.

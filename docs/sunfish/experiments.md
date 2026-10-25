@@ -43,3 +43,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 soak1 (kernel42, 20 min Preferences/Safari/Notes/Calendar loop, auto-stop): no stall, 48/48 opens OK, 8.7-17 swaps/s; 104 MTLFunction errors without a stall. soak0 stall not reproduced.
 - 2026-10-25 soak2 (fresh boot, 6 apps incl. Clock/Photos, 20 min): no stall, 7.4-11.7 swaps/s, 0 MTLFunction/CORPSE/Code=5; Photos shows black. soak0 stall not reproduced in 2 runs.
 - 2026-10-25 xnu 0167 (kernel43) GPU full recovery: injected client and present hangs both recover (22-29 ms, all stages rc 0), backboardd respawns, lock screen back in ~8 s. But afterwards the GPU is ~10x slower (submits 100-980 ms, 1-7 swaps/s): clock/DCVS level or lost register state after GX power cycle.
+- 2026-10-25 xnu 0168 (kernel44): re-sending OOB gpu_set after GX on does not fix the post-recovery slowdown (910-990 ms/submit, 0 swaps/s).
