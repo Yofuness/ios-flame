@@ -465,3 +465,8 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Fastboot answers, at 4435 mV.
   - The soak driver kept sending app opens for ~10 min after the reset, because it had no reachability check. I stopped it, and run B (430 MHz) never ran.
   - Open: what reset the phone (watchdog? a USB-side reset?). Look for a PMIC/IMEM restart reason on the next boot.
+- **[16:52] rst1: second silent reset to fastboot, at ~178.7 s uptime.**
+  - Boot: kernel50, `sweetpresentwait=1 flamereboot=0`.
+  - It happened while the agent was running an SSH `dd` of the last 1153 blocks of the userdata disk, to read the shim rescue log and the XNU ring. The output file is empty.
+  - The last kernel lines are routine vsync on/off. There is no panic line, and the log stops instantly.
+  - Unknown whether the raw disk read caused it or it is the same reset as soak565. Next time, read the rescue block without touching anything else, and snap the webcam before each step.

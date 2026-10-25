@@ -54,3 +54,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 rec10 (kernel50, home screen): after injected present-hang recovery 18.7-19.4 swaps/s and 12.5-13.5 ms/submit vs 19.7 / 13.2 before = full speed restored.
 - 2026-10-25 'not a MTLFunction' log lines = missing MTLFunction protocol on NBFunction (Metal NSLogs and continues); bridge now declares MTLFunction/MTLLibrary. RT hang = CP stall in a valid pipeline's draw, culprit unknown.
 - 2026-10-25 soak565 (kernel50, 1 h app soak): silent reset to fastboot at ~468 s (cycle 4), no panic/GPU lines, GPU pool 410-467 MB. Aborted; 430 MHz run not done.
+- 2026-10-25 rst1 (kernel50): second silent reset at 178.7 s during an SSH dd of the userdata tail; empty output; cause unknown.
