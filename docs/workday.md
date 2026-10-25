@@ -398,3 +398,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - The recovery diag shows dcvs ret 0, perf_level 5, dcvs perf 30000005: the GMU acked the same level without reprogramming the GX clock, which the GX collapse had reset.
   - Before the hang: 17.7 swaps/s. The "clk diag (boot)" line never printed.
 - Fix attempt xnu 0170: in a6_gx_on, vote another DCVS level first, then the real one (CI run 40223666383).
+- **xnu 0170 (kernel46, rec5): the DCVS re-vote changes the post-recovery clock, but it does not fix it.**
+  - The core reads 222 MHz, then stays at 56 MHz (it was 14 MHz without the re-vote).
+  - Benches: before the hang 18.8 swaps/s and 18.2 panel updates/s; after, 12.6 / 12.0 and 12.3 / 12.0.
+  - The live log has no fault, recover2 or kill lines for this hang, only `exec backboardd` at 295.4 s. Lines were probably lost while the kernel was busy.
+  - The "clk diag (boot)" line was missing in rec4 too. That may be the same lost-lines problem.
+  - Theory: the GX collapse also resets GPUCC clock state that ABL programmed (PLL/RCG), and the GMU does not redo it.
+  - Next: xnu 0171 snapshots GPUCC (0-0x1800) at boot and logs every register that differs after a recovery.

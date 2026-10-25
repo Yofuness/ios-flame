@@ -1,0 +1,51 @@
+From c144e6389b54a23b3735046948099f31b76737c6 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 15:12:59 -0400
+Subject: [PATCH] sunfish: GPUCC snapshot at boot, diff after recovery
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 921e3dd..8eb1cbf 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -1107,8 +1107,33 @@ bool a6_core_cycles(uint64_t *out)
+ }
+ 
+ /* 0169: clock diagnostics after gmu_hfi ("boot") and a6_gx_on ("recover"); GX-side registers only if GX is up */
++/* 0171: GPUCC register snapshot at boot (ABL + GMU set up, core at full clock), diffed after a recovery to find
++ * the clock state a GX collapse loses; byte offsets 0..GPUCC_SNAP */
++#define GPUCC_SNAP	0x1800
++static uint32_t gpucc_boot[GPUCC_SNAP / 4];
++static bool gpucc_have;
++
++static void gpucc_snap_diff(const char *when)
++{
++	if (!gpucc_have) {
++		for (uint32_t o = 0; o < GPUCC_SNAP; o += 4)
++			gpucc_boot[o / 4] = rd32(GPUCC + o);
++		gpucc_have = true;
++		a6_log("gpucc snap (%s): %u regs saved\n", when, GPUCC_SNAP / 4);
++		return;
++	}
++	unsigned n = 0;
++	for (uint32_t o = 0; o < GPUCC_SNAP; o += 4) {
++		uint32_t v = rd32(GPUCC + o);
++		if (v != gpucc_boot[o / 4] && n++ < 48)
++			a6_log("gpucc diff (%s): +%04x boot %08x now %08x\n", when, o, gpucc_boot[o / 4], v);
++	}
++	a6_log("gpucc diff (%s): %u regs differ\n", when, n);
++}
++
+ static void a6_clk_diag(const struct a6_gpu *g, const char *when)
+ {
++	gpucc_snap_diff(when);
+ 	a6_log("clk diag (%s): gx gdsc %x, gmu dcvs ret %x, perf_level %u, dcvs perf %x, rpmh ctrl %x\n", when,
+ 	    rd32(GPUCC + GPUCC_GX_GDSCR), rd32(GMU_REG(GMU_DCVS_RETURN)), g->perf_level,
+ 	    rd32(GMU_REG(GMU_DCVS_PERF_SETTING)), rd32(GMU_REG(GMU_RPMH_CTRL)));
+-- 
+2.56.0
+
