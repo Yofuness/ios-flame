@@ -422,3 +422,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Core clock 564 MHz → 56 MHz.
   - Benches: before 18.4 swaps/s and 17.7 panel updates/s; after, 10.8 / 10.3 and 12.2 / 11.4.
 - xnu 0173: restore PLL0 after the votes, and log "intact" too.
+- **xnu 0173 (kernel49, rec8): worse.**
+  - The PLL0 restore after the votes wrote L 3a and FRAC daaa, but got LOCK TIMEOUT (mode 1000005 → 1000005). The GX rail/SPTPRAC step also timed out this time.
+  - Core clock 480 MHz, then 9 MHz. GPU work stops: 0 ms busy, and the screen shows a half-drawn frame.
+  - The phone stayed reachable. backboardd was killed twice (pids 58 and 332).
+  - Before the hang: 17.0 panel updates/s, 13.7 ms per submit.
+  - My Fabia enable sequence is wrong or incomplete (CONFIG_CTL, CAL_L or the PLL_UPDATE latch?). This is the 4th attempt at the post-recovery clock (0168, 0170, 0172, 0173).
+- Defaults are unaffected: everything is behind `sweetgpurecover=2`.
