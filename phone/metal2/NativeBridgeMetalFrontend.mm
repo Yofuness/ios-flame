@@ -1905,6 +1905,9 @@ extern "C" id native_bridge_metal_open(const char *loader,const char *cache,uint
  // MTLTextureImplementation." on every miss (~600 lines/s from backboardd while scrolling).
  {Protocol *tp=objc_getProtocol("MTLTextureImplementation");if(tp)class_addProtocol([NBTexture class],tp);
   NBLOG(@"native-metal: MTLTextureImplementation %s",tp?([NBTexture conformsToProtocol:tp]?"adopted":"not adopted"):"missing");}
+ // SweetMetal2: MTLRenderPipelineDescriptor's setVertexFunction:/setFragmentFunction: NSLog "... is not a MTLFunction"
+ // on every pipeline whose function doesn't conform (harmless: the function is stored anyway), so declare the protocols.
+ class_addProtocol([NBFunction class],@protocol(MTLFunction));class_addProtocol([NBLibrary class],@protocol(MTLLibrary));
  objc_registerClassPair(cls);
  gDeviceObject=[cls new];
  return gDeviceObject;

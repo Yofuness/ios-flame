@@ -449,3 +449,12 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - The injected present hang recovered in 26.2 ms. PLL0 relocked and backboardd was killed and respawned.
   - rec9's low numbers came from the screen: the bench swipes alternate 900→150 and 150→900, so a bench can end on the widget (Today) panel. Check for the home screen before each bench.
 - sunfish-boot.sh now passes `sweetgpurecover=2 sweetgpukill=1` by default (from kernel50 on; older kernels ignore them).
+
+## 2026-10-25 Plan step 2: hang triggers
+- **The "vertexFunction/fragmentFunction is not a MTLFunction" lines are noise, not the Reduce Transparency failure.** Found by investigator, from a Metal.framework disassembly.
+  - They come from Metal's `-[MTLRenderPipelineDescriptorInternal setVertexFunction:]`, which checks conformsToProtocol(MTLFunction), NSLogs, then stores the function anyway.
+  - NBFunction never declared the protocol, so the line appears on every pipeline creation (~31k lines in the log, healthy boots included).
+  - Fix in the bridge: class_addProtocol for NBFunction/MTLFunction and NBLibrary/MTLLibrary.
+- **The RT hang is a real CP stall mid-IB with no SMMU fault** (`rbbm status c30d15`), in a submit built from valid pipelines. Which RT pipeline or draw causes it is unknown.
+  - Next: an RT boot with the pipeline journal (pipelines.log) and SWEET_DRAWLOG, to name the last pipeline before the hang. Then refuse it in newRenderPipelineStateWithDescriptor, or fix it.
+  - Recovery now covers this case (0167-0174).
