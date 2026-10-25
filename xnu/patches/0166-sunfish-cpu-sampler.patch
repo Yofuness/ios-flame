@@ -1,4 +1,4 @@
-From 939d47a126aad4f67829ce9acd61b8f02dddf62a Mon Sep 17 00:00:00 2001
+From f467f7d545caaa9e06693acaf8809d7a3949adf8 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sat, 24 Oct 2026 20:29:37 -0400
 Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
@@ -6,10 +6,10 @@ Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
 
 ---
  bsd/conf/files            |    1 +
- bsd/dev/sweet_cpusample.c |  172 ++
+ bsd/dev/sweet_cpusample.c |  163 ++
  bsd/dev/sweet_gpu.c       |    2 +
  osfmk/kern/thread.c       | 4272 +++++++++++++++++++++++++++++++++++++
- 4 files changed, 4447 insertions(+)
+ 4 files changed, 4438 insertions(+)
  create mode 100644 bsd/dev/sweet_cpusample.c
  create mode 100644 osfmk/kern/thread.c
 
@@ -27,10 +27,10 @@ index df7c863..718e6f9 100644
  bsd/dev/sweet_pmem.c			standard
 diff --git a/bsd/dev/sweet_cpusample.c b/bsd/dev/sweet_cpusample.c
 new file mode 100644
-index 0000000..cac58fa
+index 0000000..cb804ee
 --- /dev/null
 +++ b/bsd/dev/sweet_cpusample.c
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,163 @@
 +/*
 + * 0166: CPU use per thread and core type, without stopping anything.
 + *
@@ -56,7 +56,6 @@ index 0000000..cac58fa
 +#include <pexpert/pexpert.h>
 +#include <libkern/libkern.h>
 +
-+extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 +extern void thread_deallocate(thread_t);
 +extern thread_t sweet_cpu_active_thread(int cpu, int *idle);   /* osfmk/kern/thread.c */
 +extern int hz;
@@ -164,65 +163,57 @@ index 0000000..cac58fa
 +	printf("SWEET CPU: 5s: busy%%%s\n", line);
 +}
 +
-+static void
-+cs_thread(__unused void *arg, __unused wait_result_t wr)
++/*
++ * Driven by sweet_gpu.c's 5 s stats tick (a context known to log): the first call parses the boot-arg and
++ * starts the 1 kHz timer, each later call reports the table the timer filled and switches it to the other.
++ */
++void
++sweet_cpusample_tick5s(void)
 +{
-+	static int chan;
++	static int state;               /* 0 unparsed, 1 off, 2 running */
 +	uint64_t dl;
-+	printf("SWEET CPU: sampler started\n");
-+	cs_timer = timer_call_alloc(cs_tick, NULL);
-+	if (!cs_timer) {
-+		printf("SWEET CPU: timer_call_alloc failed\n");
++	if (state == 0) {
++		uint32_t v = 0;
++		PE_parse_boot_argn("sweetcpusample", &v, sizeof(v));
++		state = 1;
++		if (v && (cs_timer = timer_call_alloc(cs_tick, NULL)) != NULL) {
++			clock_interval_to_deadline(CS_TICK_US, NSEC_PER_USEC, &dl);
++			timer_call_enter(cs_timer, dl, TIMER_CALL_SYS_CRITICAL);
++			state = 2;
++			printf("SWEET CPU: sampler started\n");
++		}
 +		return;
 +	}
-+	clock_interval_to_deadline(CS_TICK_US, NSEC_PER_USEC, &dl);
-+	timer_call_enter(cs_timer, dl, TIMER_CALL_SYS_CRITICAL);
-+	for (;;) {
-+		clock_interval_to_deadline(5, NSEC_PER_SEC, &dl);
-+		(void)assert_wait_deadline(&chan, THREAD_UNINT, dl);
-+		thread_block(THREAD_CONTINUE_NULL);
-+		struct cs_tab *old = &cs_tabs[cs_cur & 1];
-+		cs_cur++;                       /* the timer now fills the other table */
-+		clock_interval_to_deadline(20, NSEC_PER_MSEC, &dl);   /* let a running tick finish */
-+		(void)assert_wait_deadline(&chan, THREAD_UNINT, dl);
-+		thread_block(THREAD_CONTINUE_NULL);
-+		cs_report(old);
-+		bzero(old, sizeof(*old));
++	if (state != 2) {
++		return;
 +	}
-+}
-+
-+void
-+sweet_cpusample_init(void)
-+{
-+	uint32_t v = 0;
-+	thread_t thread;
-+	boolean_t found = PE_parse_boot_argn("sweetcpusample", &v, sizeof(v));
-+	printf("SWEET CPU: init sweetcpusample=%u (found %d)\n", v, (int)found);
-+	if (v && kernel_thread_start(cs_thread, NULL, &thread) == KERN_SUCCESS) {
-+		thread_deallocate(thread);
-+	}
++	struct cs_tab *old = &cs_tabs[cs_cur & 1];
++	cs_cur++;                       /* the timer now fills the other table */
++	delay(2000);                    /* let a running tick finish */
++	cs_report(old);
++	bzero(old, sizeof(*old));
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index 7671169..876b2c2 100644
+index 7671169..ba2df53 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
 @@ -45,6 +45,7 @@ extern int vprintf(const char *fmt, va_list ap);
  extern void sweet_smc(uint64_t x[8]);
  
  void sweet_gpu_init(void);
-+extern void sweet_cpusample_init(void);
++extern void sweet_cpusample_tick5s(void);
  #define GPU_TRAIL_PA	0xE2000000ull	/* sunfish: low RAM outside XNU (a6_log mirror) */
  #define GPU_TRAIL_SIZE	0x10000u
  bool sweet_gpu_ready(void);
-@@ -290,6 +291,7 @@ gpu_thread(void *arg __unused, wait_result_t wr __unused)
- {
- 	uint64_t t0, ns;
- 	uint32_t delay_s = 0;
-+	sweet_cpusample_init();	/* 0166: start from here, a thread known to log (sweetcpusample=1) */
- 	PE_parse_boot_argn("sweetgpudelay", &delay_s, sizeof(delay_s));
- 	if (delay_s) {
- 		static int gpu_delay_chan;
+@@ -535,6 +536,7 @@ gpu_stats_locked(void)
+ 		a6_log("5s: %u submits (%u missed), GPU busy %llu ms (%llu%%), longest %llu us, mean %llu us;%s\n",
+ 		    gstat_n, gstat_missed, gstat_busy / 19200, gstat_busy * 100 / 19200 / (ns / 1000000),
+ 		    gstat_longest * 10 / 192, gstat_busy * 10 / 192 / gstat_n, who);
++		sweet_cpusample_tick5s();	/* 0166: sweetcpusample=1 */
+ 	}
+ 	gstat_n = gstat_missed = 0;
+ 	gstat_busy = gstat_longest = 0;
 diff --git a/osfmk/kern/thread.c b/osfmk/kern/thread.c
 new file mode 100644
 index 0000000..7fe8916
