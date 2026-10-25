@@ -1,0 +1,156 @@
+From e7f3911f3a5fac582c6e5310c6da2571614e6f5b Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 14:41:15 -0400
+Subject: [PATCH] sunfish: GPU core clock probe and clock diag after recovery
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 48 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_a6xx.h |  1 +
+ bsd/dev/sweet_gpu.c  | 16 +++++++++++++--
+ 3 files changed, 63 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 9bd62b6..337994d 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -673,6 +673,9 @@ static int hfi_send(struct a6_gpu *g, uint32_t id, uint32_t *msg, uint32_t dword
+ 	return -1;
+ }
+ 
++static void a6_clkprobe_start(void);
++static void a6_clk_diag(const struct a6_gpu *g, const char *when);
++
+ /*
+  * 0167: the GX-on half of gmu_hfi, shared with a6_recover's power cycle (a6_gx_on). gx_rail_on is kgsl
+  * a6xx_gmu_gfx_rail_on (hfi-use-reg): GX/MX vote, OOB 6 boot_slumber (legacy bits 22/30), then
+@@ -725,6 +728,7 @@ static int a6_gx_on(struct a6_gpu *g)
+ 	wr32(GMU_REG(GMU_G2H_CLR), 1u << 24);
+ 	a6_log("recover2: gx on: rail+sptprac %s, dcvs %s ret %x, oob gpu_set %s, gx gdsc %x\n", rc ? "TIMEOUT" : "ok",
+ 	    dack ? "TIMEOUT" : "acked", dret, ack ? "TIMEOUT" : "acked", rd32(GPUCC + GPUCC_GX_GDSCR));
++	a6_clk_diag(g, "recover");	/* 0169 */
+ 	return rc | dack | ack;
+ }
+ 
+@@ -878,6 +882,7 @@ static int gmu_hfi(struct a6_gpu *g)
+ 		a6_log("GX not powered; not touching GPU registers\n");
+ 		return -1;
+ 	}
++	a6_clk_diag(g, "boot");		/* 0169 */
+ 	return 0;
+ }
+ 
+@@ -1066,6 +1071,48 @@ bool a6_submit_ts(const struct a6_gpu *g, uint32_t fence, uint64_t *t0, uint64_t
+ 	return t[1] >= t[0] && t[0] != 0;
+ }
+ 
++/*
++ * 0169: GPU core clock probe. RBBM perf counter 0 counts the RBBM "always count" countable (0) in GPU core
++ * cycles (a6xx.xml: RBBM_PERFCTR_RBBM_SEL_0 0x0507, RBBM_PERFCTR_RBBM_0_LO/HI 0x041a/0x041b; RBBM_PERFCTR_CNTL
++ * 0x0500 is in the init table). GX collapse clears them, so gpu_cp_init programs them again.
++ */
++#define RBBM_PERFCTR_CNTL	0x0500
++#define RBBM_PERFCTR_RBBM_SEL_0	0x0507
++#define RBBM_PERFCTR_RBBM_0_LO	0x041a
++#define RBBM_PERFCTR_RBBM_0_HI	0x041b
++#define RBBM_CLOCK_CNTL		0x00ae
++
++static void a6_clkprobe_start(void)
++{
++	wr32(GREG(RBBM_PERFCTR_CNTL), 1);
++	wr32(GREG(RBBM_PERFCTR_RBBM_SEL_0), 0);
++}
++
++bool a6_core_cycles(uint64_t *out)
++{
++	if (!a6_gx_up())
++		return false;
++	uint32_t hi = rd32(GREG(RBBM_PERFCTR_RBBM_0_HI)), lo = rd32(GREG(RBBM_PERFCTR_RBBM_0_LO)),
++	    hi2 = rd32(GREG(RBBM_PERFCTR_RBBM_0_HI));
++	if (hi2 != hi)
++		lo = rd32(GREG(RBBM_PERFCTR_RBBM_0_LO));
++	*out = (uint64_t)hi2 << 32 | lo;
++	return true;
++}
++
++/* 0169: clock diagnostics after gmu_hfi ("boot") and a6_gx_on ("recover"); GX-side registers only if GX is up */
++static void a6_clk_diag(const struct a6_gpu *g, const char *when)
++{
++	a6_log("clk diag (%s): gx gdsc %x, gmu dcvs ret %x, perf_level %u, dcvs perf %x, rpmh ctrl %x\n", when,
++	    rd32(GPUCC + GPUCC_GX_GDSCR), rd32(GMU_REG(GMU_DCVS_RETURN)), g->perf_level,
++	    rd32(GMU_REG(GMU_DCVS_PERF_SETTING)), rd32(GMU_REG(GMU_RPMH_CTRL)));
++	if (!a6_gx_up())
++		return;
++	a6_log("clk diag (%s): rbbm_clock_cntl %x, uche gmem range %x %x %x %x, perfctr cntl %x sel0 %x\n", when,
++	    rd32(GREG(RBBM_CLOCK_CNTL)), rd32(GREG(0x0e0b)), rd32(GREG(0x0e0c)), rd32(GREG(0x0e0d)),
++	    rd32(GREG(0x0e0e)), rd32(GREG(RBBM_PERFCTR_CNTL)), rd32(GREG(RBBM_PERFCTR_RBBM_SEL_0)));
++}
++
+ uint64_t a6_timestamp(const struct a6_gpu *g)
+ {
+ 	(void)g;
+@@ -1392,6 +1439,7 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	};
+ 	for (unsigned i = 0; i < sizeof(init) / sizeof(init[0]); i++)
+ 		wr32(GREG(init[i][0]), init[i][1]);
++	a6_clkprobe_start();			/* 0169: core cycle counter, redone after every GX collapse */
+ 
+ 	uint32_t len;
+ 	const uint8_t *sqe = a6_firmware("a630_sqe.fw", &len);
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index 053c4c6..3dea741 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -87,6 +87,7 @@ extern int a6_inject_bad_ib;	/* 0167: sweethangtest: the next async submit carri
+ int a6_recover(struct a6_gpu *g);	/* after a hang/fault: soft reset, CP re-init (mappings kept); 0 = ok */
+ bool a6_cx_up(void);
+ bool a6_gx_up(void);
++bool a6_core_cycles(uint64_t *out);	/* 0169: RBBM always-count perf counter; false if GX is down */
+ bool a6_cp_running(const struct a6_gpu *g);	/* GX on and the CP runs our SQE */
+ 
+ uint32_t a6_pkt7(uint32_t op, uint32_t cnt);
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 349c8df..8ae6991 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -494,6 +494,7 @@ sweet_tl_flush(void)
+ #define GSTAT_OWNERS    6
+ static uint32_t gstat_next = 1;
+ static uint64_t gstat_abs;
++static uint64_t gstat_clk_cyc, gstat_clk_abs;	/* 0169: core cycle counter and mach time of the last 5 s sample */
+ static int gstat_pid[A6_TS_SLOTS];
+ static struct { int pid; uint32_t n; uint64_t busy; } gstat_own[GSTAT_OWNERS + 1];     /* last: everyone else */
+ static uint32_t gstat_n, gstat_missed;
+@@ -538,6 +539,17 @@ gpu_stats_locked(void)
+ 	if (ns < 5000000000ULL) {
+ 		return;
+ 	}
++	/* 0169: core clock = counter delta / mach delta (19.2 MHz); "?" if GX is down or the counter was cleared */
++	char core[24] = "?";
++	uint64_t cyc;
++	if (gpu_ready && a6_core_cycles(&cyc)) {
++		if (gstat_clk_abs && cyc > gstat_clk_cyc && now > gstat_clk_abs)
++			snprintf(core, sizeof(core), "%llu", (cyc - gstat_clk_cyc) * 19200 / (now - gstat_clk_abs) / 1000);
++		gstat_clk_cyc = cyc;
++		gstat_clk_abs = now;
++	} else {
++		gstat_clk_abs = 0;
++	}
+ 	if (gstat_n) {
+ 		char who[160] = "", name[24];
+ 		size_t w = 0;
+@@ -550,9 +562,9 @@ gpu_stats_locked(void)
+ 			w += snprintf(who + w, sizeof(who) - w, " %s %u/%llums", name, gstat_own[o].n,
+ 			    gstat_own[o].busy / 19200);
+ 		}
+-		a6_log("5s: %u submits (%u missed), GPU busy %llu ms (%llu%%), longest %llu us, mean %llu us;%s\n",
++		a6_log("5s: %u submits (%u missed), GPU busy %llu ms (%llu%%), longest %llu us, mean %llu us, core %s MHz;%s\n",
+ 		    gstat_n, gstat_missed, gstat_busy / 19200, gstat_busy * 100 / 19200 / (ns / 1000000),
+-		    gstat_longest * 10 / 192, gstat_busy * 10 / 192 / gstat_n, who);
++		    gstat_longest * 10 / 192, gstat_busy * 10 / 192 / gstat_n, core, who);
+ 		sweet_cpusample_tick5s();	/* 0166: sweetcpusample=1 */
+ 	}
+ 	gstat_n = gstat_missed = 0;
+-- 
+2.56.0
+
