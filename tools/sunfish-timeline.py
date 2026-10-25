@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-frame timeline from the kernel's "SWEET TL:" lines (xnu 0163, boot-arg sweettrace=1).
 
-  tools/sunfish-timeline.py LOG [START_MARKER [END_MARKER]]
+  tools/sunfish-timeline.py [--ctl FILE --pid N] LOG [START_MARKER [END_MARKER]]
 
 Reads the live log (default ../logs/usb-live.log); with markers, only the lines between
 "=== START" and "=== END" (as written by tools/sunfish-fpsbench.sh). Prints:
@@ -10,6 +10,8 @@ Reads the live log (default ../logs/usb-live.log); with markers, only the lines 
   - per-submit GPU time by owner (pid 0 = kernel presents)
   - gaps along the chain, per swap: last backboardd GPU end -> swap, swap -> present begin,
     present begin -> present end (tick thread blocked), present submit -> GPU start/end
+--ctl FILE --pid N: also read "CTL pid idx C D F0 F1 Q H" lines (hex mach ticks, SWEET_CTL=FILE in the Metal client; see
+NativeBridgeMetalFrontend.mm) for backboardd's pid N and split GPU end -> swap into stages (see ctl_report).
 Records are ev,t,a,b,c in hex: 1 swap 2 tick 3 notified 4 present begin 5 present end 6 submit 7 gpu span 8 clock.
 Mach ticks and the CP_ALWAYS_ON counter both run at 19.2 MHz here (ratio measured 1.0000; 718M ticks in a 37 s bench); the clock pairs give the offset.
 """
@@ -55,8 +57,61 @@ def stats(name, xs, unit='ms'):
         return
     print(f'  {name:42s} n={len(xs):5d}  p50 {pct(xs,.5):7.2f}  p95 {pct(xs,.95):7.2f}  max {xs[-1]:7.2f} {unit}')
 
+def load_ctl(path, pid):
+    out = []
+    for line in open(path, errors='replace'):
+        p = line.split()
+        if len(p) != 9 or p[0] != 'CTL':
+            continue
+        try:
+            if int(p[1]) != pid:
+                continue
+            out.append(tuple(int(x, 16) for x in p[2:]))   # idx C D F0 F1 Q H
+        except ValueError:
+            continue
+    return sorted(out, key=lambda r: r[6])
+
+def ctl_report(ctl, sw, spans, pid, ms):
+    """Per swap: latest backboardd command buffer with H before the swap; GPU end = latest pid span end before its D."""
+    print(f'completion chain (--ctl, pid {pid}), per swap:')
+    hs = [r[6] for r in ctl]
+    ends = sorted((e, s_) for s_, e, f, p in spans if p == pid)
+    endt = [x[0] for x in ends]
+    st = {k: [] for k in ('gend_d', 'd_f0', 'f0_f1', 'f1_q', 'q_h', 'h_swap', 'c_gstart', 'gend_swap')}
+    for t in sw:
+        i = bisect.bisect_right(hs, t) - 1
+        if i < 0:
+            continue
+        idx, c, d, f0, f1, q, h = ctl[i]
+        if ms(t - h) > 100 or not (c and d and f0 and f1 and q):
+            continue
+        j = bisect.bisect_right(endt, d) - 1
+        if j >= 0 and ms(d - endt[j]) < 100:
+            st['gend_d'].append(ms(d - endt[j]))
+            st['gend_swap'].append(ms(t - endt[j]))
+            st['c_gstart'].append(ms(ends[j][1] - c))
+        st['d_f0'].append(ms(f0 - d)); st['f0_f1'].append(ms(f1 - f0)); st['f1_q'].append(ms(q - f1))
+        st['q_h'].append(ms(h - q)); st['h_swap'].append(ms(t - h))
+    stats('GPU end -> completed() (waiter wake)', st['gend_d'])
+    stats('completed() -> -finish start', st['d_f0'])
+    stats('flushSurfaces', st['f0_f1'])
+    stats('finish -> completion queue block', st['f1_q'])
+    stats('CA completed handlers', st['q_h'])
+    stats('handlers done -> swap (CA work)', st['h_swap'])
+    stats('GPU end -> swap (same buffers)', st['gend_swap'])
+    stats('commit -> GPU start (span start - C)', st['c_gstart'])
+
 def main():
     a = sys.argv[1:]
+    ctlf = pid = None
+    while '--ctl' in a or '--pid' in a:
+        for k in ('--ctl', '--pid'):
+            if k in a:
+                i = a.index(k)
+                v = a[i + 1]
+                del a[i:i + 2]
+                if k == '--ctl': ctlf = v
+                else: pid = int(v)
     path = a[0] if a else '../logs/usb-live.log'
     recs, clocks = load(path, a[1] if len(a) > 1 else None, a[2] if len(a) > 2 else None)
     if not recs or not clocks:
@@ -131,6 +186,10 @@ def main():
     stats('present call duration (tick blocked)', pb_dur)
     stats('present submit -> blit GPU start', pres_wait)
     stats('present blit GPU time', pres_gpu)
+    if ctlf:
+        if pid is None:
+            sys.exit('--ctl needs --pid N (backboardd)')
+        ctl_report(load_ctl(ctlf, pid), sw, spans, pid, ms)
 
 if __name__ == '__main__':
     main()

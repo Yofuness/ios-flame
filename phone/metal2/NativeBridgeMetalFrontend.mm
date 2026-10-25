@@ -22,6 +22,9 @@
 #include <sys/mman.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <mach/mach_time.h>
 #include <execinfo.h>
 #include <mach/mach.h>
 #include "bridge/NativeMetalObjects.h"
@@ -505,8 +508,39 @@ static void notified(void *context,uint64_t value) {
 @property(nonatomic) NmbQueue *handle;
 @property(atomic,strong) dispatch_queue_t completionQueue;   // SPI: where command buffers' handlers run (nil: the runtime's thread)
 @end
+// sweet ctl (SWEET_CTL=/path): per command buffer mach_absolute_time stamps of the commit -> completion chain, to split the
+// GPU end -> SwapEnd gap. Off (one cached getenv) unless set. Line: "CTL pid idx C D F0 F1 Q H" (hex mach ticks).
+static const char *ctlPath(){
+ static const char *path=[]{const char *p=getenv("SWEET_CTL");return p&&*p?p:(const char *)nullptr;}();
+ return path;
+}
+struct CtlRec{uint32_t idx;uint64_t c,d,f0,f1,q,h;};
+static CtlRec gCtlBuf[512];
+static int gCtlN=0;
+static uint64_t gCtlLastFlush=0;
+static std::mutex gCtlLock;
+static void ctlFlushLocked(){
+ if(!gCtlN)return;
+ std::string out;char line[160];const int pid=(int)getpid();
+ for(int i=0;i<gCtlN;i++){
+  const CtlRec &r=gCtlBuf[i];
+  int n=snprintf(line,sizeof line,"CTL %d %x %llx %llx %llx %llx %llx %llx\n",pid,r.idx,(unsigned long long)r.c,(unsigned long long)r.d,
+   (unsigned long long)r.f0,(unsigned long long)r.f1,(unsigned long long)r.q,(unsigned long long)r.h);
+  out.append(line,n);
+ }
+ gCtlN=0;
+ int fd=open(ctlPath(),O_WRONLY|O_CREAT|O_APPEND,0666);
+ if(fd>=0){(void)!write(fd,out.data(),out.size());close(fd);}
+}
+static void ctlPush(const CtlRec &r){
+ std::lock_guard<std::mutex> lock(gCtlLock);
+ gCtlBuf[gCtlN++]=r;
+ const uint64_t now=mach_absolute_time();
+ if(gCtlN==512||now-gCtlLastFlush>2*19200000ull){gCtlLastFlush=now;ctlFlushLocked();}
+}
 @interface NBCommandBuffer : NBObject {
 @public
+ uint64_t ctlC,ctlD,ctlF0,ctlF1,ctlQ;   // sweet ctl stamps
  EncodedWork encodedWork;   // the command buffer's single encoder thread, not global counter deltas
  uint64_t createdUs;
 }
@@ -1169,7 +1203,9 @@ static void scheduled(void *context);
 }
 // After completion (or a refusal): invalidate the CPU's view of imported surfaces, then completed handlers, once.
 - (void)finish {
+ if(ctlPath())ctlF0=mach_absolute_time();   // sweet ctl
  flushSurfaces(_surfaces);
+ if(ctlPath())ctlF1=mach_absolute_time();
  // Actual GPU completion (or a local refusal that never submitted) is the
  // release point. A retained completed command must not pin every old frame.
  [_surfaces removeAllObjects];[_resourceOwners removeAllObjects];
@@ -1181,7 +1217,9 @@ static void scheduled(void *context);
   completedHandlers=[_completedHandlers copy];[_completedHandlers removeAllObjects];
  }
  void (^run)(void)=^{
+  if(ctlPath())self->ctlQ=mach_absolute_time();   // sweet ctl
   for(MTLCommandBufferHandler block in completedHandlers)block((id<MTLCommandBuffer>)self);
+  if(ctlPath()&&self->ctlC){CtlRec r{self.commitIndex,self->ctlC,self->ctlD,self->ctlF0,self->ctlF1,self->ctlQ,mach_absolute_time()};ctlPush(r);}
   dispatch_group_leave(self->_handlers);
  };
  dispatch_queue_t queue=_queue.completionQueue;
@@ -1191,6 +1229,7 @@ static void scheduled(void *context);
  if(self.committed){NBLOG(@"native-metal: commit twice");return;}
  self.committed=YES;
  self.committedUs=nowUs();
+ if(ctlPath())ctlC=mach_absolute_time();   // sweet ctl
  {
   std::lock_guard<std::mutex> lock(gCommitLock);
   // Assign once under the same lock as publication. A concurrent commit cannot reuse this index.
@@ -1235,6 +1274,7 @@ static void scheduled(void *context) {[(__bridge NBCommandBuffer *)context didSc
 static void completed(void *context) {
  gCompleted++;
  NBCommandBuffer *commandBuffer=(__bridge_transfer NBCommandBuffer *)context;
+ if(ctlPath())commandBuffer->ctlD=mach_absolute_time();   // sweet ctl
  {
   const uint64_t took=nowUs()-commandBuffer.committedUs;
   gTimeEncodeToCommit.count++;gTimeEncodeToCommit.total+=took;
