@@ -14,6 +14,8 @@
 - **Git:** push only to branch `sunfish`, never force-push.
 - **Out of git:** Apple's files (`research/` is gitignored) and Wi-Fi credentials.
 - **Logs:** the newest dated log is `docs/workday.md`. Add a section for each work session with exact numbers.
+- **Experiments:** every experiment gets a `docs/sunfish/experiments.md` line before the session ends, including dead
+  ends. Never delete lines.
 - **The plan:** `docs/sunfish/plan.md` is the current plan. Keep it current as you work:
   - Mark each step done or failed, with its numbers, in the same commit as the work.
   - Add new findings or next steps as you find them.

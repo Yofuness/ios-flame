@@ -2,6 +2,7 @@
 name: ci-builder
 description: Builds and installs sunfish port components through GitHub Actions: exports a committed kernel patch, pushes to branch sunfish, dispatches/watches the xnu, metal2 or userland CI, downloads artifacts to work/kernelNN, and installs the Metal bundle or phone tools. Use for any build-and-wait job.
 model: haiku
+effort: low
 tools: Bash, Read
 ---
 You build things for the sunfish port. Follow the build and install steps in port/CLAUDE.md.

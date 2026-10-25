@@ -1,0 +1,35 @@
+# Sunfish experiments log (append-only)
+
+One line per experiment, dead ends included. Never delete or rewrite lines; add a new line to correct one.
+fps = panel updates/s from `tools/sunfish-fpsbench.sh` (Settings swipes) unless noted; GPU ms = backboardd GPU ms per frame/submit.
+Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a dead end.
+
+| date | patch / switch | hypothesis | predicted ms saved | measured fps and GPU ms | verdict | commit |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | `sweetfb_hz=60` | 30 Hz vsync caps the UI | - | 4.3 -> 4.9 fps | kept | df05f86 |
+| 2026-10-23 | drop launchd job vmd (Visual Voicemail) | vmd spins a core without cellular | CPU | 4.9 -> 16.7 fps | kept | df05f86 |
+| 2026-10-23 | drop launchd job ReportCrash | busy with TTS synthesizer crashes | CPU | 16.7 -> 17.2 fps | kept (within noise) | df05f86 |
+| 2026-10-23 | xnu 0145 GMEM 512 KB + UBWC hbb 14, Turnip A618 device info | correct A618 config for Turnip | bring-up | first Metal UI, 22.8 fps (old metric); no isolated A/B | kept (required) | ddb9e31 |
+| 2026-10-23 | xnu 0146 CP ROQ, VBIF QoS, UCHE_CLIENT_PF as kgsl | match kgsl init | bring-up | no isolated A/B | kept | e59cf83 |
+| 2026-10-23 | xnu 0147 UI threads prefer A76 (`sweetbig=0` off) | render thread lands on A55s | CPU | no bench recorded; 0166 later saw 55-75% of render CPU on A76s | inconclusive | 9b6dfee |
+| 2026-10-23 | xnu 0148 stock clock levels 650/800/825 (`sweetgpufreq=6..8`) | more GPU clock | some | see GPU clock line | kept (levels), no gain | c3ff231 |
+| 2026-10-23 | GPU clock 430 / 565 / 650 MHz | GPU-bound | several | 15.5 / 17.4 / 17.8 fps; GPU ms unchanged | dead end | - |
+| 2026-10-23 | xnu 0156 per-client pool reuse | stop 10 MB bzero per app switch | memory | 73 hits in 6 switches; no fps change | kept (memory, not fps) | eeca377 |
+| 2026-10-23 | xnu 0157 no wait-for-idle between submits (`sweetwfi=1` restores) | WFI serializes submits | few | 15.5 vs 15.4 fps at 430 MHz | kept, no gain | 095806b |
+| 2026-10-23 | xnu 0158 non-blocking present | present wait blocks vsync | ~10 | 12.5 fps (vs 17.4); put off 701/600 frames | dead end (off) | c149da1 |
+| 2026-10-23 | turnip 0102 `TU_SWEET_PRIM_ORDER=0` | raster-order prim flush is the 0.33 ms/draw | ~5 | no change in fps or GPU ms | dead end | 8d02b68 |
+| 2026-10-24 | `TU_AUTOTUNE_ALGO`, `TU_DEBUG=gmem/sysmem` | render mode / tiling cost | few | no change | dead end | - |
+| 2026-10-24 | xnu 0159 + turnip 0104 + bridge 0102 (IOSurface aliasing, no shadow copies) | copies are ~8 of 11.5 ms (trace) | ~8 | dr23 frame 9.4 -> 6.4 ms, dr14 7.4 -> 4.4 ms (3 ms); fps 17-19 (barely moved) | kept | 4a2077c e7ec319 0e768b6 |
+| 2026-10-24 | `sweetfb_thread=1` present thread | inline present delays vsync | ~10 | ~17 then ~14.7 fps | dead end (off) | - |
+| 2026-10-24 | backboardd `CA_FORCE_TIMER=1` (launchd.plist) | CA ignores our vsync (chip-id gate) | pacing | swaps == panel updates, 20-23/s | kept | 7058eca |
+| 2026-10-24 | xnu 0161 present on swap (`sweetfb_onswap=1`) | present off the vsync tick | ~10 | ~14 fps | dead end (off) | cad3009 |
+| 2026-10-24 | xnu 0163 timeline (`sweettrace=1`) | measurement | 0 | no overhead (22.3 / 21.7 fps) | kept (tool) | 3e72521 |
+| 2026-10-24 | `sweetpresentwait=0` | blocking present costs swaps | - | 24.5 swaps/s but 13.7-14.4 fps | dead end | 53068a9 |
+| 2026-10-24 | xnu 0164 `sweetpresentslots=4` | more presents in flight | - | 14.8-15.0 fps, still 336-407 put off | dead end | a122fae |
+| 2026-10-24 | turnip 0105 relaxed 16-byte pitch (first 0105) | remove last 3 ms of A8 copies | 3 | SMMU fault, DeviceLost | failed (phone/turnip/failed) | 245a190 |
+| 2026-10-24 | SWEET_CULL dead-draw culling (bridge) | 3 opaque fills under wallpaper waste fill | 3-10 | 13.2-13.4 vs 13.1-15.3 ms/submit; longest still ~40 ms | dead end (works, no gain) | 4803137 |
+| 2026-10-24 | sysmem under swipes | tile overhead makes the 40 ms frames | 10+ | same 13-16 ms/submit, longest 40-45 ms | dead end | e9fd4fa |
+| 2026-10-24 | bridge 0104 `METAL2VULKAN_HALF_RELAXED` | half math lost in translation | few | no gain; ir3 already used 16-bit; the stat reads 0 on a6xx | dead end | 07f83f2 |
+| 2026-10-24 | xnu 0165 `sweetvsyncahead=8/16.7` | beat CA's vbl threshold | pacing | no effect | dead end | 244f7e7 |
+| 2026-10-24 | xnu 0166 `sweetcpusample` | CA is CPU-bound | - | render thread 10-15 ms CPU/frame, 55-75% on A76; CPUs mostly idle | dead end (waiting, not CPU) | fe0675c |
+| 2026-10-24 | SWEET_CTL completion stamps | completion path is slow | - | GPU end -> handlers < 1 ms | dead end | 98a324c |

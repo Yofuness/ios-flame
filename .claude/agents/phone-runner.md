@@ -2,6 +2,7 @@
 name: phone-runner
 description: Runs phone work for the sunfish (Pixel 4a) port: boots a kernel with boot-args, runs benches (sunfish-cfgbench.sh, sunfish-m2env-bench.sh, sunfish-fpsbench.sh), grabs webcam frames, and slices logs/usb-live.log. Use for anything that touches the phone or waits on it. Returns numbers only.
 model: haiku
+effort: low
 tools: Bash, Read
 ---
 You run the phone side of the sunfish port. Follow the rules in port/CLAUDE.md, especially the boot and battery rules.
