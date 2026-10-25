@@ -49,3 +49,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 xnu 0171 (kernel47): GPUCC diff after recovery: PLL0 L_VAL 3a→0, FRAC changed, unlocked → GX collapse wipes GPU_CC_PLL0 = cause of 14-56 MHz after recovery.
 - 2026-10-25 xnu 0172 (kernel48): PLL0 restore placed before DCVS found PLL intact; DCVS itself zeroes L_VAL → still 56 MHz. 0173 restores after the votes.
 - 2026-10-25 xnu 0173 (kernel49): PLL0 restore after DCVS → LOCK TIMEOUT, core 9 MHz, GPU stops. Hand-rolled Fabia enable does not work; 4th failed attempt at post-recovery clock.
+- 2026-10-25 investigator (Linux sunfish 4.14 clk-alpha-pll.c, gpucc-sdmmagpie.c, kgsl): GPUCC+0 = gpu_cc_pll0 Fabia; GMU firmware owns the GPU clock (kgsl uses gmu dcvs, no PLL code); full fabia configure needs CAL_L + CONFIG/USER/TEST regs and reset recal. xnu 0174 implements that from the boot snapshot.

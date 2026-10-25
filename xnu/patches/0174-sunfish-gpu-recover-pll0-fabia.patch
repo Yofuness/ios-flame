@@ -1,0 +1,98 @@
+From 30de3f8690f59a4b334acfd3ebd583e04fc2617c Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 15:59:09 -0400
+Subject: [PATCH] sunfish: GPU recovery: PLL0 restore as Linux fabia
+ configure+enable (CAL_L, config regs, reset recal), PLL step logs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 37 +++++++++++++++++++++++++++++--------
+ 1 file changed, 29 insertions(+), 8 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index ae99073..8f2124a 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -60,6 +60,11 @@ static void zero_pa(uint64_t pa, uint64_t size)
+ #define GPUCC_AHB	0x1078
+ #define GPUCC_CXO	0x109c
+ #define GPUCC_CX_GMU	0x1098
++/* GPU_CC_PLL0 (Fabia) register offsets, 0172+ */
++#define PLL_MODE	0x00
++#define PLL_L_VAL	0x04
++#define PLL_OPMODE	0x2c
++#define PLL_FRAC	0x38
+ 
+ #define GMU_ITCM	0x1b400
+ #define GMU_DTCM	0x1c400
+@@ -721,7 +726,11 @@ static int gpucc_pll0_restore(void);
+ static int a6_gx_on(struct a6_gpu *g)
+ {
+ 	uint32_t dret;
++#define PLL0_LOG(at) a6_log("pll0 at %s: mode %x L %x cal %x frac %x\n", at, rd32(GPUCC + PLL_MODE), \
++	    rd32(GPUCC + PLL_L_VAL), rd32(GPUCC + 0x08), rd32(GPUCC + PLL_FRAC))
++	PLL0_LOG("before gx on");
+ 	int rc = gx_rail_on(gx_vote);
++	PLL0_LOG("after gx on");
+ 	/* 0170: the GX collapse leaves the core clock at ~14 MHz and the GMU treats a vote for the unchanged level
+ 	 * as done, so vote another level first and then the real one to make it reprogram the clock */
+ 	uint32_t want = g->perf_level;
+@@ -729,6 +738,7 @@ static int a6_gx_on(struct a6_gpu *g)
+ 	(void)gx_dcvs(g, &dret);
+ 	g->perf_level = want;
+ 	int dack = gx_dcvs(g, &dret);
++	PLL0_LOG("after dcvs");
+ 	/* 0168: OOB 0 (gpu_set) again as at the end of gmu_hfi: without it the GMU keeps the GPU at its slumber
+ 	 * clock/bus votes and every submit ran ~10x slower after a recovery */
+ 	wr32(GMU_REG(GMU_H2G_SET), 1u << 16);
+@@ -1141,10 +1151,6 @@ static void gpucc_snap_diff(const char *when)
+  * ABL set up and nobody redoes, so the GMU's DCVS lands on a dead PLL (core 14-56 MHz). Restore L and FRAC from the
+  * boot snapshot and run the Fabia enable: output off, OPMODE standby, values, OPMODE run, wait for lock, output on.
+  */
+-#define PLL_MODE	0x00
+-#define PLL_L_VAL	0x04
+-#define PLL_OPMODE	0x2c
+-#define PLL_FRAC	0x38
+ static int gpucc_pll0_restore(void)
+ {
+ 	if (!gpucc_have || gpucc_boot[PLL_L_VAL / 4] == 0) {
+@@ -1155,17 +1161,32 @@ static int gpucc_pll0_restore(void)
+ 		a6_log("pll0 restore: intact (L %x, mode %x)\n", rd32(GPUCC + PLL_L_VAL), rd32(GPUCC + PLL_MODE));
+ 		return 0;
+ 	}
++	/*
++	 * 0174: Linux clk-alpha-pll.c (sunfish 4.14) clk_fabia_pll_configure + clk_alpha_pll_fabia_enable with the
++	 * boot snapshot's values: output off, standby, back into reset so the power-on calibration reruns at CAL_L,
++	 * CAL_L/L/FRAC and the CONFIG/USER/TEST registers, HW_UPDATE_LOGIC_BYPASS, RESET_N, run, lock, outputs on.
++	 */
++	static const uint32_t cfg[] = { 0x08, 0x04, 0x38, 0x14, 0x18, 0x0c, 0x10, 0x1c, 0x20 };
+ 	uint32_t mode = rd32(GPUCC + PLL_MODE);
+ 	wr32(GPUCC + PLL_MODE, mode & ~1u);			/* OUTCTRL off */
+ 	wr32(GPUCC + PLL_OPMODE, 0);				/* standby */
+-	wr32(GPUCC + PLL_L_VAL, gpucc_boot[PLL_L_VAL / 4]);
+-	wr32(GPUCC + PLL_FRAC, gpucc_boot[PLL_FRAC / 4]);
++	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) & ~(1u << 2));	/* into reset */
++	a6_delay_ms(1);
++	for (unsigned i = 0; i < sizeof(cfg) / sizeof(cfg[0]); i++) {
++		uint32_t v = gpucc_boot[cfg[i] / 4];
++		if (cfg[i] == 0x08 && v == 0)
++			v = 0x3f;				/* CAL_L as gpucc-sdmmagpie */
++		wr32(GPUCC + cfg[i], v);
++	}
++	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) | (1u << 23));	/* HW_UPDATE_LOGIC_BYPASS */
+ 	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) | (1u << 2));	/* RESET_N */
+ 	wr32(GPUCC + PLL_OPMODE, 1);				/* run */
+ 	int lock = wait_bit(GPUCC + PLL_MODE, 1u << 31, 1, 10);
++	wr32(GPUCC + 0x0c, rd32(GPUCC + 0x0c) | 0x7);		/* USER_CTL output enables */
+ 	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) | 1u);	/* OUTCTRL on */
+-	a6_log("pll0 restore: L %x frac %x, mode %x -> %x, %s\n", gpucc_boot[PLL_L_VAL / 4], gpucc_boot[PLL_FRAC / 4],
+-	    mode, rd32(GPUCC + PLL_MODE), lock ? "LOCK TIMEOUT" : "locked");
++	a6_log("pll0 restore: L %x frac %x cal %x cfg %x/%x user %x/%x, mode %x -> %x, %s\n",
++	    rd32(GPUCC + PLL_L_VAL), rd32(GPUCC + PLL_FRAC), rd32(GPUCC + 0x08), rd32(GPUCC + 0x14), rd32(GPUCC + 0x18),
++	    rd32(GPUCC + 0x0c), rd32(GPUCC + 0x10), mode, rd32(GPUCC + PLL_MODE), lock ? "LOCK TIMEOUT" : "locked");
+ 	return lock;
+ }
+ 
+-- 
+2.56.0
+
