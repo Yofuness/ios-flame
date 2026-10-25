@@ -429,3 +429,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Before the hang: 17.0 panel updates/s, 13.7 ms per submit.
   - My Fabia enable sequence is wrong or incomplete (CONFIG_CTL, CAL_L or the PLL_UPDATE latch?). This is the 4th attempt at the post-recovery clock (0168, 0170, 0172, 0173).
 - Defaults are unaffected: everything is behind `sweetgpurecover=2`.
+- **xnu 0174 (kernel50, rec9): the post-recovery clock is fixed.**
+  - PLL0 restore follows Linux's Fabia configure + enable (reset recal, CAL_L 3f, CONFIG/USER/TEST registers from the boot snapshot).
+  - Step logs: PLL0 is intact before and after GX on (L 3a). **The GMU's DCVS vote is what zeroes it** (after dcvs: mode 1000005, L 0, frac e881).
+  - The restore then locked (mode d1800005). Recovery took 27.8 ms and backboardd was killed.
+  - **The core clock reads 564 MHz on every line after the hang,** up to 303 s.
+  - backboardd: 13.3 ms per submit before the hang, 20.3-20.5 ms after.
+  - Benches: before 19.3 swaps/s and 19.0 panel updates/s; after, 9.0 / 8.6 and 9.2 / 9.0.
+  - The post-hang benches ran on a Batteries widget panel, not the home screen, so swaps/s is not comparable. The cause of the remaining ~50% gap on that screen is open.
