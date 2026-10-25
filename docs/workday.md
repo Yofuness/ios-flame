@@ -448,3 +448,4 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 
   - The injected present hang recovered in 26.2 ms. PLL0 relocked and backboardd was killed and respawned.
   - rec9's low numbers came from the screen: the bench swipes alternate 900→150 and 150→900, so a bench can end on the widget (Today) panel. Check for the home screen before each bench.
+- sunfish-boot.sh now passes `sweetgpurecover=2 sweetgpukill=1` by default (from kernel50 on; older kernels ignore them).
