@@ -1,4 +1,4 @@
-From 8cc26cb7f9a7e75e26d0bc86675ab0e3dfce0868 Mon Sep 17 00:00:00 2001
+From 939d47a126aad4f67829ce9acd61b8f02dddf62a Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sat, 24 Oct 2026 20:29:37 -0400
 Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
@@ -6,10 +6,10 @@ Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
 
 ---
  bsd/conf/files            |    1 +
- bsd/dev/sweet_cpusample.c |  167 ++
+ bsd/dev/sweet_cpusample.c |  172 ++
  bsd/dev/sweet_gpu.c       |    2 +
  osfmk/kern/thread.c       | 4272 +++++++++++++++++++++++++++++++++++++
- 4 files changed, 4442 insertions(+)
+ 4 files changed, 4447 insertions(+)
  create mode 100644 bsd/dev/sweet_cpusample.c
  create mode 100644 osfmk/kern/thread.c
 
@@ -27,10 +27,10 @@ index df7c863..718e6f9 100644
  bsd/dev/sweet_pmem.c			standard
 diff --git a/bsd/dev/sweet_cpusample.c b/bsd/dev/sweet_cpusample.c
 new file mode 100644
-index 0000000..97300c3
+index 0000000..cac58fa
 --- /dev/null
 +++ b/bsd/dev/sweet_cpusample.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,172 @@
 +/*
 + * 0166: CPU use per thread and core type, without stopping anything.
 + *
@@ -178,10 +178,14 @@ index 0000000..97300c3
 +	clock_interval_to_deadline(CS_TICK_US, NSEC_PER_USEC, &dl);
 +	timer_call_enter(cs_timer, dl, TIMER_CALL_SYS_CRITICAL);
 +	for (;;) {
-+		(void)tsleep(&chan, PZERO, "sweetcpus", 5 * hz);
++		clock_interval_to_deadline(5, NSEC_PER_SEC, &dl);
++		(void)assert_wait_deadline(&chan, THREAD_UNINT, dl);
++		thread_block(THREAD_CONTINUE_NULL);
 +		struct cs_tab *old = &cs_tabs[cs_cur & 1];
 +		cs_cur++;                       /* the timer now fills the other table */
-+		(void)tsleep(&chan, PZERO, "sweetcpus", hz / 50 + 1);   /* let a running tick finish */
++		clock_interval_to_deadline(20, NSEC_PER_MSEC, &dl);   /* let a running tick finish */
++		(void)assert_wait_deadline(&chan, THREAD_UNINT, dl);
++		thread_block(THREAD_CONTINUE_NULL);
 +		cs_report(old);
 +		bzero(old, sizeof(*old));
 +	}
@@ -192,7 +196,8 @@ index 0000000..97300c3
 +{
 +	uint32_t v = 0;
 +	thread_t thread;
-+	PE_parse_boot_argn("sweetcpusample", &v, sizeof(v));
++	boolean_t found = PE_parse_boot_argn("sweetcpusample", &v, sizeof(v));
++	printf("SWEET CPU: init sweetcpusample=%u (found %d)\n", v, (int)found);
 +	if (v && kernel_thread_start(cs_thread, NULL, &thread) == KERN_SUCCESS) {
 +		thread_deallocate(thread);
 +	}
