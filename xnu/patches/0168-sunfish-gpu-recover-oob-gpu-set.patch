@@ -1,0 +1,36 @@
+From 08a38b6ffbe120d59fd4c8b53292f2ed7d7ef14a Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 14:21:15 -0400
+Subject: [PATCH] sunfish: GPU recovery: OOB gpu_set again after GX on (full
+ speed after recovery)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 8ee5804..9bd62b6 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -718,9 +718,14 @@ static int a6_gx_on(struct a6_gpu *g)
+ 	uint32_t dret;
+ 	int rc = gx_rail_on(gx_vote);
+ 	int dack = gx_dcvs(g, &dret);
+-	a6_log("recover2: gx on: rail+sptprac %s, dcvs %s ret %x, gx gdsc %x\n", rc ? "TIMEOUT" : "ok",
+-	    dack ? "TIMEOUT" : "acked", dret, rd32(GPUCC + GPUCC_GX_GDSCR));
+-	return rc | dack;
++	/* 0168: OOB 0 (gpu_set) again as at the end of gmu_hfi: without it the GMU keeps the GPU at its slumber
++	 * clock/bus votes and every submit ran ~10x slower after a recovery */
++	wr32(GMU_REG(GMU_H2G_SET), 1u << 16);
++	int ack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << 24, 1, 1000);
++	wr32(GMU_REG(GMU_G2H_CLR), 1u << 24);
++	a6_log("recover2: gx on: rail+sptprac %s, dcvs %s ret %x, oob gpu_set %s, gx gdsc %x\n", rc ? "TIMEOUT" : "ok",
++	    dack ? "TIMEOUT" : "acked", dret, ack ? "TIMEOUT" : "acked", rd32(GPUCC + GPUCC_GX_GDSCR));
++	return rc | dack | ack;
+ }
+ 
+ /*
+-- 
+2.56.0
+
