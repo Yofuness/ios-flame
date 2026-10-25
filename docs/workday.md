@@ -476,3 +476,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - **Two silent resets during app soaks: 565 MHz at 468 s and 430 MHz at ~179 s.** Neither left a panic line. Lowering the clock does not prevent them.
   - The rst2 boot (16:57) collided with the driver. Afterwards the phone showed the ABL unlocked-warning screen with the USB link down.
 - Lesson: stopping an agent does not stop the background scripts it started. Check `ps` for scratchpad scripts after every TaskStop.
+- **[17:02] rst3: a raw disk read resets the phone, reproducibly.**
+  - Boot: kernel50, `sweetpresentwait=1 flamereboot=0`. Booted fine at 4454 mV; snaps OK.
+  - The phone has no `dd` (/var/local/bin/dd → toybox without dd).
+  - I ran `toybox xxd -s $((0xc80ffb-1153)*4096) -l 64 /dev/rufsroot0`, i.e. a read 64 bytes long at the rescue-block offset computed from NOTES.md's flame userdata size.
+  - The phone dropped to fastboot instantly. The live log stops at 159.0 s, with no panic line.
+  - That offset is probably past the end of sunfish's userdata (the size is unknown on sunfish). **An out-of-range or raw read on rufsroot0 kills the kernel at once and silently.**
+  - The soak resets look the same (instant stop, no panic). A UFS I/O fault while apps load is now a suspect.
+  - Next: find sunfish's real userdata size (shim log "ufs: userdata first= blocks=", or the GPT from backup/), and look at how the XNU UFS driver handles an out-of-range LBA or a UFS error (sense data, timeouts).
