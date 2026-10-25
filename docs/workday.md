@@ -491,3 +491,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
     - Fix: copyout/copyin for B_PHYS.
     - Also: an LBA range check in ufs_read_blocks, log the partition geometry, and more state on timeouts.
   - **The soak resets have no UFS lines before them** (no timeouts or errors), so they are probably a different cause. Still open.
+- **[17:55] rsc1 (kernel51, xnu 0175): raw reads no longer reset the phone.**
+  - The boot-args line was logged at "2815 s": uptime did not reset across the last reset, but it is a fresh boot. The partition-size line does not reach the live log.
+  - `toybox xxd -p -s OFF -l N /dev/rufsroot0` at offset 0 and at the rescue block (28728186) works, and the phone stays up. The first rescue block starts with `SWEETRSC`, total 0x4e093 bytes.
+  - **New bug:** xxd -p reads the raw device 30 bytes at a time, and every sub-block read returns the start of its 4 KB block. So the rescue dump is garbage: the header repeats every 30 bytes.
+  - The decoded fragments show a panic report around 159.8 s, the rst3 xxd reset (lr 0xfffffe0007863940), so rst3 was a panic. The panic string is not readable.
+  - /dev/ufsroot0 (the block device) is busy because it is mounted, and xxd's -c is limited to 256.
+  - Next: make the raw read path honour the offset within a block (or reject unaligned raw I/O with EINVAL), or add a phone tool that preads whole 4 KB blocks.
