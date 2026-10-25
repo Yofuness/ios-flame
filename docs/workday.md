@@ -285,3 +285,17 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Per-CPU busy% during swipes: c0 7-18, c1-c5 0-12, c6/c7 8-24. The CPUs are mostly idle; the GPU is ~30% busy.
 - Reading: neither CPU nor GPU is saturated and the render thread needs only ~10-15 ms per frame, so the ~29 ms GPU end -> swap gap and the ~20 fps are waiting/pacing, not work. A big-core scheduler would save at most a few ms per frame. Open: the completion path (bridge handler thread + dispatch hop to CA) is the one untested hop.
 - Caution: later benches (ctc1/ctc2/notel1/notel2, 7-10 swaps/s) ended on the widgets page (blurred widget materials): the swipe position drifted, so those runs and the mtl2 telemetry ctc numbers are not comparable. Reboot before benching.
+
+## [21:55] Completion-path stamps (metal2 SWEET_CTL + timeline --ctl), fresh boot kernel42, sweetpresentwait=1 sweettrace=1
+- ctlA / ctlB: 19.0 / 19.5 swaps/s (18.1 / 18.7 panel). 1607 CTL records for backboardd (pid 58).
+| hop (per swap) | p50 | p95 | max |
+|---|---|---|---|
+| GPU end -> bridge completed() | 0.18-0.19 ms | 1.6-2.6 ms | 6.8-8.8 ms |
+| completed() -> -finish | 0.00 | 0.01 | 0.02 |
+| flushSurfaces | 0.65 | 1.55-1.68 | 2.4 |
+| -finish -> CA completion queue block | 0.09 | 0.24-0.27 | 0.41 |
+| CA completed handlers | 0.00 | 0.02 | 0.09 |
+| handlers done -> swap | 28.2-28.5 ms | 93.9 ms | 96-100 ms |
+| commit -> GPU start | 0.59 ms | 102-105 ms | 150-162 ms |
+- The bridge and kernel completion path costs <1 ms. All of the 29 ms is after CA knows the frame is done: CA waits for its next usable vsync tick. With render on a tick (~6 ms CPU) plus 13-40 ms of GPU, the previous frame finishes after the following tick, so CA renders every 2nd-3rd tick (~20/s). Lever: per-frame GPU time under ~10 ms (step 2), or a deeper CA pipeline.
+- mtl2-env cleared afterwards.
