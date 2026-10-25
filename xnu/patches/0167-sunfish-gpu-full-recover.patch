@@ -1,0 +1,466 @@
+From 53cee8f4fb0d03e7c5e182ce8138f8ad73b35048 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 13:43:23 -0400
+Subject: [PATCH] sunfish: full GPU recovery (GX power cycle), hang injector,
+ present re-arm, backboardd restart
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c                  | 194 +++++++++++++++++++++++---
+ bsd/dev/sweet_a6xx.h                  |   2 +
+ bsd/dev/sweet_gpu.c                   |  83 +++++++++++
+ iokit/Kernel/arm/SweetFramebuffer.cpp |  11 ++
+ 4 files changed, 267 insertions(+), 23 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index a7e2000..8ee5804 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -15,6 +15,8 @@
+ #include "sweet_a6xx.h"
+ 
+ int a6_submit_wfi;	/* 0157: CP_WAIT_FOR_IDLE after each client submit (boot-arg sweetwfi) */
++int a6_recover_mode = 1;	/* 0167: 2 = full recovery with a GX power cycle (boot-arg sweetgpurecover) */
++int a6_inject_bad_ib;	/* 0167: sweethangtest: the next submit gets an IB at an unmapped address */
+ 
+ #define rd32		a6_rd
+ #define wr32		a6_wr
+@@ -671,6 +673,90 @@ static int hfi_send(struct a6_gpu *g, uint32_t id, uint32_t *msg, uint32_t dword
+ 	return -1;
+ }
+ 
++/*
++ * 0167: the GX-on half of gmu_hfi, shared with a6_recover's power cycle (a6_gx_on). gx_rail_on is kgsl
++ * a6xx_gmu_gfx_rail_on (hfi-use-reg): GX/MX vote, OOB 6 boot_slumber (legacy bits 22/30), then
++ * a6xx_gmu_sptprac_enable (a630/a615 family). gx_dcvs sets the GPU level through the DCVS registers + OOB 7.
++ */
++#if A6_GPU_ID == 618
++static uint32_t gx_vote;	/* gx[lvl0] of the boot, for a6_gx_on */
++
++static int gx_rail_on(uint32_t vote)
++{
++	gx_vote = vote;
++	wr32(GMU_REG(GMU_BOOT_SLUMBER_OPTION), 0);	/* OOB_BOOT_OPTION */
++	wr32(GMU_REG(GMU_GX_VOTE_IDX), vote & 0xff);
++	wr32(GMU_REG(GMU_MX_VOTE_IDX), (vote >> 8) & 0xff);
++	wr32(GMU_REG(GMU_H2G_SET), 1u << (6 + 16));
++	int rack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << (6 + 24), 1, 1000);
++	wr32(GMU_REG(GMU_G2H_CLR), 1u << (6 + 24));
++	wr32(GMU_REG(GMU_GX_SPTPRAC_POWER_CONTROL), 0x00778000);
++	int sp = wait_bit(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS), 1u << 3, 1, 100);
++	a6_log("legacy: gfx rail (gx idx %u mx idx %u) %s, sptprac %s (status %x), g2h %x\n",
++	    vote & 0xff, (vote >> 8) & 0xff, rack ? "TIMEOUT" : "acked", sp ? "TIMEOUT" : "on",
++	    rd32(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS)), rd32(GMU_REG(GMU_G2H_INFO)));
++	return rack | sp;
++}
++
++static int gx_dcvs(struct a6_gpu *g, uint32_t *ret_out)
++{
++	uint32_t lvl = g->perf_level >= 1 && (int)g->perf_level < NLVL ? g->perf_level : 1;
++	wr32(GMU_REG(GMU_DCVS_ACK_OPTION), 0);			/* DCVS_ACK_NONBLOCK */
++	wr32(GMU_REG(GMU_DCVS_PERF_SETTING), (lvl & 0xff) | (3u << 28));	/* CLKSET_OPTION_ATLEAST */
++	wr32(GMU_REG(GMU_DCVS_BW_SETTING), 0);
++	wr32(GMU_REG(GMU_H2G_SET), 1u << (7 + 16));		/* legacy OOB 7 (dcvs) */
++	int dack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << (7 + 24), 1, 1000);
++	*ret_out = rd32(GMU_REG(GMU_DCVS_RETURN));
++	wr32(GMU_REG(GMU_G2H_CLR), 1u << (7 + 24));
++	wr32(GMU_REG(GMU_H2G_SET), 0);
++	return dack;
++}
++
++/* 0167: GX back on after a6_gx_off, without HFI init or a GMU reboot: OOB 6 + SPTPRAC, then OOB 7 */
++static int a6_gx_on(struct a6_gpu *g)
++{
++	uint32_t dret;
++	int rc = gx_rail_on(gx_vote);
++	int dack = gx_dcvs(g, &dret);
++	a6_log("recover2: gx on: rail+sptprac %s, dcvs %s ret %x, gx gdsc %x\n", rc ? "TIMEOUT" : "ok",
++	    dack ? "TIMEOUT" : "acked", dret, rd32(GPUCC + GPUCC_GX_GDSCR));
++	return rc | dack;
++}
++
++/*
++ * 0167: the inverse. OOB 6 released (legacy clear = BIT(req + 24) to HOST2GMU_INTR_SET, kgsl a6xx_gmu_oob_clear),
++ * SPTPRAC off (kgsl a6xx_gmu_sptprac_disable: 0x778001, poll PWR_CLK_STATUS bit 2), then the GX GDSC forced
++ * off (SW_COLLAPSE) and checked. Every wait is bounded; nothing reads GPU registers once GX is gone.
++ */
++static int a6_gx_off(void)
++{
++	uint64_t gdsc = GPUCC + GPUCC_GX_GDSCR;
++	a6_log("recover2: gx off: gx gdsc %x, sptprac status %x, g2h %x\n", rd32(gdsc),
++	    rd32(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS)), rd32(GMU_REG(GMU_G2H_INFO)));
++	wr32(GMU_REG(GMU_H2G_SET), 1u << (6 + 24));		/* clear OOB 6 */
++	a6_delay_ms(1);
++	wr32(GMU_REG(GMU_H2G_SET), 0);
++	wr32(GMU_REG(GMU_GX_SPTPRAC_POWER_CONTROL), 0x00778001);
++	int sp = wait_bit(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS), 1u << 2, 1, 100);
++	a6_log("recover2: sptprac off %s (status %x)\n", sp ? "TIMEOUT" : "ok", rd32(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS)));
++	wr32(gdsc, rd32(gdsc) | 1u);				/* SW_COLLAPSE */
++	int gd = wait_bit(gdsc, 1u << 31, 0, 100);
++	bool up = a6_gx_up();
++	a6_log("recover2: gx gdsc -> %x %s, gx_up %d\n", rd32(gdsc), gd ? "TIMEOUT" : "off", up);
++	return up ? -1 : 0;
++}
++
++static int gbif_halt_bounded(void)
++{
++	wr32(GREG(0x3c45), 0x3);		/* GBIF_HALT: client + arbiter */
++	int a = wait_bit(GREG(0x3c46), 0x3, 1, 100);
++	wr32(GREG(0x16), 1);			/* RBBM_GBIF_HALT */
++	int b = wait_bit(GREG(0x17), 1, 1, 100);	/* RBBM_GBIF_HALT_ACK */
++	a6_log("recover2: gbif halt ack %s, rbbm halt ack %s\n", a ? "TIMEOUT" : "ok", b ? "TIMEOUT" : "ok");
++	return a | b;
++}
++#endif
++
+ static int gmu_hfi(struct a6_gpu *g)
+ {
+ 	static uint32_t msg[256];
+@@ -686,19 +772,7 @@ static int gmu_hfi(struct a6_gpu *g)
+ 	 * GPU level then goes through the DCVS registers + OOB 7, not HFI.
+ 	 */
+ 	uint32_t lvl0 = g->perf_level >= 1 && (int)g->perf_level < NLVL ? g->perf_level : 1;
+-	/* kgsl a6xx_gmu_gfx_rail_on (hfi-use-reg): GX/MX vote, OOB 6 boot_slumber (legacy bits 22/30) */
+-	wr32(GMU_REG(GMU_BOOT_SLUMBER_OPTION), 0);	/* OOB_BOOT_OPTION */
+-	wr32(GMU_REG(GMU_GX_VOTE_IDX), gx[lvl0] & 0xff);
+-	wr32(GMU_REG(GMU_MX_VOTE_IDX), (gx[lvl0] >> 8) & 0xff);
+-	wr32(GMU_REG(GMU_H2G_SET), 1u << (6 + 16));
+-	int rack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << (6 + 24), 1, 1000);
+-	wr32(GMU_REG(GMU_G2H_CLR), 1u << (6 + 24));
+-	/* kgsl a6xx_gmu_sptprac_enable (a630/a615 family) */
+-	wr32(GMU_REG(GMU_GX_SPTPRAC_POWER_CONTROL), 0x00778000);
+-	int sp = wait_bit(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS), 1u << 3, 1, 100);
+-	a6_log("legacy: gfx rail (gx idx %u mx idx %u) %s, sptprac %s (status %x), g2h %x\n",
+-	    gx[lvl0] & 0xff, (gx[lvl0] >> 8) & 0xff, rack ? "TIMEOUT" : "acked", sp ? "TIMEOUT" : "on",
+-	    rd32(GMU_REG(GMU_SPTPRAC_PWR_CLK_STATUS)), rd32(GMU_REG(GMU_G2H_INFO)));
++	(void)gx_rail_on(gx[lvl0]);
+ 	wr32(GMU_REG(GMU_HFI_CTRL_INIT), 1);
+ 	int hs = wait_bit(GMU_REG(GMU_HFI_CTRL), 1, 1, 100);
+ 	a6_log("hfi: ctrl init -> status %x %s\n", rd32(GMU_REG(GMU_HFI_CTRL)), hs ? "TIMEOUT" : "ok");
+@@ -741,15 +815,8 @@ static int gmu_hfi(struct a6_gpu *g)
+ 	rc |= hfi_send(g, 3, msg, 32 + 128);
+ 	memset(msg, 0, sizeof(msg));
+ 	rc |= hfi_send(g, 5, msg, 1);	/* H2F_MSG_TEST */
+-	uint32_t lvl = g->perf_level >= 1 && (int)g->perf_level < NLVL ? g->perf_level : 1;
+-	wr32(GMU_REG(GMU_DCVS_ACK_OPTION), 0);			/* DCVS_ACK_NONBLOCK */
+-	wr32(GMU_REG(GMU_DCVS_PERF_SETTING), (lvl & 0xff) | (3u << 28));	/* CLKSET_OPTION_ATLEAST */
+-	wr32(GMU_REG(GMU_DCVS_BW_SETTING), 0);
+-	wr32(GMU_REG(GMU_H2G_SET), 1u << (7 + 16));		/* legacy OOB 7 (dcvs) */
+-	int dack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << (7 + 24), 1, 1000);
+-	uint32_t dret = rd32(GMU_REG(GMU_DCVS_RETURN));
+-	wr32(GMU_REG(GMU_G2H_CLR), 1u << (7 + 24));
+-	wr32(GMU_REG(GMU_H2G_SET), 0);
++	uint32_t lvl = g->perf_level >= 1 && (int)g->perf_level < NLVL ? g->perf_level : 1, dret;
++	int dack = gx_dcvs(g, &dret);
+ 	a6_log("hfi(v1): init, perf/bw tables, test -> %d; dcvs %u MHz %s ret %x\n", rc, gpu_khz[lvl] / 1000,
+ 	    dack ? "TIMEOUT" : "acked", dret);
+ 	a6_log("diag: smmu sgfsr %x sgfsynr0 %x sgfar %x%08x; gmu cb fsr %x far %x%08x\n", rd32(SMMU + 0x48),
+@@ -910,7 +977,7 @@ uint32_t a6_submit_ibs_async(struct a6_gpu *g, const uint64_t *iova, const uint3
+ 	uint64_t fva = a6_pool_va(A6_OFF_SCRATCH);
+ 	/* GPU time of this submit: CP_ALWAYS_ON_COUNTER before the IBs and once they are idle (a6_submit_time) */
+ 	uint64_t ts = a6_pool_va(A6_OFF_SCRATCH + A6_TS_OFF) + 16ull * ((g->fence + 1) % A6_TS_SLOTS);
+-	uint32_t dw[4 + 4 + 4 * A6_SUBMIT_MAX + 5 + 5], n = 0;
++	uint32_t dw[4 + 4 + 4 * A6_SUBMIT_MAX + 4 + 5 + 5], n = 0;
+ 	if (nib == 0 || nib > A6_SUBMIT_MAX)
+ 		return 0;
+ 	dw[n++] = a6_pkt7(A6_CP_EVENT_WRITE, 1);
+@@ -927,6 +994,14 @@ uint32_t a6_submit_ibs_async(struct a6_gpu *g, const uint64_t *iova, const uint3
+ 		dw[n++] = (uint32_t)(iova[i] >> 32);
+ 		dw[n++] = dwords[i] & 0xfffff;
+ 	}
++	if (a6_inject_bad_ib) {
++		/* 0167: sweethangtest: an IB at an unmapped GPU address, 16 dwords: the CP faults like the real hangs */
++		a6_inject_bad_ib = 0;
++		dw[n++] = a6_pkt7(A6_CP_INDIRECT_BUFFER, 3);
++		dw[n++] = 0xf0000000;		/* VA 0xfff0000000 */
++		dw[n++] = 0xff;
++		dw[n++] = 16;
++	}
+ 	/* 0157: no wait-for-idle between client submits (sweetwfi=1 brings it back): CACHE_FLUSH_TS below
+ 	 * lands only once the work before it is done, and the CP may start the next submit meanwhile */
+ 	if (a6_submit_wfi)
+@@ -1162,9 +1237,71 @@ static int gpu_cp(struct a6_gpu *g)
+ 	return gpu_cp_init(g, false);
+ }
+ 
++#if A6_GPU_ID == 618
++static bool recover2_active;
++
++static void r2_stage(const char *what, int rc)
++{
++	if (a6_gx_up())
++		a6_log("recover2: stage %s -> %d, rbbm status %x, cp_status1 %x\n", what, rc, rd32(GREG(RBBM_STATUS)),
++		    rd32(GREG(CP_STATUS_1)));
++	else
++		a6_log("recover2: stage %s -> %d, gx off (no register reads)\n", what, rc);
++}
++
++/*
++ * 0167: sweetgpurecover=2. A soft reset alone leaves RBBM busy bits stuck after a present hang (status c00015,
++ * me_init TIMEOUT forever), so cycle GX: stop the CP, halt GBIF, reset, GX + SPTPRAC off and on again through the
++ * GMU (no HFI init, no GMU reboot), clear the SMMU fault, flush the TLB and bring the CP up with the full SQE load
++ * and zap_load. Falls back to the 0152 GBIF-halt retry.
++ */
++static int a6_recover_full(struct a6_gpu *g)
++{
++	int rc;
++	r2_stage("start", 0);
++	wr32(GREG(CP_SQE_CNTL), 0);
++	r2_stage("cp stop", 0);
++	rc = gbif_halt_bounded();
++	r2_stage("gbif halt", rc);
++	wr32(GREG(0x43), 1);			/* RBBM_SW_RESET_CMD */
++	(void)rd32(GREG(0x43));
++	a6_delay_us(100);
++	wr32(GREG(0x43), 0);
++	a6_delay_ms(1);
++	r2_stage("sw reset", 0);
++	rc = a6_gx_off();
++	r2_stage("gx off", rc);
++	if (rc == 0) {
++		rc = a6_gx_on(g);
++		r2_stage("gx on", rc);
++		if (!a6_gx_up())
++			rc = -1;
++	}
++	if (rc == 0) {
++		(void)a6_clear_fault(g);
++		a6_tlb_flush(g);
++		recover2_active = true;
++		rc = gpu_cp_init(g, false);
++		recover2_active = false;
++		r2_stage("cp init + zap", rc);
++		if (rc == 0)
++			return 0;
++	}
++	return rc;
++}
++#endif
++
+ /* After a hang or fault: soft reset of the GPU core, then the CP up again (page tables and SMMU banks kept). */
+ int a6_recover(struct a6_gpu *g)
+ {
++#if A6_GPU_ID == 618
++	if (a6_recover_mode == 2 && a6_recover_full(g) == 0) {
++		a6_log("recover: full (GX power cycle) -> 0\n");
++		return 0;
++	}
++	if (a6_recover_mode == 2)
++		a6_log("recover2: full recovery failed, trying the GBIF-halt path\n");
++#endif
+ 	(void)a6_clear_fault(g);
+ 	wr32(GREG(0x43), 1);			/* RBBM_SW_RESET_CMD */
+ 	(void)rd32(GREG(0x43));
+@@ -1267,6 +1404,17 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	uint32_t me_init[] = { a6_pkt7(A6_CP_ME_INIT, 8), 0x2f, 3, 0x20000000, 0, 0, 0, 0, 0 };
+ 	if (a6_ring(g, me_init, 9, "me_init", 1000))
+ 		return -1;
++#if A6_GPU_ID == 618
++	if (!resume && recover2_active) {
++		/* 0167: after a GX power cycle the zap shader may still be in TZ: resume it if the load fails */
++		int zr = zap_load(g);
++		if (zr) {
++			a6_log("recover2: zap_load -> %d, trying zap_resume\n", zr);
++			if (zap_resume())
++				return -1;
++		}
++	} else
++#endif
+ 	if (resume ? zap_resume() : zap_load(g))
+ 		return -1;
+ 	uint32_t secure[] = { a6_pkt7(A6_CP_SET_SECURE_MODE, 1), 0 };
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index c55332f..053c4c6 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -82,6 +82,8 @@ static inline uint64_t a6_pool_va(uint64_t off) { return A6_GVA_POOL + off; }
+ 
+ void a6_init_state(struct a6_gpu *g, uint64_t pool_pa);
+ int a6_power_up(struct a6_gpu *g);	/* everything up to a working CP with the zap shader; 0 = ok */
++extern int a6_recover_mode;	/* 0167: 2 = GX power cycle in a6_recover */
++extern int a6_inject_bad_ib;	/* 0167: sweethangtest: the next async submit carries a bad IB */
+ int a6_recover(struct a6_gpu *g);	/* after a hang/fault: soft reset, CP re-init (mappings kept); 0 = ok */
+ bool a6_cx_up(void);
+ bool a6_gx_up(void);
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index ba2df53..e9d1071 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -18,6 +18,9 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/proc.h>
++#include <sys/signal.h>
++#include <sys/signalvar.h>
++#include <kern/thread_call.h>
+ #include <kern/locks.h>
+ #include <kern/thread.h>
+ #include <kern/clock.h>
+@@ -338,6 +341,14 @@ sweet_gpu_init(void)
+ 		extern int a6_submit_wfi;
+ 		PE_parse_boot_argn("sweetwfi", &a6_submit_wfi, sizeof(a6_submit_wfi));
+ 	}
++	{
++		/* 0167: sweetgpurecover=2 (GX power cycle in a6_recover), sweetgpukill=1 (restart backboardd after one) */
++		PE_parse_boot_argn("sweetgpurecover", &a6_recover_mode, sizeof(a6_recover_mode));
++		PE_parse_boot_argn("sweetgpukill", &gpu_kill, sizeof(gpu_kill));
++		if (gpu_kill) {
++			gpu_kill_call = thread_call_allocate(gpu_kill_fn, NULL);
++		}
++	}
+ 	gpu.perf_level = lvl;
+ 	pool_kva = va;
+ 	vm_offset_t pva = 0;
+@@ -582,10 +593,58 @@ gpu_hung_locked(uint32_t hang_ms)
+ 	return ns > hang_ms * 1000000ULL;
+ }
+ 
++/*
++ * 0167: boot-arg sweethangtest=N injects one bad IB (unmapped GPU address) into the Nth client submit after boot
++ * (bit 31 set: the Nth present). sweetgpukill=1: after a successful recovery backboardd is killed (launchd respawns
++ * it with a fresh Metal device), from a thread call, not under the GPU lock.
++ */
++static uint32_t hangtest_arg, hangtest_count;
++static bool hangtest_read, hangtest_done;
++static uint32_t gpu_kill;
++static thread_call_t gpu_kill_call;
++static void present_rearm_locked(void);
++
++static void
++gpu_hangtest_arm(bool is_present)
++{
++	if (!hangtest_read) {
++		PE_parse_boot_argn("sweethangtest", &hangtest_arg, sizeof(hangtest_arg));
++		hangtest_read = true;
++	}
++	if (hangtest_done || hangtest_arg == 0 || !!(hangtest_arg & 0x80000000u) != is_present) {
++		return;
++	}
++	if (++hangtest_count == (hangtest_arg & 0x7fffffffu)) {
++		hangtest_done = true;
++		a6_inject_bad_ib = 1;
++		a6_log("hangtest: injecting bad IB at %s submit %u\n", is_present ? "present" : "client", hangtest_count);
++	}
++}
++
++static int
++gpu_kill_proc(proc_t p, __unused void *arg)
++{
++	char name[32];
++	int pid = proc_pid(p);
++	proc_name(pid, name, sizeof(name));
++	if (pid > 1 && strcmp(name, "backboardd") == 0) {
++		psignal(p, SIGKILL);
++		a6_log("killed backboardd pid %d after recovery\n", pid);
++	}
++	return PROC_RETURNED;
++}
++
++static void
++gpu_kill_fn(__unused thread_call_param_t a, __unused thread_call_param_t b)
++{
++	proc_iterate(PROC_ALLPROCLIST, gpu_kill_proc, NULL, NULL, NULL);
++}
++
+ /* Soft reset + CP re-init; everything queued is lost, its fences complete at once (waiters return). */
+ static void
+ gpu_recover_locked(const char *why)
+ {
++	uint64_t rec_t0 = mach_absolute_time();
+ 	uint64_t far;
+ 	uint32_t syn, fsr = a6_fault_status(&gpu, &far, &syn), done = a6_fence_read(&gpu);
+ 	a6_log("%s: GPU hang or fault (fence %u, done %u, smmu fsr %x far %llx fsynr0 %x): reset\n",
+@@ -598,9 +657,22 @@ gpu_recover_locked(const char *why)
+ 	lost[recoveries % LOST_RING].lo = done;
+ 	lost[recoveries % LOST_RING].hi = gpu.fence;
+ 	recoveries++;
++	bool rec_ok = true;
+ 	if (a6_recover(&gpu)) {
+ 		a6_log("%s: GPU not recovered\n", why);
+ 		gpu_ready = false;
++		rec_ok = false;
++	}
++	if (a6_recover_mode == 2) {
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time() - rec_t0, &ns);
++		a6_log("recover2: %s after %llu us\n", rec_ok ? "done" : "FAILED", ns / 1000);
++	}
++	if (rec_ok) {
++		present_rearm_locked();
++		if (gpu_kill && gpu_kill_call) {
++			thread_call_enter(gpu_kill_call);
++		}
+ 	}
+ 	a6_fence_force(&gpu);
+ 	progress_fence = gpu.fence;
+@@ -696,6 +768,14 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+ static uint32_t present_slots = 2;
+ static uint32_t present_fence[PRESENT_SLOTS_MAX];      /* of the present last queued from each IB slot */
+ static uint32_t present_next;
++
++/* 0167: after a recovery the queued presents are gone (their fences are forced done): start from slot 0 again */
++static void
++present_rearm_locked(void)
++{
++	memset(present_fence, 0, sizeof(present_fence));
++	present_next = 0;
++}
+ static uint32_t stat_busy;	/* 0158: presents put off a tick (slot still queued) */
+ 
+ /* With sweet_gpu_lock: the present from IB slot k has landed (or the GPU was reset). 0, or -1 if reset. */
+@@ -880,6 +960,7 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 	if (rc == 0) {
+ 		a6_write(a6_pool_pa(&gpu, PRESENT_IB(k)), ib, 4ULL * n);
+ 		gpu_note_submit_locked();
++		gpu_hangtest_arm(true);
+ 		present_fence[k] = a6_submit_ib_async(&gpu, a6_pool_va(PRESENT_IB(k)), n, 100);
+ 		gpu_owner_locked(present_fence[k], 0);
+ 		rc = present_fence[k] ? 0 : -1;
+@@ -1030,6 +1111,7 @@ sweet_gpu_submit_user_async(uint64_t ib_iova, uint32_t dwords)
+ 	}
+ 	lck_mtx_lock(&sweet_gpu_lock);
+ 	gpu_note_submit_locked();
++	gpu_hangtest_arm(false);
+ 	uint32_t fence = a6_submit_ib_async(&gpu, ib_iova, dwords, 1000);
+ 	gpu_owner_locked(fence, proc_selfpid());
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+@@ -1272,6 +1354,7 @@ sweet_gpu_submit_v2(const uint64_t *iova, const uint32_t *dwords, unsigned n, bo
+ 		ring_wait_ms = 2000;
+ 	lck_mtx_lock(&sweet_gpu_lock);
+ 	gpu_note_submit_locked();
++	gpu_hangtest_arm(false);
+ 	uint32_t fence = a6_submit_ibs_async(&gpu, iova, dwords, n, ring_wait_ms);
+ 	gpu_owner_locked(fence, proc_selfpid());
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 67f0167..9a10573 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -42,6 +42,7 @@ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ /* bsd/dev/sweet_gpu.c: the Adreno 640's 2D engine scales each frame onto the panel (boot-arg sweetgpu=1). */
+ extern "C" {
+ bool sweet_gpu_ready(void);
++uint64_t sweet_gpu_recoveries(void);
+ int sweet_gpu_surface_slot(uint64_t key);
+ int sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint32_t page_size);
+ int sweet_gpu_present(int slot, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h, uint32_t pitch,
+@@ -630,6 +631,16 @@ AppleCLCD::present(const uint8_t *rec)
+ 		}
+ 	}
+ 
++	/* 0167: after a GPU recovery the GPU present is tried again, and its fallback reasons are logged again */
++	static uint64_t rearm_epoch;
++	uint64_t nrec = sweet_gpu_recoveries();
++	if (nrec != rearm_epoch) {
++		rearm_epoch = nrec;
++		sweet_fb_gpu_why_logged = 0;
++		if (sweet_gpu_ready()) {
++			IOLog("SWEET FB: GPU present re-armed\n");
++		}
++	}
+ 	if (sweet_gpu_ready() && presentGPU(rec)) {
+ 		return;
+ 	}
+-- 
+2.56.0
+
