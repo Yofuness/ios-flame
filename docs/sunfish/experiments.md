@@ -46,3 +46,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 xnu 0168 (kernel44): re-sending OOB gpu_set after GX on does not fix the post-recovery slowdown (910-990 ms/submit, 0 swaps/s).
 - 2026-10-25 xnu 0169 (kernel45): GPU core clock 564 MHz before the injected hang, 14 MHz after recovery (GMU acks the same-level DCVS without reprogramming) = cause of the post-recovery slowdown.
 - 2026-10-25 xnu 0170 (kernel46): DCVS re-vote after GX on → core 56 MHz after recovery (was 14); 12.5 swaps/s after vs 18.8 before. Not fixed; suspect GPUCC PLL/RCG state lost in GX collapse.
+- 2026-10-25 xnu 0171 (kernel47): GPUCC diff after recovery: PLL0 L_VAL 3a→0, FRAC changed, unlocked → GX collapse wipes GPU_CC_PLL0 = cause of 14-56 MHz after recovery.

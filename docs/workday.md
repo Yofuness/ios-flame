@@ -405,3 +405,14 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - The "clk diag (boot)" line was missing in rec4 too. That may be the same lost-lines problem.
   - Theory: the GX collapse also resets GPUCC clock state that ABL programmed (PLL/RCG), and the GMU does not redo it.
   - Next: xnu 0171 snapshots GPUCC (0-0x1800) at boot and logs every register that differs after a recovery.
+- **xnu 0171 (kernel47, rec6): GPUCC diff after the injected present hang (recovery 23.9 ms, backboardd killed).**
+  - 8 registers differ from boot:
+    - +0000 PLL0 MODE: d1000005 → 01000005, so lock is lost.
+    - +0004 L_VAL: 3a → 0.
+    - +0038 FRAC: daaa → e881.
+    - Five CBCRs (+105c, +1080, +1084, +1088, +1094): 80000000 → 0.
+  - The core clock is 564 MHz before the hang and 56 MHz after.
+  - **Cause: the GX collapse wipes GPU_CC_PLL0 (Fabia).** ABL programmed it, and neither the GMU nor our code redoes it.
+  - Bench before the hang: 20.0 swaps/s, 19.2 panel updates/s.
+- The live log starts ~30 s into boot, so the early boot lines ("gpucc snap (boot)", "clk diag (boot)") are never seen. The snapshot is still taken.
+- Fix attempt xnu 0172: after GX on, restore PLL0 L_VAL and FRAC from the boot snapshot, then run the Fabia enable (OUTCTRL off, OPMODE standby, values, RESET_N, OPMODE run, wait for lock, OUTCTRL on), then the DCVS votes.

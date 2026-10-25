@@ -1,0 +1,71 @@
+From 10878089cf72d47ce5fdacabc0c6df63ac831686 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 15:28:57 -0400
+Subject: [PATCH] sunfish: GPU recovery: restore GPU_CC_PLL0 from the boot
+ snapshot after GX on
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 8eb1cbf..6a3c822 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -715,11 +715,14 @@ static int gx_dcvs(struct a6_gpu *g, uint32_t *ret_out)
+ 	return dack;
+ }
+ 
++static int gpucc_pll0_restore(void);
++
+ /* 0167: GX back on after a6_gx_off, without HFI init or a GMU reboot: OOB 6 + SPTPRAC, then OOB 7 */
+ static int a6_gx_on(struct a6_gpu *g)
+ {
+ 	uint32_t dret;
+ 	int rc = gx_rail_on(gx_vote);
++	rc |= gpucc_pll0_restore();	/* 0172 */
+ 	/* 0170: the GX collapse leaves the core clock at ~14 MHz and the GMU treats a vote for the unchanged level
+ 	 * as done, so vote another level first and then the real one to make it reprogram the clock */
+ 	uint32_t want = g->perf_level;
+@@ -1131,6 +1134,37 @@ static void gpucc_snap_diff(const char *when)
+ 	a6_log("gpucc diff (%s): %u regs differ\n", when, n);
+ }
+ 
++/*
++ * 0172: the GX collapse wipes GPU_CC_PLL0 (Fabia, gpucc-sm6150: L_VAL +0x04 = 0, FRAC +0x38 changed, no lock), which
++ * ABL set up and nobody redoes, so the GMU's DCVS lands on a dead PLL (core 14-56 MHz). Restore L and FRAC from the
++ * boot snapshot and run the Fabia enable: output off, OPMODE standby, values, OPMODE run, wait for lock, output on.
++ */
++#define PLL_MODE	0x00
++#define PLL_L_VAL	0x04
++#define PLL_OPMODE	0x2c
++#define PLL_FRAC	0x38
++static int gpucc_pll0_restore(void)
++{
++	if (!gpucc_have || gpucc_boot[PLL_L_VAL / 4] == 0) {
++		a6_log("pll0 restore: no boot snapshot\n");
++		return 0;
++	}
++	if (rd32(GPUCC + PLL_L_VAL) == gpucc_boot[PLL_L_VAL / 4] && (rd32(GPUCC + PLL_MODE) & (1u << 31)))
++		return 0;		/* survived: nothing to do */
++	uint32_t mode = rd32(GPUCC + PLL_MODE);
++	wr32(GPUCC + PLL_MODE, mode & ~1u);			/* OUTCTRL off */
++	wr32(GPUCC + PLL_OPMODE, 0);				/* standby */
++	wr32(GPUCC + PLL_L_VAL, gpucc_boot[PLL_L_VAL / 4]);
++	wr32(GPUCC + PLL_FRAC, gpucc_boot[PLL_FRAC / 4]);
++	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) | (1u << 2));	/* RESET_N */
++	wr32(GPUCC + PLL_OPMODE, 1);				/* run */
++	int lock = wait_bit(GPUCC + PLL_MODE, 1u << 31, 1, 10);
++	wr32(GPUCC + PLL_MODE, rd32(GPUCC + PLL_MODE) | 1u);	/* OUTCTRL on */
++	a6_log("pll0 restore: L %x frac %x, mode %x -> %x, %s\n", gpucc_boot[PLL_L_VAL / 4], gpucc_boot[PLL_FRAC / 4],
++	    mode, rd32(GPUCC + PLL_MODE), lock ? "LOCK TIMEOUT" : "locked");
++	return lock;
++}
++
+ static void a6_clk_diag(const struct a6_gpu *g, const char *when)
+ {
+ 	gpucc_snap_diff(when);
+-- 
+2.56.0
+
