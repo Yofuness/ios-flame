@@ -484,3 +484,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - That offset is probably past the end of sunfish's userdata (the size is unknown on sunfish). **An out-of-range or raw read on rufsroot0 kills the kernel at once and silently.**
   - The soak resets look the same (instant stop, no panic). A UFS I/O fault while apps load is now a suspect.
   - Next: find sunfish's real userdata size (shim log "ufs: userdata first= blocks=", or the GPT from backup/), and look at how the XNU UFS driver handles an out-of-range LBA or a UFS error (sense data, timeouts).
+- **UFS investigation (no phone use):**
+  - **Partition size:** sunfish userdata is 0x1B65FFB000 bytes (`fastboot getvar partition-size:userdata`) = 0x1B65FFB 4 KB blocks. So the rst3 read offset was inside the partition. The rescue area starts at block 28728186 of /dev/rufsroot0 (1153 = 1025 XNU log ring + 64 scratch + 64 rescue, shim/ufs.h).
+  - **Not out of range:** sweet_ufs_strategy bounds-checks (EINVAL beyond part_bytes). Timeouts return ETIMEDOUT and SCSI errors EIO; there is no panic on either path.
+  - **Likely cause of the rst3 reset (~65%):** for raw (physio, B_PHYS) I/O, sweet_ufs_strategy memcpy's from the bounce buffer straight into the user virtual address (sweet_ufs.c:448-449, write at 459). With PAN on, that is a data abort → panic, which never reaches the UDP log. The watchdog then bites into fastboot.
+    - Fix: copyout/copyin for B_PHYS.
+    - Also: an LBA range check in ufs_read_blocks, log the partition geometry, and more state on timeouts.
+  - **The soak resets have no UFS lines before them** (no timeouts or errors), so they are probably a different cause. Still open.

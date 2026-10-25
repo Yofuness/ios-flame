@@ -57,3 +57,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 rst1 (kernel50): second silent reset at 178.7 s during an SSH dd of the userdata tail; empty output; cause unknown.
 - 2026-10-25 soak430 (kernel50, sweetgpufreq=4, driven by a leftover driver): silent reset at ~179 s during app cycle 4 → resets happen at 430 MHz too.
 - 2026-10-25 rst3 (kernel50): raw read of /dev/rufsroot0 at offset (0xc80ffb-1153)*4 KB (flame's userdata size) → instant silent reset to fastboot, no panic. UFS I/O error path kills the kernel; suspect for the soak resets too.
+- 2026-10-25 UFS read-path review: sunfish userdata 0x1B65FFB blocks (rst3 offset was in range); raw-device reads memcpy into user VA (PAN abort) = likely rst3 cause; soak resets show no UFS errors, cause still open.
