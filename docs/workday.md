@@ -307,3 +307,28 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - **Reduce Transparency** (`EnhancedBackgroundContrastEnabled=1` in com.apple.Accessibility, backboardd restarted): dock turned opaque grey, but backboardd logged "vertexFunction is not a MTLFunction" / "fragmentFunction is not a MTLFunction" (CA's RT shaders do not build through the bridge), then ~3 s later "present: GPU hang or fault (fence 4375, done 4367)" and recovery failed ("ring me_init ... TIMEOUT", "GBIF halt + soft reset + CP init -> -1"). rton1/rton2 (24.6 / 23.6 panel) are invalid (GPU dead, no GPU stats). Pref removed (cfprefsd had cached it; killed cfprefsd, deleted key), fresh boot rt-clean healthy: 19.1 swaps/s, 18.1 panel, ~15-17 ms/submit. Blur cost NOT measured this way.
 - **sweetddr=1 (ddr1a/ddr1b):** 17.9 / 17.9 swaps/s, 17.3 / 16.9 panel; backboardd 13.2 / 13.0 ms/submit (more submits, mean drops) but p50/p95 unchanged 5.7 / 40.0 ms, longest 40.8 / 40.9 ms; <=17 ms 21.1 / 22.3%, <=34 ms 62.2 / 63.1%; blit 2.37 ms; GPU end -> swap 29.6 / 29.7 ms. The 40 ms submits do not move with DDR bandwidth -> not bandwidth-bound; panel rate ~3/s lower. Keep `sweetddr=0`.
 - Battery 4432-4456 mV throughout. Phone left booted on ddr1 (sweetddr=1); next boot is back to default.
+
+## [2026-10-25 11:30] Wi-Fi on "Epik Wifi" (parents' OpenWrt) — joins and works
+- Networks (read-only SSH, routers untouched): R1-Dlink ch 1 / ch 100 (DFS), R3-One ch 6 / ch 149; both `psk-mixed`
+  (hostapd wpa=3, CCMP only, AKM WPA-PSK + FT-PSK, 802.11r/k/v on, PMF off).
+- Boot epik0 = kernel42 `sweetpresentwait=1`, 4392 mV; then `tools/sunfish-wifitest.sh 40151712848 epik1`
+  (WIFI_SSID='Epik Wifi', psk via env), 4459 mV.
+- wland picked R1 2.4 GHz ch 1, -64 dBm: auth 0, assoc 0 (aid 4), msg 1 -> msg 2, keys installed (GTK idx 1), joined.
+  hostapd: AP-STA-CONNECTED auth_alg=open, EAPOL-4WAY-HS-COMPLETED. Stats after 90 s: tx 2635, 0 failed.
+- nettest: DNS apple.com 45 ms, TCP 51 ms, HTTPS 200 in 374 ms. wlan.conf deleted + verified absent.
+- So the radio/WPA stack handles wpa=3 + FT-PSK beacons. Not tested: the join from Settings → Wi-Fi (wifid path),
+  5 GHz BSSes, roaming between R1 and R3.
+- 11:44 epik2 (kernel42 `sweetpresentwait=1 sweettouch=2 flamereboot=0`, 4456 mV): join from Settings → Wi-Fi,
+  password typed with flame-cmd taps (webcam-guided). wifid ASSOCIATE: any access point, auth 0x1/0x10, 32-byte
+  key kind 6 (PMK); bridge "join 'Epik Wifi' (PMK) -> 0"; R1 2.4 GHz ch 1 -64 dBm; 4-way OK; join over in 0.47 s.
+  Settings shows the checkmark and the status-bar Wi-Fi icon. nettest: DNS 122 ms, TCP 211 ms, HTTPS 200 (401 ms).
+- The user's earlier endless spinner did not reproduce at -64 dBm. Open: weak-signal joins (user was in a weaker
+  spot), 5 GHz BSSes (ch 100 DFS, ch 149), roaming R1 <-> R3. Note: epik1's `flamereboot=600` rebooted the phone
+  to fastboot after 10 min.
+
+## 2026-10-25 soak0 — baseline stability soak (plan step 0), aborted at ~16 min
+- Boot soak0: kernel42 `sweetpresentwait=1 sweettouch=2 flamereboot=0`; workload = swipes + 6 stock apps + Safari scroll.
+- The user saw a crashed screen. Webcam (`../logs/soak0-crash.jpg`): left half white, right half black, no UI. Kernel alive (log at 1031 s), phone reachable.
+- Log at the time: every SpringBoard thread sampled at the same pc 0x1e44314f0 (955 s) → SpringBoard stuck; backboardd idle (1 swap per 5 s, 2 GPU submits, GPU 0% busy); no GPU hang/fault/SMMU lines; `lskdd` respawned 630 times in the soak (crash loop).
+- So the first failure is a SpringBoard hang, not the GPU. Lesson: the soak loop must snap the webcam each cycle and stop when swaps/s drops to ~0.
+- Rebooted with `flame-cmd reboot` (4456 mV), booted soak0r with the same args; lock screen fine on the webcam.
