@@ -437,3 +437,14 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - backboardd: 13.3 ms per submit before the hang, 20.3-20.5 ms after.
   - Benches: before 19.3 swaps/s and 19.0 panel updates/s; after, 9.0 / 8.6 and 9.2 / 9.0.
   - The post-hang benches ran on a Batteries widget panel, not the home screen, so swaps/s is not comparable. The cause of the remaining ~50% gap on that screen is open.
+- **rec10 (kernel50, all benches from the home screen): full speed after recovery, verified.**
+
+  | bench | swaps/s | panel updates/s | backboardd ms/submit | core MHz |
+  |---|---|---|---|---|
+  | before the hang | 19.7 | 19.2 | 13.23 | 564 |
+  | post1 | 19.1 | 18.6 | 13.13 | 564 |
+  | post2 | 18.7 | 18.1 | 13.45 | 564 |
+  | post3 | 19.4 | 18.7 | 12.53 | 564 |
+
+  - The injected present hang recovered in 26.2 ms. PLL0 relocked and backboardd was killed and respawned.
+  - rec9's low numbers came from the screen: the bench swipes alternate 900→150 and 150→900, so a bench can end on the widget (Today) panel. Check for the home screen before each bench.
