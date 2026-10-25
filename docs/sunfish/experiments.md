@@ -40,3 +40,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 epik2: Settings → Wi-Fi join to "Epik Wifi" (wifid PMK path) works at -64 dBm, HTTPS 200; the user's spinner did not reproduce. Weak-signal and 5 GHz untested.
 - 2026-10-25 soak0 (kernel42, stability baseline): SpringBoard hang after ~16 min (all threads at pc 0x1e44314f0), screen half white/half black, GPU idle and healthy, lskdd crash loop 630x. Aborted; rebooted OK.
 - 2026-10-25 soak0 analysis: SB stacks idle (not deadlocked); real stall at ~222-262 s (swaps 0.2/s, app opens fail Code=5) after Notes; coincides with 187x CA 'not a MTLFunction' shader failures + corpse notify failures; lskdd loop starts later (390 s), not the cause.
+- 2026-10-25 soak1 (kernel42, 20 min Preferences/Safari/Notes/Calendar loop, auto-stop): no stall, 48/48 opens OK, 8.7-17 swaps/s; 104 MTLFunction errors without a stall. soak0 stall not reproduced.

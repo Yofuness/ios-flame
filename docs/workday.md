@@ -348,3 +348,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Short soak repeating Preferences → Safari → Notes → Calendar.
   - Auto-stop when swaps drop below 1/s, then pstack SpringBoard, take `launchctl list` and pull the CrashReporter logs at that moment.
   - Fix the bridge for CA's RT shaders.
+
+## 2026-10-25 soak1 — short app soak with stall capture (plan step 0, run 2)
+- Same boot (soak0r, kernel42). Loop: Preferences → Safari → Notes → Calendar, 10 s each with 3 swipes, a webcam snap after every app. Auto-stop on 2 consecutive `SWEET FB 5s` samples < 1 fps, or on a failed open.
+- 12:39-13:01 (uptime 788-2086 s): **no stall.** All 48 opens succeeded (no Code=5), and the home screen is fine on the webcam at the end.
+- Swaps/s per minute: 8.7-17.1, mostly 10-13. That is lower than the ~20 of the swipe bench, because of the app launches. 12 isolated samples were < 1 fps, never two in a row.
+- 104 `not a MTLFunction` lines and 2 `EXC_CORPSE` lines, without a stall. So those errors alone don't freeze the UI.
+- Not reproduced: soak0's stall came about 4 min after a fresh boot, with 6 apps, including Clock and Photos. Suspects now: the first-boot launch burst, or the Clock/Photos apps (PhotosFileProvider crashes on every launch).
+- The workload script is saved as `tools/sunfish-appsoak.sh`.
