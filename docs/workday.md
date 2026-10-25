@@ -356,3 +356,12 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - 104 `not a MTLFunction` lines and 2 `EXC_CORPSE` lines, without a stall. So those errors alone don't freeze the UI.
 - Not reproduced: soak0's stall came about 4 min after a fresh boot, with 6 apps, including Clock and Photos. Suspects now: the first-boot launch burst, or the Clock/Photos apps (PhotosFileProvider crashes on every launch).
 - The workload script is saved as `tools/sunfish-appsoak.sh`.
+
+## 2026-10-25 soak2 — fresh boot, 6 apps (plan step 0, run 3)
+- Fresh boot soak2 at 13:02: kernel42 `sweetpresentwait=1 sweettouch=2 flamereboot=0`, 4456 mV.
+- Loop: Preferences, Safari, Notes, Calendar, Clock, Photos; ran 13:12-13:34 (20 min). The loop started ~10 min after boot, not right away.
+- **No stall.** The home screen was fine at the end. Swaps/s per minute: 7.4-11.7.
+- Counts after the marker: 0 `not a MTLFunction` (soak1 had 104), 0 `EXC_CORPSE`, 0 Code=5.
+- The Photos step snap is black apart from the home indicator. Photos opens to a black/empty view; check whether it renders at all.
+- The `=== soak2 stall` marker at 13:04:51 is false: the agent's check was inverted, and the phone was healthy at ~10 swaps/s.
+- soak0's stall (~4 min after boot, Code=5 on every open) did not reproduce in 2 runs (40 min). It is rare, or tied to something in soak0's first minutes (the Safari surface burst, 160 → 293 MB).
