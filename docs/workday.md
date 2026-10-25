@@ -416,3 +416,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Bench before the hang: 20.0 swaps/s, 19.2 panel updates/s.
 - The live log starts ~30 s into boot, so the early boot lines ("gpucc snap (boot)", "clk diag (boot)") are never seen. The snapshot is still taken.
 - Fix attempt xnu 0172: after GX on, restore PLL0 L_VAL and FRAC from the boot snapshot, then run the Fabia enable (OUTCTRL off, OPMODE standby, values, RESET_N, OPMODE run, wait for lock, OUTCTRL on), then the DCVS votes.
+- **xnu 0172 (kernel48, rec7): no effect.**
+  - The restore ran before the DCVS votes, found PLL0 intact and returned silently. Afterwards the diff showed L_VAL 0 again.
+  - So the GMU's DCVS/OOB step is what leaves PLL0 at L 0.
+  - Core clock 564 MHz → 56 MHz.
+  - Benches: before 18.4 swaps/s and 17.7 panel updates/s; after, 10.8 / 10.3 and 12.2 / 11.4.
+- xnu 0173: restore PLL0 after the votes, and log "intact" too.

@@ -1,0 +1,49 @@
+From 6d9fa54094bbe98e88dea71aac0c776ec0edc999 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sun, 25 Oct 2026 15:40:55 -0400
+Subject: [PATCH] sunfish: GPU recovery: restore PLL0 after the DCVS/OOB votes,
+ log when intact
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 6a3c822..ae99073 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -722,7 +722,6 @@ static int a6_gx_on(struct a6_gpu *g)
+ {
+ 	uint32_t dret;
+ 	int rc = gx_rail_on(gx_vote);
+-	rc |= gpucc_pll0_restore();	/* 0172 */
+ 	/* 0170: the GX collapse leaves the core clock at ~14 MHz and the GMU treats a vote for the unchanged level
+ 	 * as done, so vote another level first and then the real one to make it reprogram the clock */
+ 	uint32_t want = g->perf_level;
+@@ -735,6 +734,9 @@ static int a6_gx_on(struct a6_gpu *g)
+ 	wr32(GMU_REG(GMU_H2G_SET), 1u << 16);
+ 	int ack = wait_bit(GMU_REG(GMU_G2H_INFO), 1u << 24, 1, 1000);
+ 	wr32(GMU_REG(GMU_G2H_CLR), 1u << 24);
++	/* 0173: after the votes: the PLL is intact right after GX on (0172 found nothing to do there); the GMU's
++	 * DCVS is what leaves it at L 0 */
++	rc |= gpucc_pll0_restore();
+ 	a6_log("recover2: gx on: rail+sptprac %s, dcvs %s ret %x, oob gpu_set %s, gx gdsc %x\n", rc ? "TIMEOUT" : "ok",
+ 	    dack ? "TIMEOUT" : "acked", dret, ack ? "TIMEOUT" : "acked", rd32(GPUCC + GPUCC_GX_GDSCR));
+ 	a6_clk_diag(g, "recover");	/* 0169 */
+@@ -1149,8 +1151,10 @@ static int gpucc_pll0_restore(void)
+ 		a6_log("pll0 restore: no boot snapshot\n");
+ 		return 0;
+ 	}
+-	if (rd32(GPUCC + PLL_L_VAL) == gpucc_boot[PLL_L_VAL / 4] && (rd32(GPUCC + PLL_MODE) & (1u << 31)))
+-		return 0;		/* survived: nothing to do */
++	if (rd32(GPUCC + PLL_L_VAL) == gpucc_boot[PLL_L_VAL / 4] && (rd32(GPUCC + PLL_MODE) & (1u << 31))) {
++		a6_log("pll0 restore: intact (L %x, mode %x)\n", rd32(GPUCC + PLL_L_VAL), rd32(GPUCC + PLL_MODE));
++		return 0;
++	}
+ 	uint32_t mode = rd32(GPUCC + PLL_MODE);
+ 	wr32(GPUCC + PLL_MODE, mode & ~1u);			/* OUTCTRL off */
+ 	wr32(GPUCC + PLL_OPMODE, 0);				/* standby */
+-- 
+2.56.0
+
