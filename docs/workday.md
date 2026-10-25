@@ -458,3 +458,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - **The RT hang is a real CP stall mid-IB with no SMMU fault** (`rbbm status c30d15`), in a submit built from valid pipelines. Which RT pipeline or draw causes it is unknown.
   - Next: an RT boot with the pipeline journal (pipelines.log) and SWEET_DRAWLOG, to name the last pipeline before the hang. Then refuse it in newRenderPipelineStateWithDescriptor, or fix it.
   - Recovery now covers this case (0167-0174).
+- **[16:41] soak565 run A aborted: the phone silently reset to fastboot.**
+  - Boot: kernel50, default args + `sweetpresentwait=1 flamereboot=0`.
+  - The reset came at ~468 s uptime, during app-soak cycle 4. The last kernel lines are routine (AKS, lskdd respawn, a Wi-Fi scan), with no panic, GPU hang or recovery line.
+  - The GPU pool was high: 410-416 MB in use, peak 467 MB. It was 132 MB at 55 s.
+  - Fastboot answers, at 4435 mV.
+  - The soak driver kept sending app opens for ~10 min after the reset, because it had no reachability check. I stopped it, and run B (430 MHz) never ran.
+  - Open: what reset the phone (watchdog? a USB-side reset?). Look for a PMIC/IMEM restart reason on the next boot.
