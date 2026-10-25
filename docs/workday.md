@@ -365,3 +365,24 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - The Photos step snap is black apart from the home indicator. Photos opens to a black/empty view; check whether it renders at all.
 - The `=== soak2 stall` marker at 13:04:51 is false: the agent's check was inverted, and the phone was healthy at ~10 swaps/s.
 - soak0's stall (~4 min after boot, Code=5 on every open) did not reproduce in 2 runs (40 min). It is rare, or tied to something in soak0's first minutes (the Safari surface burst, 160 → 293 MB).
+
+## 2026-10-25 GPU hang recovery — xnu 0167, kernel43 (plan step 1)
+- 0167 adds four things:
+  - `sweetgpurecover=2`: full recovery (CP stop, GBIF halt, soft reset, GX off/on through the GMU, CP init + zap).
+  - `sweethangtest=N`: injects a bad IB on the Nth client submit; with bit 31 set, on the Nth present submit.
+  - `sweetgpukill=1`: SIGKILL to backboardd after a recovery.
+  - Present re-arm after any recovery.
+
+  The defaults are unchanged. The first CI build failed on missing declarations; the fix was folded into 0167. CI run 40218123380.
+- rec0 (no new flags): boots, 19.6 swaps/s, 18.6 panel updates/s.
+- rec1 (client-submit hang at 273.7 s):
+  - Injected SMMU fault fsr 2, far fff0000000.
+  - All 7 recover2 stages returned 0, in 28.6 ms in total.
+  - The present was re-armed. backboardd (pid 57) was killed and respawned.
+  - Webcam: black at +2 s, spinner at +5 s, lock screen animating from +8 s.
+- rec2 (present-submit hang at 191.6 s; this case failed 6/6 before 0167): recovered in 22.4 ms, backboardd respawned, lock screen back at about +8 s.
+- **First GPU hang recoveries that bring the screen back.**
+- **Problem after recovery:** the GPU runs very slowly.
+  - backboardd submits take 100-980 ms each (mean 93-190 ms against ~13 ms before), with the GPU 27-99% busy.
+  - Frame rate is 1.2-7.4 swaps/s, and the 20 s benches recorded no FB samples.
+  - Suspect: the GPU clock or DCVS level is not restored after GX on (maybe the lowest level), or register state such as HWCG/UCHE was lost with the GX collapse.
