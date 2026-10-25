@@ -504,3 +504,13 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - **rst3 was a panic, as suspected.** `panic(cpu 0 ...): Kernel data abort at pc 0xfffffe0007bce8b8, lr 0xfffffe000751b710`, esr 0x9600004f (permission fault), far 0x100767918 = x0 = the user buffer of `toybox xxd`. It happened at 159.79 s, 10 ms after `exec toybox`.
   - That is the PAN fault on memcpy into a user address, fixed by 0175. The rescue-area layout and the decode both work.
   - The soak resets' rescue data was overwritten by later boots, so they are still unexplained. Next soak: on a reset, read the rescue with this method right after the next boot (kernel52 also fixes unaligned raw reads, xnu 0176, built and not booted yet).
+- **[18:26] sk52 soak (kernel52, default args incl. GPU recovery, `sweetpresentwait=1 flamereboot=0`), stopped after ~20 min for teardown.**
+  - Ran 18:06:39-18:26: 12 cycles of 6 apps, **no reset**, no GPU hang or recovery.
+  - Avg 12.9 swaps/s over 186 samples (app launching).
+  - GPU pool 382 MB at the end, peak 470 MB.
+  - 232 CRASH lines, all Spotlight importer extensions crash-looping (TipsSpotlightIndex and PassKitSpotlight ×56; MobileSMS, Contacts, VoiceMemos, Podcasts ×28). That is a usability quick-win candidate (plan step 6).
+  - The earlier resets came at 468 s and ~179 s. This run passed ~1200 s without one. Not conclusive: kernel52 changes only UFS raw reads.
+- Not done: the full 1 h soak and a reset capture. Next session:
+  - Boot kernel52.
+  - Run `tools/sunfish-appsoak.sh TAG 3600`.
+  - On a reset, boot once and read the rescue first (`toybox cmp -l /dev/rufsroot0 /dev/zero $((28728186*4096)) 0 | toybox head -n 262144`).
