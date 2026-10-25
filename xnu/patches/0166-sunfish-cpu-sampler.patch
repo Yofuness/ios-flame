@@ -1,4 +1,4 @@
-From ef696c42fac4debb60daba0c8780ac718fd045d2 Mon Sep 17 00:00:00 2001
+From 8cc26cb7f9a7e75e26d0bc86675ab0e3dfce0868 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Sat, 24 Oct 2026 20:29:37 -0400
 Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
@@ -6,10 +6,10 @@ Subject: [PATCH] 0166 sunfish: sweetcpusample=1 (1 kHz per-thread CPU sampler,
 
 ---
  bsd/conf/files            |    1 +
- bsd/dev/sweet_cpusample.c |  165 ++
- bsd/dev/sweet_ufs.c       |    2 +
+ bsd/dev/sweet_cpusample.c |  167 ++
+ bsd/dev/sweet_gpu.c       |    2 +
  osfmk/kern/thread.c       | 4272 +++++++++++++++++++++++++++++++++++++
- 4 files changed, 4440 insertions(+)
+ 4 files changed, 4442 insertions(+)
  create mode 100644 bsd/dev/sweet_cpusample.c
  create mode 100644 osfmk/kern/thread.c
 
@@ -27,10 +27,10 @@ index df7c863..718e6f9 100644
  bsd/dev/sweet_pmem.c			standard
 diff --git a/bsd/dev/sweet_cpusample.c b/bsd/dev/sweet_cpusample.c
 new file mode 100644
-index 0000000..8c8ffd9
+index 0000000..97300c3
 --- /dev/null
 +++ b/bsd/dev/sweet_cpusample.c
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,167 @@
 +/*
 + * 0166: CPU use per thread and core type, without stopping anything.
 + *
@@ -169,8 +169,10 @@ index 0000000..8c8ffd9
 +{
 +	static int chan;
 +	uint64_t dl;
++	printf("SWEET CPU: sampler started\n");
 +	cs_timer = timer_call_alloc(cs_tick, NULL);
 +	if (!cs_timer) {
++		printf("SWEET CPU: timer_call_alloc failed\n");
 +		return;
 +	}
 +	clock_interval_to_deadline(CS_TICK_US, NSEC_PER_USEC, &dl);
@@ -196,26 +198,26 @@ index 0000000..8c8ffd9
 +	}
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
-diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
-index 50acc55..abb4b46 100644
---- a/bsd/dev/sweet_ufs.c
-+++ b/bsd/dev/sweet_ufs.c
-@@ -54,6 +54,7 @@ extern void sweet_keys_init(void);
- extern void sweet_touch_init(void);
- extern void sweet_fts_init(void);
- extern void sweet_cpufreq_init(void);
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 7671169..876b2c2 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -45,6 +45,7 @@ extern int vprintf(const char *fmt, va_list ap);
+ extern void sweet_smc(uint64_t x[8]);
+ 
+ void sweet_gpu_init(void);
 +extern void sweet_cpusample_init(void);
- extern void sweet_pmem_init(void);
- extern void flame_wlan_init(void);
- extern void sweet_gpu_init(void);
-@@ -662,6 +663,7 @@ sweet_ufs_init(void)
- 	sweet_log_start();
- 	sweet_sample_start();
- 	sweet_cpufreq_init();
-+	sweet_cpusample_init();  /* 0166: sweetcpusample=1, bsd/dev/sweet_cpusample.c */
- 	sweet_pmem_init();       /* /dev/pmem: bsd/dev/sweet_pmem.c */
- 	flame_wlan_init();       /* /dev/wlan, en0 + Apple80211 for wifid: bsd/dev/flame_wlan.c */
- 	sweet_gpu_init();        /* Adreno 640 (sweetgpu=1): bsd/dev/sweet_gpu.c */
+ #define GPU_TRAIL_PA	0xE2000000ull	/* sunfish: low RAM outside XNU (a6_log mirror) */
+ #define GPU_TRAIL_SIZE	0x10000u
+ bool sweet_gpu_ready(void);
+@@ -290,6 +291,7 @@ gpu_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+ 	uint64_t t0, ns;
+ 	uint32_t delay_s = 0;
++	sweet_cpusample_init();	/* 0166: start from here, a thread known to log (sweetcpusample=1) */
+ 	PE_parse_boot_argn("sweetgpudelay", &delay_s, sizeof(delay_s));
+ 	if (delay_s) {
+ 		static int gpu_delay_chan;
 diff --git a/osfmk/kern/thread.c b/osfmk/kern/thread.c
 new file mode 100644
 index 0000000..7fe8916
