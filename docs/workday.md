@@ -392,3 +392,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - After: 0 swaps/s in both benches, backboardd ~910-990 ms per submit, GPU 100% busy. The screen stayed on the lock screen and the unlock swipe did not take.
   - So the slow-down is not the missing OOB vote. Next: xnu 0169 measures the real GPU core MHz (RBBM perf counter) and dumps clock/GX state at boot and after recovery.
 - An SMMU fault repeats on the USB path before the hang (cb fsr 400, every ~5.6 s from 46.8 s, `busERR addr 0`). This is new and unexplained.
+- **xnu 0169 (kernel45, rec4): the clock probe finds the cause.**
+  - The GPU core runs at 564 MHz from boot to the hang (379.8 s). After recovery it reads 175 MHz, then 14 MHz from 393 s on.
+  - backboardd submits go from ~24 ms to 90-680 ms, with the GPU 99-100% busy.
+  - The recovery diag shows dcvs ret 0, perf_level 5, dcvs perf 30000005: the GMU acked the same level without reprogramming the GX clock, which the GX collapse had reset.
+  - Before the hang: 17.7 swaps/s. The "clk diag (boot)" line never printed.
+- Fix attempt xnu 0170: in a6_gx_on, vote another DCVS level first, then the real one (CI run 40223666383).
