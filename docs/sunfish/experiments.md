@@ -33,3 +33,6 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 | 2026-10-24 | xnu 0165 `sweetvsyncahead=8/16.7` | beat CA's vbl threshold | pacing | no effect | dead end | 244f7e7 |
 | 2026-10-24 | xnu 0166 `sweetcpusample` | CA is CPU-bound | - | render thread 10-15 ms CPU/frame, 55-75% on A76; CPUs mostly idle | dead end (waiting, not CPU) | fe0675c |
 | 2026-10-24 | SWEET_CTL completion stamps | completion path is slow | - | GPU end -> handlers < 1 ms | dead end | 98a324c |
+| 2026-10-24 | timeline analysis: CP span overlap/busy (ctlA/B, cs7/8) | long submits include waiting or others' work | - | 0 overlaps; long spans fixed at 38.6 ms p50 / 40.4 p95; GPU 25-37% busy; trace can't split busy vs stall | inconclusive (needs RBBM busy counter / per-pass CP timestamps) | - |
+| 2026-10-24 | Reduce Transparency (`EnhancedBackgroundContrastEnabled=1`) | blur passes are the 40 ms frames | 3-10 | CA RT shaders fail in bridge ("vertexFunction is not a MTLFunction"), GPU hang, recovery fails; not measurable | failed (bridge bug; pref removed) | - |
+| 2026-10-24 | `sweetddr=1` DDR/NoC top vote (off by default in sunfish-boot.sh) | 40 ms submits are bandwidth-bound | 5+ | 17.3/16.9 fps vs 20.1/20.3; bb p50/p95 5.7/40.0 ms unchanged (mean 13.1 vs ~16.7, more short submits) | dead end (keep sweetddr=0) | - |
