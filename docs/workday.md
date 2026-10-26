@@ -522,3 +522,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - GPU pool: 198 MB at start, 319 after 10 min, then flat at 373-424 MB (saw-tooth), 410 at end.
 - Average 11.0 swaps/s over 601 stats lines (app-open mix, not a swipe bench).
 - Battery on TB4: +965 mA charging early on (chg=1).
+
+## 2026-10-26 ~19:20-19:35 nbproto bridge + Reduce Transparency repro (kernel52, sk52b boot)
+- Installed work/metal2-nbproto bundle (class_addProtocol NBFunction/NBLibrary): "is not a MTLFunction" lines after backboardd restart: 0 (was thousands per boot).
+- RT run 1 (rtj): `EnhancedBackgroundContrastEnabled=1`, cfprefsd killed, backboardd restarted, 90 s on the lock screen only: no hang. pipelines.log 8664 -> 8790; drawlog 40 passes.
+- RT run 2 (rtj2): unlocked, 12 home swipe pairs, dock pull-up, one app open, ~164 s: 0 hang/recover lines. Swap rate fell from 21.8 to 5.8/s during swipes, avg present copy 22-38 ms (RT is slow, not hung). pipelines.log 8935 -> 9165; drawlog 20 passes. Webcam: dock and search pill drawn dark opaque (RT looks active, not certain).
+- Undo both times: key removed (plist 494 B), SWEET_DRAWLOG removed, 21-26 swaps/s, home healthy.
+- Reading: the 2026-10-24 RT hang (kernel42, old bridge) did not reproduce on kernel52 + nbproto bridge. Cause unproven (old bridge, the pre-0174 clock state, or chance). Logs: ../logs/rtj*-{pipelines,drawlog,live}.

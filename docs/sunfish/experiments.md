@@ -62,3 +62,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-25 rescue log (read via toybox cmp -l vs /dev/zero): rst3 = Kernel data abort, esr 0x9600004f, far = toybox xxd user buffer → PAN memcpy bug (fixed 0175). Soak-reset rescues were overwritten.
 - 2026-10-25 sk52 (kernel52, 20 min app soak, stopped for teardown): no reset, no GPU hang; 12.9 swaps/s; pool peak 470 MB; Spotlight importer extensions crash-loop (232 CRASH lines).
 - 2026-10-26 sk52b: kernel52 1 h appsoak, 210 opens, 0 resets/hangs/panics; pool 198 -> flat ~380-420 MB; 11.0 swaps/s avg.
+- 2026-10-26 rtj/rtj2: nbproto bridge installed (0 MTLFunction lines); Reduce Transparency on kernel52 ~4 min incl. home swipes: 0 GPU hangs; RT drops to ~6 swaps/s.
