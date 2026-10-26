@@ -514,3 +514,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
   - Boot kernel52.
   - Run `tools/sunfish-appsoak.sh TAG 3600`.
   - On a reset, boot once and read the rescue first (`toybox cmp -l /dev/rufsroot0 /dev/zero $((28728186*4096)) 0 | toybox head -n 262144`).
+
+## 2026-10-26 sk52b: 1 h app soak on kernel52 (clean)
+- Boot: kernel52, `sweetpresentwait=1 flamereboot=0` + defaults (recover=2, kill=1), 3978 mV at start.
+- `sunfish-appsoak.sh sk52b 3600`: 18:18:17 to 19:19:55, 35 cycles x 6 apps = 210 opens, 0 openfail.
+- 0 GPU hang/fault, 0 recoveries, 0 panics, 0 resets. First full hour without a reset since 0175/0176.
+- GPU pool: 198 MB at start, 319 after 10 min, then flat at 373-424 MB (saw-tooth), 410 at end.
+- Average 11.0 swaps/s over 601 stats lines (app-open mix, not a swipe bench).
+- Battery on TB4: +965 mA charging early on (chg=1).
