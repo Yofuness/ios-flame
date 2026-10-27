@@ -546,3 +546,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Leading theory (~40%): stuck state in the CX domain (GPU SMMU context bank / TBU / GBIF) after an in-flight mid-IB hang; the injected path only recovers because the fault handler clears the SMMU. Our "full" recovery is a GX-only cycle with the GMU running; Linux does a full GMU/CX collapse + re-boot.
 - Fix candidates: (a) always reset SMMU CB1 (SCTLR.M off, clear FSR, TLBIALL+SYNC, on) and GBIF before gpu_cp_init; (b) escalate to CX collapse + a6_power_up if me_init still fails; (c) log CB1 SCTLR/FSR/TLBSTATUS, GBIF halt/outstanding, CP_RB_BASE/SQE base, gpucc +1534/+1554 before me_init.
 - The bad-IB injector (SMMU fault) cannot reproduce this. Need a hang inside valid memory: CP_WAIT_REG_MEM on a never-written dword, or an endless shader.
+
+## 2026-10-26 ~21:00-21:50 kernel53 (xnu 0177) stall-hang recovery, 565 MHz
+- 0177: `sweethangtest` bit 30 = stall IB (CP_WAIT_REG_MEM on a never-written scratch dword, no SMMU fault); SMMU CB reset (SCTLR.M off, FSR clear, TLBIALL+SYNC, restore) + GBIF halt release before every recovery gpu_cp_init; `recover2: pre-me_init:` diagnostics. Hex boot-args parse fine.
+- 5 boots (st1-st5; 3 present 0xC0000600, 2 client 0x40000BB8): 5/5 injected, 5/5 "recover2: done" in 26.0-26.4 ms, me_init idle, display back ~6.7 s after the hang; home screen on webcam after unlock; 16.6-17.8 swaps/s and 12.5-12.7 ms/submit on the home screen after (st4, st5).
+- Hang state: fsr 0 (no fault, as intended) but rptr == wptr, ib rem 0, rbbm 800005 (one c00014): NOT the real-hang state (sk430: rptr 570 wptr 949, ib1 rem 7e, rbbm cf9495). Pre-reset CB state every time: sctlr 67, fsr 400, tlbstatus 0, GBIF halt 0 ack 1.
+- Open: whether the reset is what helps. Control (sweetsmmureset=0, xnu 0178 / kernel54) next.
