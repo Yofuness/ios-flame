@@ -1,0 +1,67 @@
+From 2648c0338fd30c64e364a208811607b3c7819838 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Mon, 26 Oct 2026 22:45:02 -0400
+Subject: [PATCH] sunfish: terminate a stalled SMMU fault at the start of
+ recovery
+
+---
+ bsd/dev/sweet_a6xx.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index fd47c88..f71ab79 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -1463,6 +1463,26 @@ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ 	    rd32(c + CB_TLBSTATUS));
+ }
+ 
++/*
++ * 0181: a stalled SMMU fault (FSR SS) keeps a transaction pending and makes the first me_init time out, so
++ * terminate it at the very start of a recovery, before cp stop / GBIF halt / reset. Off with sweetsmmureset=0.
++ */
++static void a6_smmu_early_resume(const struct a6_gpu *g)
++{
++	int v = 1;
++	if (g->gpu_cb < 0)
++		return;
++	(void)PE_parse_boot_argn("sweetsmmureset", &v, sizeof(v));
++	if (!v)
++		return;
++	uint64_t c = SMMU_CB(g->gpu_cb);
++	uint32_t fsr = rd32(c + CB_FSR);
++	if (fsr & (1u << 30)) {
++		wr32(c + CB_RESUME, 1);		/* 1 = terminate */
++		a6_log("recover2: early smmu resume: fsr %x\n", fsr);
++	}
++}
++
+ static int gpu_cp(struct a6_gpu *g)
+ {
+ 	if (smmu_pick(&g->gpu_smr, &g->gpu_cb, g->gmu_cb + 1)) {
+@@ -1495,11 +1515,14 @@ static void r2_stage(const char *what, int rc)
+ static int a6_recover_full(struct a6_gpu *g)
+ {
+ 	int rc;
++	a6_smmu_early_resume(g);		/* 0181 */
+ 	r2_stage("start", 0);
+ 	wr32(GREG(CP_SQE_CNTL), 0);
+ 	r2_stage("cp stop", 0);
+ 	rc = gbif_halt_bounded();
+ 	r2_stage("gbif halt", rc);
++	if (a6_gx_up())			/* 0181: is the stall gone after the halt? */
++		a6_log("recover2: after gbif halt: rbbm status3 %x\n", rd32(GREG(0x213)));
+ 	wr32(GREG(0x43), 1);			/* RBBM_SW_RESET_CMD */
+ 	(void)rd32(GREG(0x43));
+ 	a6_delay_us(100);
+@@ -1540,6 +1563,7 @@ int a6_recover(struct a6_gpu *g)
+ 	if (a6_recover_mode == 2)
+ 		a6_log("recover2: full recovery failed, trying the GBIF-halt path\n");
+ #endif
++	a6_smmu_early_resume(g);		/* 0181 */
+ 	(void)a6_clear_fault(g);
+ 	wr32(GREG(0x43), 1);			/* RBBM_SW_RESET_CMD */
+ 	(void)rd32(GREG(0x43));
+-- 
+2.56.0
+
