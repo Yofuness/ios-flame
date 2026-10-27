@@ -39,7 +39,7 @@ from the backup with plistlib.
 |---|---|---|
 | Charging | battery drains ~0.5 A under load even on the charger; the charger is never configured | `docs/sunfish/charger-regs.md`; PMIC writes are risky, ask the user first |
 | Battery % | IR-compensated estimate (0128) never checked | status.md |
-| USB link | flaps after boot and dies on replug (no SSH, no live log) | plan.md step 5 |
+| USB link | port resets recover since xnu 0184 (kernel60); physical replug and the post-boot flap untested | plan.md step 5 |
 | GPU hang recovery | works on injected hangs (5/5, ~26 ms) but never met a real hang since 0181/0182 | plan.md step 2 |
 | UI watchdog | catches a frozen UI only; a kernel hang with swaps still running is not caught | plan.md step 4 |
 | Speed | ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd | display-perf.md |

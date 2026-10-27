@@ -628,3 +628,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - In dd1's log every *SpotlightIndexExtension exec follows `exec searchd` by ~0.4 s (searchd started 21 times in 30 min). Dropped com.apple.searchd.
 - dd2 (kernel59): lock screen and Spotlight screen normal on the webcam (scratchpad dd2-lock.jpg, dd2-spotlight.jpg). 15 min appsoak: 54/54 opens; 1 CRASH line (PhotosFileProvider), 0 extension launches. The VoiceMemos/podcasts/SMS crashes are gone too.
 - New file docs/sunfish/broken.md: disabled launchd jobs (9 so far), broken services, other broken things.
+
+## 2026-10-27 ~11:20-11:58 plan step 5: USB link survives a port reset (kernel60, xnu 0184)
+- Cause (investigator): sweet_usb.c handled a bus reset by clearing the address only; ep0 state, `configured`, `tx_busy` and the started transfers stayed stale, so after a host reset the endpoints were never reconfigured. VBUS is forced valid, so no disconnect event. The "busERR / SMMU cb fsr 400" line is a harmless diagnostic print (translation off, FSR format bits).
+- 0184: on reset/disconnect, ENDTRANSFER (ForceRM) on all started endpoints, CLEARSTALL, DALEPENA=3, address 0, clear configured/tx queue/tx_busy, link down event, re-arm ep0 SETUP; ignore stale data-endpoint events until configured; DEVTEN link-state change logged. Off with `sweetusbreset=0`. CI run 40528851023 (third attempt: the first two never got a macOS runner).
+- ur1 (kernel60, defaults): link up 12 s after boot. 5 port cycles from the PC (`echo 1 > /sys/bus/usb/devices/3-0:1.0/usb3-port1/disable`, 5 s, `echo 0`): link back after 2 s in 5/5, SSH ok. No "0184" lines reached the live log (lines during the reset are lost; not checked further).
+- ur0 control (kernel60, `sweetusbreset=0`): 0/2; the PC re-enumerated the phone (new device 51, cdc_ether registered, 192.168.7.1 assigned) but no ping. The phone is now unreachable (no Wi-Fi either) and needs a physical reboot (hold power + vol-down to fastboot).
+- Open: physical unplug/replug (VBUS loss) untested; the link "flap" after boot not reproduced today.
