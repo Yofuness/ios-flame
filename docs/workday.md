@@ -565,3 +565,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Rung A works: backboardd SIGSTOPped at 241.1 s (last swap) with taps every 5 s -> kill at 271.1 s (30.0 s), new pid, "swaps resumed" at 285.9 s. A second kill at 320.9 s fired after a real 30 s freeze of the respawned backboardd (taps arriving), recovered again.
 - Rung B not reached: the respawned backboardd swapped before it could be stopped, which resets the rungs (by design: a respawn that draws counts as recovered). Rung B (stop pets -> fastboot) untested; to test, stop backboardd's respawn before its first swap, or add a debug arg.
 - Phone left on night2 (kernel53, no injection, 5%), 4456 mV.
+
+## 2026-10-26 ~22:35-22:43 kernel56 (xnu 0180) SMMU stall-on-fault injector
+- `sweethangtest=0xA0000600`: present blit from unmapped VA with CB SCTLR CFCFG (stall on fault). Hang: smmu fsr 40000002, rbbm status1 10301 status2 10100 status3 1f00101 (bit 24 SMMU stalled), cb fsr raw 40000402.
+- **ss2, reset off (sweetsmmureset=0): reproduces the real-hang failure exactly**: me_init `rptr 0 wptr 9 status c00015 cp_status1 81104006 TIMEOUT` on every path, "GBIF halt + soft reset + CP init -> -1", recovery FAILED, UI on CPU copies (same as sk430).
+- **ss1, reset on: recovers, but slowly**: "smmu stalled fault terminated (CB_RESUME)" seen; first me_init still TIMEOUT (c20015), GBIF-halt path TIMEOUT (c20001), then soft reset + CP init idle -> "recover2: done after 2618248 us". GPU 5 s lines continue.
+- Reading: a stalled SMMU transaction is enough to make CP init fail; terminating it (CB_RESUME) is what lets the CP come back. The resume comes too late in the full path (after GBIF halt + GX cycle), so the first attempts still fail. The real sk430 hang printed fsr 0 in terminate mode, so whether it was an SMMU stall is not proven, but the failure signature is identical.
+- Phone on night3 (kernel53, 5%), 4455 mV.
