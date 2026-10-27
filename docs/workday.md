@@ -539,3 +539,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Battery 4078 -> 4390 mV, +870 mA (charging).
 - **565 vs 430:** sk52b (565) 0 hangs in 1 h; sk430 1 unrecovered hang in 1 h. 430 is not safer -> keep 565 MHz (sweetgpufreq=5) as default. Pre-hang swap rates are not comparable (app-open mix).
 - New open item: recovery after a real (not injected) hang fails at CP me_init; injected hangs (rec10) recovered. Next: compare the CP/GMU state on that path with the injected one.
+
+## 2026-10-26 Why recovery fails after a real hang (investigator, logs + code only)
+- Real (sk430 2296 s) vs injected (kernel50, uptime ~190): identical through sw reset, GX off/on, pll0 restore (both locked). Differences: real hang had no SMMU fault (fsr 0), pending ring work (rptr 570 wptr 949, ib1 rem 7e), rbbm cf9495, cp_status1 8113xxxx, two extra gpucc diffs (+1534 0->1, +1554 1->0); injected = SMMU fault fsr 2, ring empty, rbbm 800005, gets "clearing smmu cb1 fault" + TLB flush.
+- After GX on both show rbbm 1 / cp_status1 1000000 (idle); real me_init then times out with rptr 0 (CP never fetched the ring): status c00015, cp_status1 81104006. Same signature as pre-0167 soft-reset failures, so the stuck state survives a GX power cycle.
+- Leading theory (~40%): stuck state in the CX domain (GPU SMMU context bank / TBU / GBIF) after an in-flight mid-IB hang; the injected path only recovers because the fault handler clears the SMMU. Our "full" recovery is a GX-only cycle with the GMU running; Linux does a full GMU/CX collapse + re-boot.
+- Fix candidates: (a) always reset SMMU CB1 (SCTLR.M off, clear FSR, TLBIALL+SYNC, on) and GBIF before gpu_cp_init; (b) escalate to CX collapse + a6_power_up if me_init still fails; (c) log CB1 SCTLR/FSR/TLBSTATUS, GBIF halt/outstanding, CP_RB_BASE/SQE base, gpucc +1534/+1554 before me_init.
+- The bad-IB injector (SMMU fault) cannot reproduce this. Need a hang inside valid memory: CP_WAIT_REG_MEM on a never-written dword, or an endless shader.

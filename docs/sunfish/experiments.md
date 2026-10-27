@@ -64,3 +64,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-26 sk52b: kernel52 1 h appsoak, 210 opens, 0 resets/hangs/panics; pool 198 -> flat ~380-420 MB; 11.0 swaps/s avg.
 - 2026-10-26 rtj/rtj2: nbproto bridge installed (0 MTLFunction lines); Reduce Transparency on kernel52 ~4 min incl. home swipes: 0 GPU hangs; RT drops to ~6 swaps/s.
 - 2026-10-26 sk430: kernel52 430 MHz 1 h appsoak: 0 resets, 1 real GPU hang at 2296 s, recovery FAILED (me_init TIMEOUT), UI continued on CPU copies; 565 kept as default.
+- 2026-10-26 recovery-fail analysis: real hang = no SMMU fault, ring pending; me_init rptr 0 after clean GX cycle; suspect CX-side SMMU/GBIF state; injector can't reproduce (needs wait-forever IB).
