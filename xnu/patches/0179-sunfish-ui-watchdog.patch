@@ -1,0 +1,193 @@
+From 36f5ef87413bbc012f36ebe67b70b95889007b3b Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Mon, 26 Oct 2026 21:52:10 -0400
+Subject: [PATCH] sunfish: UI watchdog (sweetuiwdt)
+
+---
+ bsd/dev/sweet_gpu.c                      | 21 ++++++++--
+ iokit/Kernel/arm/SweetFramebuffer.cpp    | 53 ++++++++++++++++++++++++
+ iokit/Kernel/arm/SweetPlatformExpert.cpp | 10 +++++
+ iokit/Kernel/arm/hid/SweetHID.cpp        |  5 +++
+ 4 files changed, 86 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 2b03f13..f071654 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -351,9 +351,8 @@ sweet_gpu_init(void)
+ 		/* 0167: sweetgpurecover=2 (GX power cycle in a6_recover), sweetgpukill=1 (restart backboardd after one) */
+ 		PE_parse_boot_argn("sweetgpurecover", &a6_recover_mode, sizeof(a6_recover_mode));
+ 		PE_parse_boot_argn("sweetgpukill", &gpu_kill, sizeof(gpu_kill));
+-		if (gpu_kill) {
+-			gpu_kill_call = thread_call_allocate(gpu_kill_fn, NULL);
+-		}
++		/* 0179: always allocated, the UI watchdog (sweetuiwdt) also uses it */
++		gpu_kill_call = thread_call_allocate(gpu_kill_fn, NULL);
+ 	}
+ 	gpu.perf_level = lvl;
+ 	pool_kva = va;
+@@ -662,6 +661,15 @@ gpu_kill_fn(__unused thread_call_param_t a, __unused thread_call_param_t b)
+ 	proc_iterate(PROC_ALLPROCLIST, gpu_kill_proc, NULL, NULL, NULL);
+ }
+ 
++/* 0179: UI watchdog (SweetFramebuffer.cpp): kill backboardd off the caller's thread */
++void
++sweet_gpu_kill_backboardd(void)
++{
++	if (gpu_kill_call) {
++		thread_call_enter(gpu_kill_call);
++	}
++}
++
+ /* Soft reset + CP re-init; everything queued is lost, its fences complete at once (waiters return). */
+ static void
+ gpu_recover_locked(const char *why)
+@@ -684,6 +692,13 @@ gpu_recover_locked(const char *why)
+ 		a6_log("%s: GPU not recovered\n", why);
+ 		gpu_ready = false;
+ 		rec_ok = false;
++		/* 0179: a failed recovery leaves a black screen; try a backboardd restart once per boot (sweetgpukill=1) */
++		static bool failed_kill_done;
++		if (gpu_kill && gpu_kill_call && !failed_kill_done) {
++			failed_kill_done = true;
++			a6_log("recover: failed, killing backboardd once anyway\n");
++			thread_call_enter(gpu_kill_call);
++		}
+ 	}
+ 	if (a6_recover_mode == 2) {
+ 		uint64_t ns;
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 9a10573..b0bf515 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -51,6 +51,10 @@ int sweet_gpu_present(int slot, uintptr_t kva, uint32_t offset, uint32_t w, uint
+ void sweet_gpu_panel_stride(uint32_t stride);
+ void sweet_tl(uint32_t ev, uint32_t a, uint32_t b);
+ void sweet_tl_flush(void);
++/* 0179: UI watchdog (sweetuiwdt): touch stamp from SweetHID.cpp, backboardd kill in sweet_gpu.c, pet stop in SweetPlatformExpert.cpp */
++extern uint64_t sweet_last_touch_abs;
++void sweet_gpu_kill_backboardd(void);
++extern volatile int flame_wdt_stop;
+ extern int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ }
+ #define SWEET_FB_GPU_ROWBYTES           4352    /* the 2D engine writes 64-byte multiples */
+@@ -283,6 +287,53 @@ AppleCLCD::start(IOService *provider)
+ }
+ 
+ static uint64_t sweet_fb_swap_count;
++/* 0179: when CA last swapped (mach_absolute_time), for the UI watchdog */
++static uint64_t sweet_fb_last_swap_abs;
++
++/*
++ * 0179: UI watchdog, checked every 5 s from the vsync tick (workloop thread, so thread_call_enter is fine).
++ * Boot-arg sweetuiwdt=SECS (default 30, 0 = off). Frozen = screen on, a touch in the last 10 s, no swap for
++ * SECS. Rung 1: kill backboardd (launchd respawns it). Rung 2: still no swap SECS later with touch input:
++ * stop the APSS watchdog pets so the phone resets into fastboot. Swaps resuming clear the rungs.
++ */
++static void
++sweet_uiwdt_check(bool power_off, uint64_t now)
++{
++	static int secs = -1, rung;
++	static uint64_t secs_abs, touch_win_abs, rung_abs;
++	if (secs < 0) {
++		secs = 30;
++		PE_parse_boot_argn("sweetuiwdt", &secs, sizeof(secs));
++		nanoseconds_to_absolutetime((uint64_t)(secs > 0 ? secs : 0) * 1000000000ULL, &secs_abs);
++		nanoseconds_to_absolutetime(10ULL * 1000000000ULL, &touch_win_abs);
++		if (secs > 0) {
++			IOLog("SWEET UIWDT: armed, %d s\n", secs);
++		}
++	}
++	uint64_t swap = sweet_fb_last_swap_abs, touch = sweet_last_touch_abs;
++	if (secs <= 0 || swap == 0 || touch == 0 || flame_wdt_stop) {
++		return;
++	}
++	if (rung && swap > rung_abs) {
++		IOLog("SWEET UIWDT: swaps resumed\n");
++		rung = 0;
++	}
++	bool frozen = !power_off && now > touch && now - touch < touch_win_abs &&
++	    now > swap && now - swap > secs_abs;
++	if (!frozen) {
++		return;
++	}
++	if (rung == 0) {
++		IOLog("SWEET UIWDT: no swap for %d s with touch input: killing backboardd\n", secs);
++		sweet_gpu_kill_backboardd();
++		rung = 1;
++		rung_abs = now;
++	} else if (rung == 1 && now - rung_abs > secs_abs) {
++		IOLog("SWEET UIWDT: still frozen: stopping watchdog pets, reset follows\n");
++		flame_wdt_stop = 1;
++		rung = 2;
++	}
++}
+ 
+ void
+ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+@@ -317,6 +368,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		fb->fStatSwaps = sweet_fb_swap_count;
+ 		fb->fStatPresents = 0;
+ 		fb->fStatPresentAbs = 0;
++		sweet_uiwdt_check(fb->fPowerOff, now);	/* 0179 */
+ 	}
+ 	/*
+ 	 * CA::WindowServer::IOMFBServer::vsync_callback(fb, a1, a2, a3, refcon): a1 only goes to kdebug, a2 is
+@@ -475,6 +527,7 @@ AppleCLCD::swap(const uint8_t *rec)
+ 		IOLockWakeup(fLock, &fPresentReq, true);
+ 	}
+ 	IOLockUnlock(fLock);
++	sweet_fb_last_swap_abs = mach_absolute_time();	/* 0179 */
+ 	if ((++sweet_fb_swap_count % 1000) == 0) {
+ 		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
+ 	}
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 2514af3..e788ba1 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -38,6 +38,10 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ #define FLAME_WDT_EN    0x08
+ #define FLAME_WDT_PET_S 5
+ 
++/* 0179: set by the UI watchdog (SweetFramebuffer.cpp) when backboardd stays frozen: stop petting */
++extern "C" volatile int flame_wdt_stop;
++volatile int flame_wdt_stop;
++
+ static void
+ flame_wdt_thread(void *arg)
+ {
+@@ -45,6 +49,12 @@ flame_wdt_thread(void *arg)
+ 	int reboot_s = 0;
+ 	PE_parse_boot_argn("flamereboot", &reboot_s, sizeof(reboot_s));
+ 	for (int t = 0; reboot_s <= 0 || t < reboot_s; t += FLAME_WDT_PET_S) {
++		if (flame_wdt_stop) {
++			IOLog("FLAME WDT: UI watchdog stop, no more pets: reset follows\n");
++			for (;;) {
++				IOSleep(1000000);
++			}
++		}
+ 		wdt[FLAME_WDT_RST / 4] = 1;
+ 		IOSleep(FLAME_WDT_PET_S * 1000);
+ 	}
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 6d98131..76c6427 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -594,9 +594,14 @@ sweet_hid_key(int key, int down)
+ 	}
+ }
+ 
++/* 0179: last touch report, for the UI watchdog (SweetFramebuffer.cpp, sweetuiwdt) */
++extern "C" uint64_t sweet_last_touch_abs;
++uint64_t sweet_last_touch_abs;
++
+ extern "C" void
+ sweet_hid_touch(int finger, int down, int x, int y)
+ {
++	sweet_last_touch_abs = mach_absolute_time();
+ 	if (gSweetTouch) {
+ 		gSweetTouch->touch(finger, down != 0, x, y);
+ 	}
+-- 
+2.56.0
+
