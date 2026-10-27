@@ -591,3 +591,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Open: swaps 25-30 s after recovery were 6.1 / 6.7 / 8.2 / 6.1 per s against ~19 before (rec10 on kernel50 was back to 19 at full speed). Could be the lock screen after the respawn rather than a slow GPU; check in the next soak (+2-3 min window).
 - er7 boot also logged "SWEET USB: busERR addr 0; SMMU cb fsr 400" every ~5.6 s from 43 to 105 s (not seen on er4-er6).
 - Phone left on kernel57, no injection, 100% brightness, 4456 mV. Next: sk57, 1 h app soak at 430 MHz (running).
+
+## 2026-10-27 06:29-07:31 sk57: 1 h app soak, kernel57 at 430 MHz (sweetgpufreq=4)
+- 61.6 min, 35 cycles x 6 apps: 210/210 opens, 0 resets, **0 GPU hangs** (sk430 on kernel52 had 1 in the same mix). So the real-hang test of 0181 is still open.
+- Pool 161 MB at 89 s -> 345 MB at end, peak 444. Battery 4455 -> 4428 mV. Mean 9.0 swaps/s over the run (includes lock/idle time).
+- Noise: 411x "Failed to send exception EXC_CORPSE_NOTIFY ... pid 1148" (from 821 s), 273x apple80211 CURRENT_NETWORK error 6.
+- Phone left on kernel57 at 565 MHz (sweetpresentwait=1 flamereboot=0), home screen.
