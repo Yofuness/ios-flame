@@ -1,0 +1,39 @@
+From a4606702e16d8aa6c5a3d78fae797e3a48508201 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Mon, 26 Oct 2026 21:44:11 -0400
+Subject: [PATCH] sunfish: sweetsmmureset=0 control switch
+
+---
+ bsd/dev/sweet_a6xx.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 104e24a..ec64953 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -1400,10 +1400,22 @@ static bool recover_diag;
+ 
+ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ {
++	/* 0178: sweetsmmureset=0 skips the reset below (control runs: is it what makes stall-hang recovery work?) */
++	static int smmureset = -1;
+ 	recover_diag = true;
+ 	if (g->gpu_cb < 0)
+ 		return;
+ 	uint64_t c = SMMU_CB(g->gpu_cb);
++	if (smmureset < 0) {
++		int v = 1;
++		(void)PE_parse_boot_argn("sweetsmmureset", &v, sizeof(v));
++		smmureset = v != 0;
++	}
++	if (!smmureset) {
++		a6_log("recover2: smmu/gbif reset: skipped (sweetsmmureset=0), sctlr %x fsr %x tlbstatus %x\n",
++		    rd32(c + CB_SCTLR), rd32(c + CB_FSR), rd32(c + CB_TLBSTATUS));
++		return;
++	}
+ 	uint32_t sctlr = rd32(c + CB_SCTLR);
+ 	wr32(c + CB_SCTLR, sctlr & ~1u);
+ 	(void)rd32(c + CB_SCTLR);
+-- 
+2.56.0
+
