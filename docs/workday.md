@@ -529,3 +529,13 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - RT run 2 (rtj2): unlocked, 12 home swipe pairs, dock pull-up, one app open, ~164 s: 0 hang/recover lines. Swap rate fell from 21.8 to 5.8/s during swipes, avg present copy 22-38 ms (RT is slow, not hung). pipelines.log 8935 -> 9165; drawlog 20 passes. Webcam: dock and search pill drawn dark opaque (RT looks active, not certain).
 - Undo both times: key removed (plist 494 B), SWEET_DRAWLOG removed, 21-26 swaps/s, home healthy.
 - Reading: the 2026-10-24 RT hang (kernel42, old bridge) did not reproduce on kernel52 + nbproto bridge. Cause unproven (old bridge, the pre-0174 clock state, or chance). Logs: ../logs/rtj*-{pipelines,drawlog,live}.
+
+## 2026-10-26 sk430: 1 h app soak at 430 MHz (kernel52, sweetgpufreq=4), step 2b
+- 19:53:05 to 20:54:48, 35 cycles, 210 opens, 0 openfail, 0 resets, 0 panics. Core 429-430 MHz.
+- **1 real GPU hang, NOT recovered** at uptime 2296.098 (present: fence 46266, done 46247, smmu fsr 0; rb rptr 570 wptr 949, ib1 rem 7e, rbbm cf9495).
+  - recover2 ran every stage OK (cp stop, GBIF halt, sw reset, gx off/on, DCVS, pll0 restore "locked"), then `ring me_init ... status c00015 cp_status1 81104006 TIMEOUT`; GBIF-halt fallback timed out the same way; FAILED after 3.94 s.
+  - The UI kept going without the GPU: "GPU present not used: GPU blit failed", swaps resumed at 2303 s with CPU panel copies (~2.4 ms), 22-27 swaps/s, no more `SWEET GPU: 5s` lines. The soak finished all opens on that path.
+- Pool: 198 MB at 121 s, 317 / 325 / 312 at 10-min marks, peak 399, 348 at the hang.
+- Battery 4078 -> 4390 mV, +870 mA (charging).
+- **565 vs 430:** sk52b (565) 0 hangs in 1 h; sk430 1 unrecovered hang in 1 h. 430 is not safer -> keep 565 MHz (sweetgpufreq=5) as default. Pre-hang swap rates are not comparable (app-open mix).
+- New open item: recovery after a real (not injected) hang fails at CP me_init; injected hangs (rec10) recovered. Next: compare the CP/GMU state on that path with the injected one.
