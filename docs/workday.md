@@ -604,3 +604,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Two earlier attempts by the agent did not run the test (no pgrep; then an accidental SIGCONT + SIGTERM). psx takes a numeric signal: 17 STOP, 19 CONT, default 15 TERM.
 - `tools/sunfish-boot.sh` default changed: `flamereboot=1800` -> `flamereboot=0 sweetuiwdt=30` (kernels before 55 ignore sweetuiwdt, so on those there is no auto-reboot at all now).
 - Booted uw2b (kernel57, sweetpresentwait=1, new defaults): "UIWDT: armed, 30 s", home screen on the webcam, 4456 mV in fastboot.
+
+## 2026-10-27 ~07:55-09:00 kernel58 (xnu 0182: SMMU stall-on-fault by default)
+- 0182: GPU context bank SCTLR gets CFCFG (0x80) at setup and again after the recovery's SMMU/GBIF reset; a6_clear_fault terminates a stalled fault (CB_RESUME) before clearing FSR. Off with `sweetsmmustall=0`. CI run 40499063303 -> work/kernel58.
+- es1 (565 MHz, `sweethangtest=0xA0000200`): injected at 130.3 s; "early smmu resume: fsr 40000402"; full path, cp init + zap -> 0; **recover2 done after 26440 us**; reset leaves sctlr e7 (stall bit on). backboardd respawned at 132.4 s, lock screen on webcam, then **21.5 swaps / 20.5 panel updates per s at +60-120 s with swipes**: the 6-8/s after er4-er7 was the idle lock screen, not a slow GPU. (Boot-time smmu sctlr line not captured: the live log came up 14 s late.)
+- sk58 (430 MHz, appsoak 3600 s): 204/204 opens, 0 resets, 0 GPU hangs, 0 SMMU fault lines, 0 "clearing smmu", 0 UIWDT. Pool 97 -> 342 MB, peak 436. Battery 4436 -> 4432 mV. Mean 2.4 swaps/s over the hour (lower than sk57's 9.0; not checked whether that is the averaging window or real).
+- Noise: 108x CRASH assetsd, 36x CRASH TipsSpotlightInd, 256x EXC_CORPSE_NOTIFY, 154x CATransformLayer allowsGroupOpacity.
+- Phone left on final58 (kernel58, default args incl. watchdog), home screen, 4456 mV.
