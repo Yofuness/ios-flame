@@ -597,3 +597,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Pool 161 MB at 89 s -> 345 MB at end, peak 444. Battery 4455 -> 4428 mV. Mean 9.0 swaps/s over the run (includes lock/idle time).
 - Noise: 411x "Failed to send exception EXC_CORPSE_NOTIFY ... pid 1148" (from 821 s), 273x apple80211 CURRENT_NETWORK error 6.
 - Phone left on kernel57 at 565 MHz (sweetpresentwait=1 flamereboot=0), home screen.
+
+## 2026-10-27 ~07:40-07:50 uw2: UI watchdog rung B (kernel57) + new boot default
+- Freeze: a phone-side loop `psx -k backboardd 17` (SIGSTOP) every 0.1 s, started detached (`(sh /var/local/freeze.sh &)`; there is no nohup/pgrep/proc on the phone), so each respawned backboardd stops before its first swap. Taps every 5 s from the PC.
+- Last swap ~216 s. **Rung 1** "killing backboardd" at 246.2 s; **rung 2** "still frozen: stopping watchdog pets" at 276.2 s (+30.0 s). The kernel log ran on to 325.6 s (~49 s pet-stop to bite), then the phone was in fastboot at 07:44:40. Works as designed.
+- Two earlier attempts by the agent did not run the test (no pgrep; then an accidental SIGCONT + SIGTERM). psx takes a numeric signal: 17 STOP, 19 CONT, default 15 TERM.
+- `tools/sunfish-boot.sh` default changed: `flamereboot=1800` -> `flamereboot=0 sweetuiwdt=30` (kernels before 55 ignore sweetuiwdt, so on those there is no auto-reboot at all now).
+- Booted uw2b (kernel57, sweetpresentwait=1, new defaults): "UIWDT: armed, 30 s", home screen on the webcam, 4456 mV in fastboot.
