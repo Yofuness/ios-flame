@@ -559,3 +559,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Difference to the real hang (sk430): the real one had ring work pending (rptr 570, wptr 949), ib1 rem 7e and rbbm cf9495 (many blocks busy). The stall leaves the ring drained and rbbm 800005/c00005.
 - Also built: kernel55 = xnu 0179 UI watchdog (`sweetuiwdt=30`: touch within 10 s + no swap for 30 s -> kill backboardd; still frozen 30 s later -> stop APSS pets -> fastboot; backboardd also killed once after a failed GPU recovery). CI ok (run 40435125065), not booted yet.
 - Brightness: at 3/5/8/12% the webcam sees nothing; icons show from 16%. Phone left on a night boot (kernel53, no injection) at 5%; 4456 mV.
+
+## 2026-10-26 ~22:14-22:24 kernel55 UI watchdog (xnu 0179) test (uw1)
+- "SWEET UIWDT: armed, 30 s" at 27.7 s. No trigger in 90 s idle or during 6 swipe pairs.
+- Rung A works: backboardd SIGSTOPped at 241.1 s (last swap) with taps every 5 s -> kill at 271.1 s (30.0 s), new pid, "swaps resumed" at 285.9 s. A second kill at 320.9 s fired after a real 30 s freeze of the respawned backboardd (taps arriving), recovered again.
+- Rung B not reached: the respawned backboardd swapped before it could be stopped, which resets the rungs (by design: a respawn that draws counts as recovered). Rung B (stop pets -> fastboot) untested; to test, stop backboardd's respawn before its first swap, or add a debug arg.
+- Phone left on night2 (kernel53, no injection, 5%), 4456 mV.
