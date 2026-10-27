@@ -577,3 +577,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - er1, er2 (`sweethangtest=0xA0000600`, boot-args tail confirmed): no "hangtest: injecting" line in 4 min of swipes each, so recovery was never exercised. 0181 only touches sweet_a6xx.c recovery code, not the arm path, so the cause is likely the run (present submit 1536 not reached: swaps dropped to 0.2/s around 426 s; possibly not unlocked), not the kernel. Not verified.
 - Next: rerun er with a lower present index (e.g. 0xA0000200) and confirm the home screen first.
 - Phone left on night4 (kernel53, 5%), 4435 mV.
+
+## 2026-10-26 ~23:15 kernel57 (xnu 0181) er3: early CB_RESUME fixes the stall-on-fault recovery
+- `sweethangtest=0xA0000200` (present submit 512): injected at 83.7 s, fault at 85.8 s.
+- "recover2: early smmu resume: fsr 40000402"; after GBIF halt rbbm status3 4f20101; first me_init idle (rptr 9 wptr 9 status 1, cp_status1 1000000), zap rc 0; **recover2 done after 26308 us** (kernel56 with the late resume: 2.6 s on the 3rd path; reset off: FAILED). backboardd killed and respawned; 'SWEET GPU: 5s' continues; lock screen at 5.6-7.8 swaps/s after (pre-hang home ~19).
+- One run only (er1/er2 at index 1536 never injected). Phone left on night5 (kernel53, 5%), 4435 mV.
+- Open: does the real hang (sk430, terminate mode, fsr 0) also clear with 0181? Next real-hang soak on kernel57 at 430 MHz will tell; consider enabling CFCFG (stall mode) in normal operation so real faults look like this injector.
