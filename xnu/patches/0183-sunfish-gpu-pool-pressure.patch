@@ -1,0 +1,155 @@
+From 882445ef083c90d9371ecd62bebe48ead3564c8a Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 09:07:13 -0400
+Subject: [PATCH] sunfish: GPU pool 80% warning, clients drop reuse caches
+ under pressure
+
+---
+ bsd/dev/sweet_gpu.c                   | 45 ++++++++++++++++++++++++---
+ iokit/Kernel/arm/SweetAccelerator.cpp | 24 +++++++++++++-
+ 2 files changed, 64 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index ae7aeaf..41cc3f2 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1232,16 +1232,51 @@ static struct { uint64_t pa, size; } gpool_free[GPOOL_FREE_MAX];       /* sorted
+ static uint32_t gpool_nfree;
+ static uint64_t gpool_used, gpool_peak;
+ 
++static uint64_t
++gpool_total(void)
++{
++	uint64_t total = 0;
++	for (unsigned i = 0; i < sizeof(gpool_ranges) / sizeof(gpool_ranges[0]); i++) {
++		total += gpool_ranges[i].size;
++	}
++	return total;
++}
++
+ /* GPU pool bytes not in use (sweet_gpu_pool_alloc), for the per-client cap in SweetAccelerator */
+ uint64_t sweet_gpu_pool_avail(void);
+ uint64_t
+ sweet_gpu_pool_avail(void)
+ {
+-	uint64_t total = 0;
+-	for (unsigned i = 0; i < sizeof(gpool_ranges) / sizeof(gpool_ranges[0]); i++) {
+-		total += gpool_ranges[i].size;
++	return gpool_total() - gpool_used;
++}
++
++/*
++ * 0183: pool pressure. Crossing 80% in use logs a warning and bumps sweet_gpu_pool_pressure; v2 clients then
++ * drop their 0156 reuse caches on their next alloc or free, and keep none while sweet_gpu_pool_high() (until
++ * the pool is back under 70%).
++ */
++volatile uint32_t sweet_gpu_pool_pressure;
++static bool gpool_high;
++bool sweet_gpu_pool_high(void);
++bool
++sweet_gpu_pool_high(void)
++{
++	return gpool_high;
++}
++
++static void
++gpool_pressure_check_locked(void)
++{
++	uint64_t total = gpool_total();
++	if (!gpool_high && gpool_used * 10 >= total * 8) {
++		gpool_high = true;
++		sweet_gpu_pool_pressure++;
++		a6_log("pool: WARNING %llu of %llu MB in use (80%%, peak %llu): clients drop reuse caches\n",
++		    gpool_used >> 20, total >> 20, gpool_peak >> 20);
++	} else if (gpool_high && gpool_used * 10 < total * 7) {
++		gpool_high = false;
++		a6_log("pool: back under 70%% (%llu MB in use)\n", gpool_used >> 20);
+ 	}
+-	return total - gpool_used;
+ }
+ static bool gpool_ready;
+ static LCK_MTX_DECLARE(sweet_gpool_lock, &sweet_gpu_grp);
+@@ -1277,6 +1312,7 @@ sweet_gpu_pool_alloc(uint64_t bytes, uint64_t *pa)
+ 			if ((gpool_used >> 25) != ((gpool_used - size) >> 25)) {
+ 				a6_log("pool: %llu MB in use (peak %llu)\n", gpool_used >> 20, gpool_peak >> 20);
+ 			}
++			gpool_pressure_check_locked();
+ 			rc = 0;
+ 			break;
+ 		}
+@@ -1297,6 +1333,7 @@ sweet_gpu_pool_free(uint64_t pa, uint64_t bytes)
+ 	if ((gpool_used >> 25) != ((gpool_used + size) >> 25)) {
+ 		a6_log("pool: %llu MB in use (peak %llu)\n", gpool_used >> 20, gpool_peak >> 20);
+ 	}
++	gpool_pressure_check_locked();
+ 	uint32_t i = 0;
+ 	while (i < gpool_nfree && gpool_free[i].pa < pa) {
+ 		i++;
+diff --git a/iokit/Kernel/arm/SweetAccelerator.cpp b/iokit/Kernel/arm/SweetAccelerator.cpp
+index cb50f91..c37512e 100644
+--- a/iokit/Kernel/arm/SweetAccelerator.cpp
++++ b/iokit/Kernel/arm/SweetAccelerator.cpp
+@@ -64,6 +64,8 @@ uint64_t sweet_gpu_recoveries(void);
+ uint64_t sweet_gpu_timestamp(void);
+ int sweet_gpu_pool_alloc(uint64_t bytes, uint64_t *pa);
+ uint64_t sweet_gpu_pool_avail(void);
++extern volatile uint32_t sweet_gpu_pool_pressure;	/* 0183 */
++bool sweet_gpu_pool_high(void);
+ void sweet_gpu_pool_free(uint64_t pa, uint64_t bytes);
+ }
+ 
+@@ -165,7 +167,9 @@ class SweetAcceleratorUserClient : public IOUserClient {
+ 	struct { IOMemoryDescriptor *md; uint64_t pa, len; } fReuse[16];
+ 	uint64_t fReuseBytes;
+ 	uint32_t fReuseHits;
++	uint32_t fPressureSeen;		/* 0183: sweet_gpu_pool_pressure when this client last drained */
+ 	void v2ReuseDrain(void);
++	void v2PressureCheck(void);
+ 
+ public:
+ 	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
+@@ -640,6 +644,21 @@ SweetAcceleratorUserClient::v2ReuseDrain(void)
+ 	fReuseBytes = 0;
+ }
+ 
++/* 0183: the pool crossed 80% since this client last looked: give its reuse cache back. Under fLock. */
++void
++SweetAcceleratorUserClient::v2PressureCheck(void)
++{
++	uint32_t gen = sweet_gpu_pool_pressure;
++	if (gen == fPressureSeen) {
++		return;
++	}
++	fPressureSeen = gen;
++	if (fReuseBytes != 0) {
++		IOLog("SWEET MTL: v2 %s: pool pressure, dropping %llu MB of reuse cache\n", fName, fReuseBytes >> 20);
++		v2ReuseDrain();
++	}
++}
++
+ void
+ SweetAcceleratorUserClient::v2Release(SweetV2BO *bo)
+ {
+@@ -657,8 +676,10 @@ SweetAcceleratorUserClient::v2Release(SweetV2BO *bo)
+ 		fFrees++;
+ 		uint64_t len = bo->md->getLength();
+ 		fPoolBytes -= len;
++		v2PressureCheck();
+ 		unsigned slot = 16;
+-		if (len >= (1u << 20) && bo->md->getRetainCount() <= 1 && fReuseBytes + len <= (64ULL << 20)) {
++		if (len >= (1u << 20) && bo->md->getRetainCount() <= 1 && fReuseBytes + len <= (64ULL << 20) &&
++		    !sweet_gpu_pool_high()) {
+ 			for (unsigned i = 0; i < 16; i++) {
+ 				if (fReuse[i].md == NULL) {
+ 					slot = i;
+@@ -739,6 +760,7 @@ SweetAcceleratorUserClient::v2Method(uint32_t method, const void *in, uint32_t i
+ 		}
+ 		IOMemoryDescriptor *md = NULL;
+ 		IOLockLock(fLock);
++		v2PressureCheck();
+ 		for (unsigned i = 0; len >= (1u << 20) && i < 16; i++) {
+ 			if (fReuse[i].md != NULL && fReuse[i].len == len) {
+ 				md = fReuse[i].md;
+-- 
+2.56.0
+
