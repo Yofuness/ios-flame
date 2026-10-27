@@ -616,3 +616,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - 0183: crossing `sweetpoolwarn`% of the 940 MB pool (default 80) logs "pool: WARNING" and bumps a pressure counter; each v2 client drops its 0156 reuse cache on its next alloc/free and keeps none until use is 10 points under. CI run 40509335807 -> work/kernel59.
 - pp1 (`sweetpoolwarn=40` = 376 MB to force it, 565 MHz, appsoak 1900 s): 5 WARNING lines at 1033 / 1561 / 1666 / 1982 / 2000 s (376-382 MB), each followed by "back under 30%" (272-278 MB) 1-4 s later. Drops: 5, all backboardd, 25/17/25/25/17 MB (109 MB). 108/108 opens, 0 hangs, 0 resets, 0 UIWDT, 0 "no bytes free". Pool 192 -> 314 MB, peak 382. ~10.8 swaps/s mean. Battery 4436 -> 4434 mV.
 - Phone left on final59 (kernel59, default args, warning at 80%), home screen.
+
+## 2026-10-27 ~10:05-10:45 plan step 6: crash-looping daemons (dd1)
+- Dropped launchd jobs com.apple.spotlight.IndexAgent, com.apple.corespotlightservice, com.apple.assetsd, com.apple.assetsd.nebulad, com.apple.driverkitd with tools/sunfish-launchd-drop.sh. Previous plist: /var/local/launchd.plist.pre-step6 (phone), work/userland/launchd.plist.pre-step6 (PC); original still /System/Library/xpc/launchd.plist.pre-drop.
+- dd1 (kernel59, 30 min appsoak): 102/102 opens, 0 resets/hangs, 10.8 swaps/s, pool end 317 MB (peak 385), battery 4434 mV flat.
+- CRASH lines dd1 vs pp1 (same 30 min mix): assetsd 0 vs 88; TipsSpotlightInd 19/19, PassKitSpotlight 19/19, ContactsCoreSpot 10/9, VoiceMemos 10/9, MobileSMSSpotlig 9/9, podcasts 9/9, PhotosFileProvider 1/1, fileproviderd 1/1.
+- Photos opens to "What's New in Photos" + a notification prompt (it rendered black before). Home screen normal. Spotlight UI and lock screen not checked (the agent's swipes missed).
+- Open: the Spotlight index extensions are launched by something other than the two dropped jobs (candidates: searchd, spotlightknowledged, duetexpertd).
