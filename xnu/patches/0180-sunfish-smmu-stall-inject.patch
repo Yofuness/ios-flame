@@ -1,0 +1,158 @@
+From 13ef6b15d13065544deff152dbb55f5872d8417b Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Mon, 26 Oct 2026 22:29:52 -0400
+Subject: [PATCH] sunfish: SMMU stall-on-fault hang injector + RBBM status
+ diagnostics
+
+---
+ bsd/dev/sweet_a6xx.c | 35 ++++++++++++++++++++++++++++++++++-
+ bsd/dev/sweet_a6xx.h |  3 +++
+ bsd/dev/sweet_gpu.c  | 24 ++++++++++++++++++++----
+ 3 files changed, 57 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index c1baf1e..fd47c88 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -83,6 +83,7 @@ static void zero_pa(uint64_t pa, uint64_t size)
+ #define CBAR(n)		(SMMU_GR1 + 4 * (n))
+ #define CBA2R(n)	(SMMU_GR1 + 0x800 + 4 * (n))
+ #define CB_SCTLR	0x00
++#define CB_RESUME	0x08
+ #define CB_TCR2		0x10
+ #define CB_TTBR0	0x20
+ #define CB_TCR		0x30
+@@ -321,6 +322,31 @@ void a6_tlb_flush(const struct a6_gpu *g)
+ 	wait_bit(c + CB_TLBSTATUS, 1, 0, 10);
+ }
+ 
++/* 0180: raw CB FSR (a6_fault_status masks it to the fault bits) */
++uint32_t a6_smmu_fsr_raw(const struct a6_gpu *g)
++{
++	return g->gpu_cb < 0 ? 0 : rd32(SMMU_CB(g->gpu_cb) + CB_FSR);
++}
++
++/* 0180: sweethangtest bit 29: set CFCFG (SCTLR bit 7, stall on fault) on the GPU context bank, at injection time only */
++void a6_smmu_stall_on_fault(const struct a6_gpu *g)
++{
++	if (g->gpu_cb < 0)
++		return;
++	uint64_t c = SMMU_CB(g->gpu_cb);
++	wr32(c + CB_SCTLR, rd32(c + CB_SCTLR) | 0x80);
++	(void)rd32(c + CB_SCTLR);
++}
++
++/* 0180: RBBM_STATUS1/2/3 (3 bit 24 = SMMU_STALLED_ON_FAULT) and the raw CB FSR, for the hang logs */
++void a6_diag_status(const struct a6_gpu *g, uint32_t out[4])
++{
++	out[0] = rd32(GREG(0x211));
++	out[1] = rd32(GREG(0x212));
++	out[2] = rd32(GREG(0x213));
++	out[3] = a6_smmu_fsr_raw(g);
++}
++
+ uint32_t a6_fault_status(const struct a6_gpu *g, uint64_t *far, uint32_t *fsynr0)
+ {
+ 	if (g->gpu_cb < 0)
+@@ -1417,7 +1443,12 @@ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ 		    rd32(c + CB_SCTLR), rd32(c + CB_FSR), rd32(c + CB_TLBSTATUS));
+ 		return;
+ 	}
+-	uint32_t sctlr = rd32(c + CB_SCTLR);
++	/* 0180: CFCFG back to normal; a stalled fault (FSR SS, bit 30) is terminated first (CB_RESUME 1 = terminate) */
++	uint32_t sctlr = rd32(c + CB_SCTLR) & ~0x80u;
++	if (rd32(c + CB_FSR) & (1u << 30)) {
++		wr32(c + CB_RESUME, 1);
++		a6_log("recover2: smmu stalled fault terminated (CB_RESUME)\n");
++	}
+ 	wr32(c + CB_SCTLR, sctlr & ~1u);
+ 	(void)rd32(c + CB_SCTLR);
+ 	wr32(c + CB_FSR, 0xffffffff);
+@@ -1621,6 +1652,8 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 		    rd32(GREG(0x17)), rd32(GREG(CP_RB_BASE + 1)), rd32(GREG(CP_RB_BASE)),
+ 		    rd32(GREG(CP_SQE_INSTR_BASE + 1)), rd32(GREG(CP_SQE_INSTR_BASE)),
+ 		    rd32(GPUCC + 0x1534), rd32(GPUCC + 0x1554));
++		a6_log("recover2: pre-me_init: rbbm status1 %x status2 %x status3 %x, cb fsr raw %x\n",
++		    rd32(GREG(0x211)), rd32(GREG(0x212)), rd32(GREG(0x213)), rd32(c + CB_FSR));
+ 	}
+ 	uint32_t me_init[] = { a6_pkt7(A6_CP_ME_INIT, 8), 0x2f, 3, 0x20000000, 0, 0, 0, 0, 0 };
+ 	if (a6_ring(g, me_init, 9, "me_init", 1000))
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index b85d8cc..6608fd6 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -128,6 +128,9 @@ void a6_unmap(struct a6_gpu *g, uint64_t iova, uint64_t size);	/* clear 4K entri
+ void a6_unmap_high(struct a6_gpu *g);	/* drop all mappings above 1 GB, reset the arena */
+ void a6_tlb_flush(const struct a6_gpu *g);
+ int a6_clear_fault(const struct a6_gpu *g);	/* 1 if an SMMU fault was cleared */
++uint32_t a6_smmu_fsr_raw(const struct a6_gpu *g);	/* 0180 */
++void a6_smmu_stall_on_fault(const struct a6_gpu *g);	/* 0180: set CFCFG on the GPU context bank */
++void a6_diag_status(const struct a6_gpu *g, uint32_t out[4]);	/* 0180: RBBM_STATUS1/2/3, raw CB FSR */
+ uint32_t a6_fault_status(const struct a6_gpu *g, uint64_t *far, uint32_t *fsynr0);
+ 
+ /*
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index f071654..ae7aeaf 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -612,11 +612,11 @@ gpu_hung_locked(uint32_t hang_ms)
+ 
+ /*
+  * 0167: boot-arg sweethangtest=N injects one bad IB (unmapped GPU address) into the Nth client submit after boot
+- * (bit 31 set: the Nth present). sweetgpukill=1: after a successful recovery backboardd is killed (launchd respawns
++ * (bit 31 set: the Nth present; bit 30: wait-forever IB, 0177; bit 29 with 31: smmu stall, 0180; index mask 0x1fffffff). sweetgpukill=1: after a successful recovery backboardd is killed (launchd respawns
+  * it with a fresh Metal device), from a thread call, not under the GPU lock.
+  */
+ static uint32_t hangtest_arg, hangtest_count;
+-static bool hangtest_read, hangtest_done;
++static bool hangtest_read, hangtest_done, hangtest_smmu;
+ static void present_rearm_locked(void);
+ 
+ static void
+@@ -629,8 +629,15 @@ gpu_hangtest_arm(bool is_present)
+ 	if (hangtest_done || hangtest_arg == 0 || !!(hangtest_arg & 0x80000000u) != is_present) {
+ 		return;
+ 	}
+-	if (++hangtest_count == (hangtest_arg & 0x3fffffffu)) {
++	if (++hangtest_count == (hangtest_arg & 0x1fffffffu)) {
+ 		hangtest_done = true;
++		if (is_present && (hangtest_arg & 0x20000000u)) {
++			/* 0180: bit 29 (with bit 31): this present blit reads an unmapped VA with stall-on-fault set (index mask 0x1fffffff) */
++			a6_smmu_stall_on_fault(&gpu);
++			hangtest_smmu = true;
++			a6_log("hangtest: injecting smmu-stall blit at present submit %u\n", hangtest_count);
++			return;
++		}
+ 		if (hangtest_arg & 0x40000000u) {
+ 			/* 0177: bit 30: a valid IB that waits forever (no SMMU fault) */
+ 			a6_inject_stall_ib = 1;
+@@ -684,6 +691,9 @@ gpu_recover_locked(const char *why)
+ 	    a6_rd(A6_GREG(0x806)), gpu.wptr, a6_rd(A6_GREG(0x929)), a6_rd(A6_GREG(0x928)), a6_rd(A6_GREG(0x92a)),
+ 	    a6_rd(A6_GREG(0x92c)), a6_rd(A6_GREG(0x92b)), a6_rd(A6_GREG(0x92d)), a6_rd(A6_GREG(0x210)),
+ 	    a6_rd(A6_GREG(0x908)));
++	uint32_t dg[4];
++	a6_diag_status(&gpu, dg);
++	a6_log("%s: rbbm status1 %x status2 %x status3 %x (bit24 smmu stalled), cb fsr raw %x\n", why, dg[0], dg[1], dg[2], dg[3]);
+ 	lost[recoveries % LOST_RING].lo = done;
+ 	lost[recoveries % LOST_RING].hi = gpu.fence;
+ 	recoveries++;
+@@ -995,9 +1005,15 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 	}
+ 	int rc = present_wait_locked(k, "present");
+ 	if (rc == 0) {
+-		a6_write(a6_pool_pa(&gpu, PRESENT_IB(k)), ib, 4ULL * n);
+ 		gpu_note_submit_locked();
+ 		gpu_hangtest_arm(true);
++		if (hangtest_smmu) {
++			/* 0180: rebuild as one plain blit from the unmapped VA the 0167 bad IB uses (the corner passes are dropped) */
++			hangtest_smmu = false;
++			frame.src_iova = 0xfff0000000ull;
++			n = a6_blit_ib(&gpu, &frame, ib);
++		}
++		a6_write(a6_pool_pa(&gpu, PRESENT_IB(k)), ib, 4ULL * n);
+ 		present_fence[k] = a6_submit_ib_async(&gpu, a6_pool_va(PRESENT_IB(k)), n, 100);
+ 		gpu_owner_locked(present_fence[k], 0);
+ 		rc = present_fence[k] ? 0 : -1;
+-- 
+2.56.0
+
