@@ -1,0 +1,201 @@
+From 68bd64a72820c13b9e57b7955b00963a8c8132fb Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 11:13:10 -0400
+Subject: [PATCH] sunfish: USB device re-enumeration on bus reset/disconnect
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_usb.c | 103 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 100 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index b5f0bec..574fc63 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -187,9 +187,12 @@ sweet_usb_probe(void)
+ #define DEPCMD_SETEPCONFIG      1
+ #define DEPCMD_SETTRANSFRESOURCE 2
+ #define DEPCMD_SETSTALL         4
++#define DEPCMD_CLEARSTALL       5
+ #define DEPCMD_STARTTRANSFER    6
++#define DEPCMD_ENDTRANSFER      8
+ #define DEPCMD_DEPSTARTCFG      9
+ #define DEPCMD_CMDACT           (1u << 10)
++#define DEPCMD_FORCERM          (1u << 11)
+ 
+ #define TRB_HWO         (1u << 0)
+ #define TRB_LST         (1u << 1)
+@@ -244,6 +247,13 @@ static struct {
+ 	uint64_t    rx_frames, tx_frames;
+ } ud;
+ 
++/* 0184: sweetusbreset (default 1; 0 = old reset/disconnect handling); per-endpoint transfer state */
++static int ud_reset_en = 1;
++static bool ud_xfer_started[6];
++static uint8_t ud_xfer_rsc[6];
++static bool ud_was_configured;          /* a teardown ran: the next configure is a reconfigure */
++static uint32_t ud_tick;                /* polling loop count (about 1 ms each) */
++
+ static inline void
+ dwc_wr(uint32_t off, uint32_t v)
+ {
+@@ -294,6 +304,10 @@ ud_epcmd(unsigned ep, uint32_t cmd, uint32_t p0, uint32_t p1, uint32_t p2)
+ 				printf("SWEET USB: ep%u cmd 0x%x status %u\n", ep, cmd & 0xf, status);
+ 				return -1;
+ 			}
++			if ((cmd & 0xf) == DEPCMD_STARTTRANSFER && ep < 6) {
++				ud_xfer_started[ep] = true;     /* 0184: resource index for ENDTRANSFER */
++				ud_xfer_rsc[ep] = (uint8_t)((v >> 16) & 0x7f);
++			}
+ 			return 0;
+ 		}
+ 		delay(1);
+@@ -412,6 +426,9 @@ ud_configure(void)
+ 	if (ud.configured) {
+ 		return;
+ 	}
++	if (ud_was_configured) {
++		printf("SWEET USB: 0184 reconfigure\n");     /* 0184: after a bus reset / disconnect */
++	}
+ 	if (ud_epcmd(0, DEPCMD_DEPSTARTCFG | (2u << 16), 0, 0, 0) ||
+ 	    ud_epcmd(EP_RX, DEPCMD_SETEPCONFIG, (2u << 1) | (512u << 3), (1u << 8) | ((uint32_t)EP_RX << 25), 0) ||
+ 	    ud_epcmd(EP_RX, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
+@@ -425,6 +442,7 @@ ud_configure(void)
+ 	}
+ 	dwc_wr(DALEPENA, dwc_rd(DALEPENA) | (1u << EP_RX) | (1u << EP_TX) | (1u << EP_INT));
+ 	ud.configured = true;
++	ud_was_configured = false;
+ 	ud_rx_arm();
+ 	printf("SWEET USB: ECM endpoints configured\n");
+ }
+@@ -766,13 +784,69 @@ ud_if_create(void)
+ 	printf("SWEET USB: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
+ }
+ 
++/*
++ * 0184: back to the freshly-reset state on a bus reset or disconnect (Linux
++ * dwc3_gadget_reset_interrupt / dwc3_stop_active_transfers /
++ * dwc3_gadget_disconnect_interrupt): end every started transfer, clear
++ * stalls, keep only ep0 enabled, drop the TX queue, and re-arm SETUP so the
++ * host's enumeration starts over (ud_configure then runs again).
++ */
++static void
++ud_bus_teardown(const char *why)
++{
++	bool linkup;
++
++	lck_mtx_lock(ud.lock);
++	linkup = ud.configured && ud.data_alt != 0;
++	ud.configured = false;  /* ud_if_output and the TX kick stop here */
++	bool any = false;
++	for (unsigned ep = 0; ep < 6; ep++) {
++		if (ud_xfer_started[ep]) {
++			ud_epcmd(ep, DEPCMD_ENDTRANSFER | DEPCMD_FORCERM | ((uint32_t)ud_xfer_rsc[ep] << 16), 0, 0, 0);
++			ud_xfer_started[ep] = false;
++			any = true;
++		}
++	}
++	if (any) {
++		delay(500);     /* ForceRM: let the controller drop the transfer (Linux udelay(500)) */
++	}
++	uint32_t ena = dwc_rd(DALEPENA);
++	for (unsigned ep = EP_RX; ep <= EP_INT; ep++) {
++		if (ena & (1u << ep)) {
++			ud_epcmd(ep, DEPCMD_CLEARSTALL, 0, 0, 0);
++		}
++	}
++	dwc_wr(DALEPENA, 0x3);
++	dwc_wr(DCTL, dwc_rd(DCTL) & ~0x1eu);                    /* TSTCTL */
++	dwc_wr(DCFG, dwc_rd(DCFG) & ~(0x7fu << 3));             /* address 0 */
++	while (ud.txq_count > 0) {
++		mbuf_freem(ud.txq[ud.txq_head]);
++		ud.txq_head = (ud.txq_head + 1) % UD_TXQ;
++		ud.txq_count--;
++	}
++	ud.tx_busy = false;
++	ud.data_alt = 0;
++	ud_was_configured = true;
++	lck_mtx_unlock(ud.lock);
++	if (linkup) {
++		ud_link_event(false);
++	}
++	ud_start_setup();       /* fresh ep0 state machine and SETUP TRB */
++	printf("SWEET USB: 0184 %s: state=%d configured=%d tx_busy=%d DSTS=%08x\n",
++	    why, (int)ud.state, ud.configured, ud.tx_busy, dwc_rd(DSTS));
++}
++
+ static void
+ ud_event(uint32_t ev)
+ {
+ 	if (ev & 1) {                   /* device event */
+ 		uint32_t type = (ev >> 8) & 0xf;
+ 		if (type == 1) {        /* USB reset */
+-			dwc_wr(DCFG, dwc_rd(DCFG) & ~(0x7fu << 3));
++			if (ud_reset_en) {
++				ud_bus_teardown("bus reset");   /* 0184 (also clears the address) */
++			} else {
++				dwc_wr(DCFG, dwc_rd(DCFG) & ~(0x7fu << 3));
++			}
+ 			printf("SWEET USB: bus reset\n");
+ 		} else if (type == 2) { /* connect done */
+ 			uint32_t speed = dwc_rd(DSTS) & 7;
+@@ -782,8 +856,23 @@ ud_event(uint32_t ev)
+ 			ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (64u << 3) | (2u << 30),
+ 			    (1u << 8) | (1u << 10) | (1u << 25), 0);
+ 			printf("SWEET USB: connected, speed %u\n", speed);
++			if (ud_reset_en) {
++				printf("SWEET USB: 0184 connect done: speed %u link state %x\n",
++				    speed, (dwc_rd(DSTS) >> 18) & 0xf);
++			}
+ 		} else if (type == 0) {
+ 			printf("SWEET USB: disconnect\n");
++			if (ud_reset_en) {
++				ud_bus_teardown("disconnect");  /* 0184 */
++			}
++		} else if (type == 3 && ud_reset_en) {  /* 0184: link state change */
++			static uint32_t last_ls = 0xff, last_tick;
++			uint32_t ls = (ev >> 16) & 0xf;
++			if (ls != last_ls && (last_tick == 0 || ud_tick - last_tick >= 1000)) {
++				printf("SWEET USB: 0184 link state %x\n", ls);
++				last_ls = ls;
++				last_tick = ud_tick ? ud_tick : 1;
++			}
+ 		}
+ 		return;
+ 	}
+@@ -791,6 +880,12 @@ ud_event(uint32_t ev)
+ 	unsigned type = (ev >> 6) & 0xf;
+ 	unsigned status = (ev >> 12) & 0xf;
+ 
++	if (type == 1 && ep < 6) {
++		ud_xfer_started[ep] = false;    /* 0184 */
++	}
++	if (ud_reset_en && ep >= EP_RX && !ud.configured) {
++		return;                         /* 0184: stale completion from before a teardown */
++	}
+ 	if (ep == EP_RX && type == 1) {
+ 		ud_rx_done();
+ 		return;
+@@ -842,6 +937,7 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+ 	uint32_t ticks = 0;
+ 	for (;;) {
++		ud_tick++;
+ 		uint32_t count = dwc_rd(GEVNTCOUNT) & 0xffff;
+ 		if (count) {
+ 			ud_sync(UD_EVT, UD_EVT_SIZE);
+@@ -1431,8 +1527,9 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	/* High speed, address 0 */
+ 	uint32_t dcfg = dwc_rd(DCFG) & ~(7u | (0x7fu << 3));
+ 	dwc_wr(DCFG, dcfg | 0);
+-	/* Events: disconnect, USB reset, connect done */
+-	dwc_wr(DEVTEN, 0x7);
++	/* Events: disconnect, USB reset, connect done (0184: and link state change) */
++	PE_parse_boot_argn("sweetusbreset", &ud_reset_en, sizeof(ud_reset_en));
++	dwc_wr(DEVTEN, ud_reset_en ? 0xf : 0x7);
+ 
+ 	printf("SWEET USB: step ep0 commands\n");
+ 	/* Endpoint 0 OUT/IN: start config, control type, max packet 512 until connect done. */
+-- 
+2.56.0
+
