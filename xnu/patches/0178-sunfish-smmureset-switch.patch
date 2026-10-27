@@ -1,17 +1,25 @@
-From a4606702e16d8aa6c5a3d78fae797e3a48508201 Mon Sep 17 00:00:00 2001
+From 9394a8292013442508443ac34c86f240eb289009 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Mon, 26 Oct 2026 21:44:11 -0400
 Subject: [PATCH] sunfish: sweetsmmureset=0 control switch
 
 ---
- bsd/dev/sweet_a6xx.c | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ bsd/dev/sweet_a6xx.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
 
 diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
-index 104e24a..ec64953 100644
+index 104e24a..c1baf1e 100644
 --- a/bsd/dev/sweet_a6xx.c
 +++ b/bsd/dev/sweet_a6xx.c
-@@ -1400,10 +1400,22 @@ static bool recover_diag;
+@@ -9,6 +9,7 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <libkern/libkern.h>
++#include <pexpert/pexpert.h>
+ #else
+ #include <string.h>
+ #endif
+@@ -1400,10 +1401,22 @@ static bool recover_diag;
  
  static void a6_smmu_gbif_reset(const struct a6_gpu *g)
  {
