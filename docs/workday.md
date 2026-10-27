@@ -572,3 +572,8 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - **ss1, reset on: recovers, but slowly**: "smmu stalled fault terminated (CB_RESUME)" seen; first me_init still TIMEOUT (c20015), GBIF-halt path TIMEOUT (c20001), then soft reset + CP init idle -> "recover2: done after 2618248 us". GPU 5 s lines continue.
 - Reading: a stalled SMMU transaction is enough to make CP init fail; terminating it (CB_RESUME) is what lets the CP come back. The resume comes too late in the full path (after GBIF halt + GX cycle), so the first attempts still fail. The real sk430 hang printed fsr 0 in terminate mode, so whether it was an SMMU stall is not proven, but the failure signature is identical.
 - Phone on night3 (kernel53, 5%), 4455 mV.
+
+## 2026-10-26 ~22:50-23:06 kernel57 (xnu 0181: CB_RESUME at the start of recovery) — inconclusive
+- er1, er2 (`sweethangtest=0xA0000600`, boot-args tail confirmed): no "hangtest: injecting" line in 4 min of swipes each, so recovery was never exercised. 0181 only touches sweet_a6xx.c recovery code, not the arm path, so the cause is likely the run (present submit 1536 not reached: swaps dropped to 0.2/s around 426 s; possibly not unlocked), not the kernel. Not verified.
+- Next: rerun er with a lower present index (e.g. 0xA0000200) and confirm the home screen first.
+- Phone left on night4 (kernel53, 5%), 4435 mV.

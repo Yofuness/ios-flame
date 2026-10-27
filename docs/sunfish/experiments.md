@@ -69,3 +69,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-26 ctl54: sweetsmmureset=0 control, 3/3 stall hangs still recover in 26 ms -> stall injector too mild; SMMU/GBIF reset unproven. kernel55 (0179 UI watchdog) built, untested.
 - 2026-10-26 uw1: kernel55 UI watchdog: no false triggers (idle 90 s, swipes); rung A kills a frozen backboardd 30.0 s after the last swap, UI back; rung B untested.
 - 2026-10-26 ss1/ss2: kernel56 SMMU stall injector reproduces the real me_init c00015 failure with reset off; with CB_RESUME reset, recovery succeeds on the 3rd path after 2.6 s.
+- 2026-10-26 er1/er2: kernel57 early SMMU resume: injection never fired in 4 min (present 1536 not reached?), untested.
