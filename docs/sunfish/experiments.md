@@ -66,3 +66,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-26 sk430: kernel52 430 MHz 1 h appsoak: 0 resets, 1 real GPU hang at 2296 s, recovery FAILED (me_init TIMEOUT), UI continued on CPU copies; 565 kept as default.
 - 2026-10-26 recovery-fail analysis: real hang = no SMMU fault, ring pending; me_init rptr 0 after clean GX cycle; suspect CX-side SMMU/GBIF state; injector can't reproduce (needs wait-forever IB).
 - 2026-10-26 st53: kernel53 stall injector + SMMU/GBIF reset, 565 MHz: 5/5 stall hangs recovered in 26 ms; stall state milder than the real hang (ring drained, rbbm 800005).
+- 2026-10-26 ctl54: sweetsmmureset=0 control, 3/3 stall hangs still recover in 26 ms -> stall injector too mild; SMMU/GBIF reset unproven. kernel55 (0179 UI watchdog) built, untested.

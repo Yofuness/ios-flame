@@ -552,3 +552,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - 5 boots (st1-st5; 3 present 0xC0000600, 2 client 0x40000BB8): 5/5 injected, 5/5 "recover2: done" in 26.0-26.4 ms, me_init idle, display back ~6.7 s after the hang; home screen on webcam after unlock; 16.6-17.8 swaps/s and 12.5-12.7 ms/submit on the home screen after (st4, st5).
 - Hang state: fsr 0 (no fault, as intended) but rptr == wptr, ib rem 0, rbbm 800005 (one c00014): NOT the real-hang state (sk430: rptr 570 wptr 949, ib1 rem 7e, rbbm cf9495). Pre-reset CB state every time: sctlr 67, fsr 400, tlbstatus 0, GBIF halt 0 ack 1.
 - Open: whether the reset is what helps. Control (sweetsmmureset=0, xnu 0178 / kernel54) next.
+
+## 2026-10-26 ~22:00 Control: kernel54 (xnu 0178) sweetsmmureset=0, stall hangs, 565 MHz
+- ctl1/ctl2 present stall (0xC0000600), ctl3 client stall (0x40000BB8): 3/3 injected, "smmu/gbif reset: skipped", me_init idle (status 1, cp_status1 1000000), recover2 done 25.96-26.41 ms. 'SWEET GPU: 5s' lines continue.
+- So the stall injector recovers WITH and WITHOUT the SMMU/GBIF reset: it does not reproduce the real-hang failure, and 0177's reset is neither proven nor disproven. Kept on by default (harmless: +0 ms).
+- Difference to the real hang (sk430): the real one had ring work pending (rptr 570, wptr 949), ib1 rem 7e and rbbm cf9495 (many blocks busy). The stall leaves the ring drained and rbbm 800005/c00005.
+- Also built: kernel55 = xnu 0179 UI watchdog (`sweetuiwdt=30`: touch within 10 s + no swap for 30 s -> kill backboardd; still frozen 30 s later -> stop APSS pets -> fastboot; backboardd also killed once after a failed GPU recovery). CI ok (run 40435125065), not booted yet.
+- Brightness: at 3/5/8/12% the webcam sees nothing; icons show from 16%. Phone left on a night boot (kernel53, no injection) at 5%; 4456 mV.
