@@ -635,3 +635,6 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - ur1 (kernel60, defaults): link up 12 s after boot. 5 port cycles from the PC (`echo 1 > /sys/bus/usb/devices/3-0:1.0/usb3-port1/disable`, 5 s, `echo 0`): link back after 2 s in 5/5, SSH ok. No "0184" lines reached the live log (lines during the reset are lost; not checked further).
 - ur0 control (kernel60, `sweetusbreset=0`): 0/2; the PC re-enumerated the phone (new device 51, cdc_ether registered, 192.168.7.1 assigned) but no ping. The phone is now unreachable (no Wi-Fi either) and needs a physical reboot (hold power + vol-down to fastboot).
 - Open: physical unplug/replug (VBUS loss) untested; the link "flap" after boot not reproduced today.
+
+### k60d physical replug (2026-10-27 18:46)
+- kernel60 defaults, battery 4457 mV. Cable out 18:46:26-18:46:42, host saw 2 bounces (dev 53, 54), final enumeration 18:46:45; ping 0% loss, SSH ok.
