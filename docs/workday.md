@@ -611,3 +611,8 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - sk58 (430 MHz, appsoak 3600 s): 204/204 opens, 0 resets, 0 GPU hangs, 0 SMMU fault lines, 0 "clearing smmu", 0 UIWDT. Pool 97 -> 342 MB, peak 436. Battery 4436 -> 4432 mV. Mean 2.4 swaps/s over the hour (lower than sk57's 9.0; not checked whether that is the averaging window or real).
 - Noise: 108x CRASH assetsd, 36x CRASH TipsSpotlightInd, 256x EXC_CORPSE_NOTIFY, 154x CATransformLayer allowsGroupOpacity.
 - Phone left on final58 (kernel58, default args incl. watchdog), home screen, 4456 mV.
+
+## 2026-10-27 ~09:15-09:55 kernel59 (xnu 0183: GPU pool pressure) pp1
+- 0183: crossing `sweetpoolwarn`% of the 940 MB pool (default 80) logs "pool: WARNING" and bumps a pressure counter; each v2 client drops its 0156 reuse cache on its next alloc/free and keeps none until use is 10 points under. CI run 40509335807 -> work/kernel59.
+- pp1 (`sweetpoolwarn=40` = 376 MB to force it, 565 MHz, appsoak 1900 s): 5 WARNING lines at 1033 / 1561 / 1666 / 1982 / 2000 s (376-382 MB), each followed by "back under 30%" (272-278 MB) 1-4 s later. Drops: 5, all backboardd, 25/17/25/25/17 MB (109 MB). 108/108 opens, 0 hangs, 0 resets, 0 UIWDT, 0 "no bytes free". Pool 192 -> 314 MB, peak 382. ~10.8 swaps/s mean. Battery 4436 -> 4434 mV.
+- Phone left on final59 (kernel59, default args, warning at 80%), home screen.
