@@ -583,3 +583,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - "recover2: early smmu resume: fsr 40000402"; after GBIF halt rbbm status3 4f20101; first me_init idle (rptr 9 wptr 9 status 1, cp_status1 1000000), zap rc 0; **recover2 done after 26308 us** (kernel56 with the late resume: 2.6 s on the 3rd path; reset off: FAILED). backboardd killed and respawned; 'SWEET GPU: 5s' continues; lock screen at 5.6-7.8 swaps/s after (pre-hang home ~19).
 - One run only (er1/er2 at index 1536 never injected). Phone left on night5 (kernel53, 5%), 4435 mV.
 - Open: does the real hang (sk430, terminate mode, fsr 0) also clear with 0181? Next real-hang soak on kernel57 at 430 MHz will tell; consider enabling CFCFG (stall mode) in normal operation so real faults look like this injector.
+
+## 2026-10-27 kernel57 (xnu 0181) er4-er7: early CB_RESUME recovery repeats
+- Same args as er3 (`sweethangtest=0xA0000200`). Injected at 110.2 / 152.6 / 139.9 / 153.5 s; SMMU fault ~2.0-2.15 s after each injection; fsr 40000402 every time.
+- er4 / er5 / er6: first me_init idle (rptr 9 wptr 9), first path, **26.06 / 26.10 / 26.24 ms**. er7: backboardd respawned at 155.6 s and screen was back on the webcam, but the me_init / "recover2: done" lines are missing from the live log (lost lines), so its path is unproven.
+- Together with er3: 5/5 recoveries, 4 of them timed at ~26 ms.
+- Open: swaps 25-30 s after recovery were 6.1 / 6.7 / 8.2 / 6.1 per s against ~19 before (rec10 on kernel50 was back to 19 at full speed). Could be the lock screen after the respawn rather than a slow GPU; check in the next soak (+2-3 min window).
+- er7 boot also logged "SWEET USB: busERR addr 0; SMMU cb fsr 400" every ~5.6 s from 43 to 105 s (not seen on er4-er6).
+- Phone left on kernel57, no injection, 100% brightness, 4456 mV. Next: sk57, 1 h app soak at 430 MHz (running).

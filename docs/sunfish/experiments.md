@@ -71,3 +71,4 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-26 ss1/ss2: kernel56 SMMU stall injector reproduces the real me_init c00015 failure with reset off; with CB_RESUME reset, recovery succeeds on the 3rd path after 2.6 s.
 - 2026-10-26 er1/er2: kernel57 early SMMU resume: injection never fired in 4 min (present 1536 not reached?), untested.
 - 2026-10-26 er3: kernel57 (0181 early CB_RESUME) SMMU-stall hang recovered on the first try in 26.3 ms (kernel56: 2.6 s; reset off: FAILED). 1 run.
+- 2026-10-27 er4-er7: kernel57 SMMU-stall injector (0xA0000200), 4/4 injected; er4-er6 recovered on the first path in 26.06/26.10/26.24 ms (fsr 40000402), er7 respawned + screen back but recovery lines lost from the log. With er3: 5/5 recovered. Swaps after recovery 6-8/s (pre-hang ~19).
