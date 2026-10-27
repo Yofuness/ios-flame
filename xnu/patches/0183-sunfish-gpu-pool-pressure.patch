@@ -1,19 +1,19 @@
-From 882445ef083c90d9371ecd62bebe48ead3564c8a Mon Sep 17 00:00:00 2001
+From dc6c8915087a55ea737a33a450e0e8287797b401 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Tue, 27 Oct 2026 09:07:13 -0400
 Subject: [PATCH] sunfish: GPU pool 80% warning, clients drop reuse caches
  under pressure
 
 ---
- bsd/dev/sweet_gpu.c                   | 45 ++++++++++++++++++++++++---
- iokit/Kernel/arm/SweetAccelerator.cpp | 24 +++++++++++++-
- 2 files changed, 64 insertions(+), 5 deletions(-)
+ bsd/dev/sweet_gpu.c                   | 53 +++++++++++++++++++++++++--
+ iokit/Kernel/arm/SweetAccelerator.cpp | 24 +++++++++++-
+ 2 files changed, 72 insertions(+), 5 deletions(-)
 
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index ae7aeaf..41cc3f2 100644
+index ae7aeaf..c6d21ff 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
-@@ -1232,16 +1232,51 @@ static struct { uint64_t pa, size; } gpool_free[GPOOL_FREE_MAX];       /* sorted
+@@ -1232,16 +1232,59 @@ static struct { uint64_t pa, size; } gpool_free[GPOOL_FREE_MAX];       /* sorted
  static uint32_t gpool_nfree;
  static uint64_t gpool_used, gpool_peak;
  
@@ -39,9 +39,9 @@ index ae7aeaf..41cc3f2 100644
 +}
 +
 +/*
-+ * 0183: pool pressure. Crossing 80% in use logs a warning and bumps sweet_gpu_pool_pressure; v2 clients then
++ * 0183: pool pressure. Crossing sweetpoolwarn % in use (default 80; lower it to test) logs a warning and bumps sweet_gpu_pool_pressure; v2 clients then
 + * drop their 0156 reuse caches on their next alloc or free, and keep none while sweet_gpu_pool_high() (until
-+ * the pool is back under 70%).
++ * the pool is back 10 points under).
 + */
 +volatile uint32_t sweet_gpu_pool_pressure;
 +static bool gpool_high;
@@ -55,21 +55,29 @@ index ae7aeaf..41cc3f2 100644
 +static void
 +gpool_pressure_check_locked(void)
 +{
++	static uint32_t pct;
++	if (pct == 0) {
++		pct = 80;
++		PE_parse_boot_argn("sweetpoolwarn", &pct, sizeof(pct));
++		if (pct < 20 || pct > 100) {
++			pct = 80;
++		}
++	}
 +	uint64_t total = gpool_total();
-+	if (!gpool_high && gpool_used * 10 >= total * 8) {
++	if (!gpool_high && gpool_used * 100 >= total * pct) {
 +		gpool_high = true;
 +		sweet_gpu_pool_pressure++;
-+		a6_log("pool: WARNING %llu of %llu MB in use (80%%, peak %llu): clients drop reuse caches\n",
-+		    gpool_used >> 20, total >> 20, gpool_peak >> 20);
-+	} else if (gpool_high && gpool_used * 10 < total * 7) {
++		a6_log("pool: WARNING %llu of %llu MB in use (%u%%, peak %llu): clients drop reuse caches\n",
++		    gpool_used >> 20, total >> 20, pct, gpool_peak >> 20);
++	} else if (gpool_high && gpool_used * 100 < total * (pct - 10)) {
 +		gpool_high = false;
-+		a6_log("pool: back under 70%% (%llu MB in use)\n", gpool_used >> 20);
++		a6_log("pool: back under %u%% (%llu MB in use)\n", pct - 10, gpool_used >> 20);
  	}
 -	return total - gpool_used;
  }
  static bool gpool_ready;
  static LCK_MTX_DECLARE(sweet_gpool_lock, &sweet_gpu_grp);
-@@ -1277,6 +1312,7 @@ sweet_gpu_pool_alloc(uint64_t bytes, uint64_t *pa)
+@@ -1277,6 +1320,7 @@ sweet_gpu_pool_alloc(uint64_t bytes, uint64_t *pa)
  			if ((gpool_used >> 25) != ((gpool_used - size) >> 25)) {
  				a6_log("pool: %llu MB in use (peak %llu)\n", gpool_used >> 20, gpool_peak >> 20);
  			}
@@ -77,7 +85,7 @@ index ae7aeaf..41cc3f2 100644
  			rc = 0;
  			break;
  		}
-@@ -1297,6 +1333,7 @@ sweet_gpu_pool_free(uint64_t pa, uint64_t bytes)
+@@ -1297,6 +1341,7 @@ sweet_gpu_pool_free(uint64_t pa, uint64_t bytes)
  	if ((gpool_used >> 25) != ((gpool_used + size) >> 25)) {
  		a6_log("pool: %llu MB in use (peak %llu)\n", gpool_used >> 20, gpool_peak >> 20);
  	}
