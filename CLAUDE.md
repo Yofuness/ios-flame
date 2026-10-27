@@ -47,13 +47,14 @@
 - **Hand the rest to the agents in `.claude/agents/`:**
   - `phone-runner` (haiku): boots, benches, webcam, log slicing. It is the only agent that touches the phone.
   - `ci-builder` (haiku): commit/export patches, push, CI, download, install.
-  - `implementer` (sonnet): writes one patch from a spec.
-  - `investigator` (sonnet): read-only source, binary and log analysis.
+  - `implementer` (opus, low effort): writes one patch from a spec.
+  - `investigator` (opus, low effort): read-only source, binary and log analysis.
+  - `net-prober` (haiku): read-only router and Wi-Fi scan probing (never changes router settings).
 - **Specs:**
   - Every spec says exactly what to return: numbers and tables, never raw logs.
   - Run waits (CI, benches) in the background and don't poll them.
 - **Phone access:**
   - Only one session or agent uses the phone at a time.
   - If the user says another session is on the phone, don't run `phone-runner`.
-- **Cheapest mode for long, routine runs:** run the main session itself on Sonnet for a whole plan step. Switch to
-  Opus only for design decisions or when stuck after two failed attempts.
+- **When usage runs low (Max plan):** run the main session on Sonnet for long, routine plan steps. Switch back to
+  Opus for design decisions or when stuck after two failed attempts.
