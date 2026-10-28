@@ -62,6 +62,17 @@ static void fixmeta(const char *src, const char *dst)
 		} else
 			nfacl++;
 		acl_free(a);
+	} else if ((a = acl_get_link_np(dst, ACL_TYPE_EXTENDED))) {
+		// Source has none, the copy inherited one from its directory (199 files on the first run): clear it.
+		acl_free(a);
+		acl_t e = acl_init(0);
+		if (!e || acl_set_link_np(dst, ACL_TYPE_EXTENDED, e)) {
+			fprintf(stderr, "vcopy: acl clear %s: %s\n", dst, strerror(errno));
+			nerr++;
+		} else
+			nfacl++;
+		if (e)
+			acl_free(e);
 	}
 	if (lstat(src, &s) || lstat(dst, &d) || s.st_flags == d.st_flags)
 		return;
