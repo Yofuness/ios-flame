@@ -37,10 +37,14 @@ B18. [ ] Cellular: not planned.
 B19. [analysed 2026-10-28] **Respawn loops**: com.apple.lskdd (/usr/libexec/lskdd, AppleKeyServices CRL daemon; on demand, MachService com.apple.lskdd, ThrottleInterval 0, no KeepAlive): a client sends to it every ~1.03 s and it exits cleanly (no CRASH, no AKS calls, no denials near the execs); the client is unknown (guess ~40%: fairplayd.H2 / mobileactivationd). bluetoothd (KeepAlive on failure; no controller) and fairplayd.H2 (KeepAlive true) restart every ~10 s; wifip2pd on demand. Cost ~2-5% of one core. Next [phone]: `launchctl print system/com.apple.lskdd` (last exit, runs), oslog for lskdd for 5 s; then drop lskdd (a root launchd.plist write: ask the user) if nothing needs it. Earlier: in the sk71 soak lskdd is exec'd every ~1.03 s (5726 times by uptime 6357 s), bluetoothd / wifip2pd / fairplayd.H2 every ~10 s; locationd 0 (its 223 execs were earlier boots). The kernel log shows no exit reason. Next [phone]: `oslog` / launchctl for lskdd's exit reason; drop it with tools/sunfish-launchd-drop.sh only if nothing needs it (it may be keybag-related: check first). ~1 h.
 
 ## Optimize (last: only when everything works, or when nothing else can move)
+Anything noticed as slower than it should be is added here (like the Broken list).
 O1. [ ] **Panel-rate drop.** [2026-10-28: CI vs local bundle on fresh kernel79 boots: 13.8 vs 15.0 panel/s, so not the build. Next: dim 10 vs 50 (LM alpha), then kernel68 vs 79] Fresh boot each: CI bundle (work/metal2-0106) vs the local bundle, two `BENCH_TIGHT=1 sunfish-fpsbench.sh` runs each. Fresh-boot sk70p gave 15.6-16.2 panel updates/s, before 21-24; the build flags are identical (features/smoothness.md). If both are ~16, try kernel68 vs kernel70 with the same bundle. ~30 min. [15:45: not the bundle, kernel68-81, dim, or /var; `sweetpresentwait=1` is missing from the default boot args: A/B running]
 O2. [ ] Panel-rate ceiling (~21 updates/s at best; present blit waits behind backboardd; features/smoothness.md) (was B9).
 O3. [ ] Reduce Transparency speed in app opens / dock (B10 analysis; a GPU trace with RT on).
 O4. [ ] lskdd 1 s respawn (~2-5% of a core; B19).
+O5. [ ] The display-off CPU fade (2.4-3.9 s of uncached pixel writes, no vsync meanwhile) when sweetpanelsleep is off: use the LM alpha blank there too.
+O6. [ ] GPU hang recovery takes 3.9-12.8 s when it fails (recover2 + GBIF-halt + recover3 timeouts): fail faster once a path is known dead.
+O7. [ ] Boot to SSH ~30-45 s; VM resume 5-15 s with a 2.5-4 GB state file.
 
 ## Done today (2026-10-28)
 Wi-Fi join at boot, GPU memory leak (bridge 0105), local builds (userland, metal2, kernel in a macOS VM with hibernate), per-feature docs, work on main.
