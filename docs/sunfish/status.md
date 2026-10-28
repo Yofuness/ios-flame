@@ -32,7 +32,7 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
   HL.3.2.2 vs flame's HL.3.2.0.
 - **`flamereboot=0`** — used for k10 to disable the auto-reboot; meaning unverified.
 
-- **Flashlight** — kernel69 + `sweettorch=1`: `/var/local/bin/sctl kern.sweet_torch=50` (5 s auto-off); writes land, light not yet seen.
+- **Flashlight** — kernel69 + `sweettorch=1`: `/var/local/bin/sctl kern.sweet_torch=50` (5 s auto-off); works (the user saw the LED, 2026-10-28). No Control Center button yet.
 
 ## Not started
 Audio, Bluetooth, cellular, camera, sensors.
