@@ -381,7 +381,8 @@ __attribute__((constructor)) static void sm2_torch_init(void)
 /*
  * Orientation from a file (no sensors; /var/local/sweet-orient, SpringBoard only): a 1 s timer reads one
  * UIDeviceOrientation (1 portrait, 2 upside down, 3 landscape left, 4 landscape right). "N" = method A, AX
- * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager. Delete the file to turn it off.
+ * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
+ * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock. Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -445,6 +446,31 @@ static void sm2_orient_a(long n)
 	((void (*)(id, SEL, long))objc_msgSend)(srv, s, n);
 }
 
+/* Method C: backboardd's automation entry (BackBoardServices MIG), as if the sensor reported it; unlock first. */
+static void sm2_orient_c(long n)
+{
+	static void (*set_auto)(int), (*unlock_o)(void);
+	static bool loaded;
+	if (!loaded) {
+		loaded = true;
+		void *h = dlopen("/System/Library/PrivateFrameworks/BackBoardServices.framework/BackBoardServices", RTLD_NOW);
+		set_auto = h ? (void (*)(int))dlsym(h, "BKSHIDServicesSetDeviceOrientationForAutomation") : NULL;
+		unlock_o = h ? (void (*)(void))dlsym(h, "BKSHIDServicesUnlockOrientation") : NULL;
+		sm2_log("orient: C set %p unlock %p", (void *)set_auto, (void *)unlock_o);
+	}
+	Class lc = objc_getClass("SBOrientationLockManager");
+	id lm = [lc respondsToSelector:@selector(sharedInstance)] ? [lc performSelector:@selector(sharedInstance)] : nil;
+	SEL ul = sel_registerName("unlock"), il = sel_registerName("isUserLocked");
+	int locked = [lm respondsToSelector:il] ? ((BOOL (*)(id, SEL))objc_msgSend)(lm, il) : -1;
+	if ([lm respondsToSelector:ul])
+		((void (*)(id, SEL))objc_msgSend)(lm, ul);
+	if (unlock_o)
+		unlock_o();
+	if (set_auto)
+		set_auto((int)n);
+	sm2_log("orient: C %ld (lock mgr %p, was locked %d)", n, lm, locked);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	if (strcmp(getprogname(), "SpringBoard") != 0 || access("/var/local/sweet-orient", F_OK) != 0)
@@ -469,12 +495,12 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 			buf[0] = 0;
 		if (fd >= 0)
 			close(fd);
-		bool b = buf[0] == 'B';
-		long n = strtol(b ? buf + 1 : buf, NULL, 10);
+		bool b = buf[0] == 'B', c = buf[0] == 'C';
+		long n = strtol(b || c ? buf + 1 : buf, NULL, 10);
 		if (n < 1 || n > 4)
 			return;
 		@try {
-			b ? sm2_orient_b(n) : sm2_orient_a(n);
+			c ? sm2_orient_c(n) : b ? sm2_orient_b(n) : sm2_orient_a(n);
 		} @catch (id ex) {
 			sm2_log("orient: exception %s", [[ex description] UTF8String]);
 		}
