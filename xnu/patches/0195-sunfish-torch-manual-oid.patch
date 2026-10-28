@@ -1,0 +1,29 @@
+From 1582c3b2349abd27b64451090bad1e23b51020a3 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 01:55:10 -0400
+Subject: [PATCH] sunfish: torch sysctl is a manual OID (late registration
+ panicked on a permanent node)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_spmi.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 792db2e..7727d4c 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -288,7 +288,9 @@ sysctl_sweet_torch SYSCTL_HANDLER_ARGS
+ 	return err;
+ }
+ 
+-SYSCTL_PROC(_kern, OID_AUTO, sweet_torch,
++/* 0195: a manual (non-permanent) OID; SYSCTL_PROC nodes are permanent and
++ * sysctl_register_oid() after lockdown panics on them. */
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_torch,
+     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
+     0, 0, sysctl_sweet_torch, "I", "sunfish torch LED current in mA (0190)");
+ 
+-- 
+2.56.0
+
