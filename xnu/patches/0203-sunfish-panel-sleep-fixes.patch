@@ -1,0 +1,98 @@
+From 16d1a82adb6eeabb139d105361e338527314c23a Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 14:22:15 -0400
+Subject: [PATCH] sunfish: panel sleep fixes (no present from the first DCS, a
+ half sleep-in still gets 11/29), per-request log lines, printf for the PON
+ repeat
+
+---
+ iokit/Kernel/arm/SweetBattery.cpp     |  2 +-
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 22 ++++++++++++++--------
+ 2 files changed, 15 insertions(+), 9 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index e849025..54cb6d0 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -324,7 +324,7 @@ SweetBattery::poll(void)
+ 			if (fPonNextNs == 60 * NSEC_PER_SEC) {
+ 				sysctl_register_oid(&sysctl__kern_sweet_pon);
+ 			}
+-			IOLog("%s (repeat)\n", gSweetPonLine);
++			printf("%s (repeat)\n", gSweetPonLine);
+ 			fPonNextNs = now + 1800 * NSEC_PER_SEC;
+ 		}
+ 	}
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index f54a058..a413a71 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -527,7 +527,7 @@ sweet_dsi_dcs_short(uint8_t cmd)
+ 	}
+ 	uint32_t ack = sweet_dsi[0x68 / 4];
+ 	sweet_dsi[0x110 / 4] |= 1;
+-	IOLog("SWEET PANEL: dcs %02x done %d t %u ms ack %x\n", cmd, done, t, ack);
++	printf("SWEET PANEL: dcs %02x done %d t %u ms ack %x\n", cmd, done, t, ack);	/* 0203: printf reaches the live log */
+ 	return done;
+ }
+ 
+@@ -551,6 +551,9 @@ AppleCLCD::panelLoop(void *arg)
+ 			fb->fPanelReq = false;
+ 			IOLockSleep(fb->fLock, &fb->fPanelReq, THREAD_UNINT);
+ 		}
++		if (sleep) {
++			fb->fPanelAsleep = true;	/* 0203: no present from the first DCS on; a half sleep-in still gets 11/29 */
++		}
+ 		IOLockUnlock(fb->fLock);
+ 		bool ok;
+ 		if (sleep) {
+@@ -564,9 +567,6 @@ AppleCLCD::panelLoop(void *arg)
+ 				IOSleep(20);
+ 				ok = ok && sweet_dsi_dcs_short(0x10);
+ 				IOSleep(120);
+-				if (!ok) {
+-					*ar = v;
+-				}
+ 			}
+ 		} else {
+ 			*ar = 0;
+@@ -577,11 +577,12 @@ AppleCLCD::panelLoop(void *arg)
+ 			*ar = (fb->fPanelAR >> 31) ? fb->fPanelAR : 0x80000001;
+ 		}
+ 		if (!ok) {
+-			IOLog("SWEET PANEL: failed, panel left on\n");
++			printf("SWEET PANEL: %s failed (ar %x)\n", sleep ? "sleep-in" : "sleep-out", fb->fPanelAR);
+ 		}
+ 		IOLockLock(fb->fLock);
+-		fb->fPanelAsleep = sleep && ok;
+-		if (!ok) {
++		/* 0203: asleep stays set after a failed sleep-in, so the loop runs 11/29 + autorefresh right away */
++		fb->fPanelAsleep = sleep;
++		if (sleep && !ok) {
+ 			fb->fPanelFailed = true;        /* fade only until the next power change */
+ 		}
+ 		if (!fb->fPanelAsleep) {
+@@ -1043,7 +1044,9 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 		if (args->scalarInputCount >= 1) {
+ 			bool off = args->scalarInput[0] == 0;
+ 			IOLockLock(fFB->fLock);
+-			if (off != fFB->fPowerOff) {
++			bool asleep = fFB->fPanelAsleep, change = off != fFB->fPowerOff;	/* 0203 */
++			uint32_t fade = fFB->fFadeStep;
++			if (change) {
+ 				fFB->fPowerOff = off;
+ 				fFB->fFadeStep = 0;
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+@@ -1054,6 +1057,9 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 				}
+ 			}
+ 			IOLockUnlock(fFB->fLock);
++			if (change) {
++				printf("SWEET PANEL: req %s (asleep %d, fade %u)\n", off ? "off" : "on", asleep, fade);	/* 0203 */
++			}
+ 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+ 		}
+ 		break;
+-- 
+2.56.0
+
