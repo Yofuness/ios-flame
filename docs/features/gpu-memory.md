@@ -19,6 +19,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 07:00-08:00 turnip 0106 leak log, bl1 (no data)
+- turnip 0106 (`SWEET_BOLEAK=1`, CI 40676463855 after 2 runs lost to "job not acquired": GitHub macOS arm64 capacity): logs 1 MiB BoAlloc with backtraces, alloc/retire/free counts and the 256-entry retire ring every 10 s, plus skip reasons. Hooks in tu_knl_darwin.cc darwin_bo_init / bo_finish / reap_locked / queue_submit.
+- bl1 (kernel70 `sweetbocensus=300`, 4456 mV): 0106 live (4 SWEETBOLEAK lines at ~60 s), then a GPU hang at 227 s with failed recovery (see [gpu](gpu.md)); the respawned backboardd reopened /var/local/turnip-backboardd.log and truncated it (0 SWEETBOLEAK lines left; its own Turnip init got VK_ERROR_OUT_OF_DEVICE_MEMORY at BO init). Soak stopped at cycle 2 (7 opens ok, Safari open failed, FBSOpenApplicationServiceErrorDomain 5). Pool before the hang: 389-417 MB in use, peak 525 MB at 220 s; backboardd 257-297 MB (allocs 6204-6500, frees 1631-1652; live <1M 113-115 / 44 MB).
+- Fix: SweetMetal2 logs to /var/local/turnip/<proc>-<pid>.log when that directory exists (mode 777). Next: rerun the soak with it.
+
 ### 2026-10-28 02:05-03:15 overnight run, part 3: the GPU pool leak
 - xnu 0196 (kernel70, CI 40641592758) `sweetbocensus=N`: per-client census of live 1-8 MB BOs older than 60 s.
 - bc1 (35.6 min app soak, census every 300 s): backboardd's own 1024 KB BOs 14 -> 38 -> 48 -> 60 (oldest = process age), the only growing group; 8 MB BOs flat 6-8. 2 real GPU hangs (rbbm 800005, ring pending, no SMMU fault, same signature as the failed sk430 one) recovered first path in 26.5/26.4 ms; backboardd respawned. Real-hang recovery is now proven.

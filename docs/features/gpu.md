@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 07:49 bl1: real GPU hang, recovery failed (new signature)
+- kernel70 + turnip 0106, 2nd app-soak cycle, uptime 227.4 s: fence 2892 done 2858, smmu fsr 0 far 0; rbbm status c30d35, status3 ce00000 (bit24 smmu stalled), cb fsr raw 400, cp_status1 8113471e. recover2 went through cp stop / gbif halt / sw reset / gx off / gx on, then "GPU not recovered" at 231.4 s; the kernel killed backboardd anyway. Swaps came back (99 in the 5 s to 246 s), then the screen idled. Unlike bc1's hangs (rbbm 800005, no SMMU stall), this one has the SMMU stalled. 3 real hangs in ~45 min of kernel70 soaks vs 0 in sk52b-sk68: kernel70 (0196) or turnip 0106 still a suspect.
+
 ### 2026-10-28 02:05-03:15 overnight run, part 3: the GPU pool leak
 - See [gpu-memory](gpu-memory.md): bc1 had 2 real GPU hangs (rbbm 800005, ring pending, no SMMU fault), both recovered on the first path in 26.5/26.4 ms. Real-hang recovery is now proven.
 
