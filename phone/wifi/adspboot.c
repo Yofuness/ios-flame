@@ -758,7 +758,11 @@ int main(int argc, char **argv)
 	if (smp2p_in(&v) == 0 && (v & 2) && !(v & 1)) {
 		printf("adsp: already running (state %x), skipping the boot\n", v);
 	} else {
-		pas_shutdown();
+		/* adsp3: shutdown of a never-started image blocked forever (fresh boot, state 0): only after an earlier run. */
+		int sv = smp2p_in(&v);
+		printf("adsp: smp2p in %d state %x\n", sv, v);
+		if (sv == 0 && v)
+			pas_shutdown();
 		if (boot())
 			return 1;
 		uint64_t t0 = now_ms();
