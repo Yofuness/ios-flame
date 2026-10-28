@@ -89,7 +89,7 @@ jobs:
           sh phone/wifi/build.sh
           cp phone/wifi/out/wland ../out/
           bash phone/tools/build.sh || echo "::warning::some phone tools failed"
-          for t in psx pstack netsvc nettest oslog prefs openapp lsreg memwarn pmem a2s vtdecode vcopy sctl; do
+          for t in psx pstack netsvc nettest oslog prefs openapp lsreg memwarn pmem a2s vtdecode vcopy sctl fcopy; do
             [ -f phone/tools/out/$t ] && cp phone/tools/out/$t ../out/ || true
           done
 

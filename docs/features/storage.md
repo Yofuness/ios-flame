@@ -22,6 +22,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 13:45 direct-I/O EFAULT: root cause + xnu 0198 (kernel75, not booted)
+- 0175 took B_PHYS alone as "user address". Cluster direct I/O (CL_DIRECT_IO, e.g. fcopyfile with F_NOCACHE) is B_PHYS too but UPL-backed (B_CLUSTER, vfs_bio.c:798); buf_map maps the UPL into the kernel, so copyout/copyin on it gave EFAULT. 0198: user VA = B_PHYS && !B_CLUSTER (physio keeps copyout/copyin, the 0175 PAN fix stays). Boot arg sweetufsdio=0 restores the old test. VM build 168 s.
+- Test tool phone/tools/fcopy + tools/sunfish-ufs-dio-test.sh (scratch files only); the uncached `fcopy -n` copy is the real check.
+
 ### 2026-10-27 ~21:50- overnight run (user away until 05:00; plan.md "Overnight run") (storage part)
 - Storage: root is HFS+ 16 GiB, 94% full; userdata has ~93.6 GiB free after it (rescue/console logs in the last 1153 blocks). xnu 0185 (kernel61) adds /dev/ufsroot1 + rufsroot1 = blocks 4194304 .. nblocks-1153-256 (24,533,626 blocks); offset/end checks pass (block 0 and 1000 identical to the partition blocks, last block reads, one past = 0 bytes).
 - newfs_hfs failed with ENOTTY: 0187 answers DKIOCGETMAXBYTECOUNT*/MAXSEGMENTBYTECOUNT* (kernel62). Then "Initialized /dev/rufsroot1 as a 94 GB case-sensitive HFS Plus volume with a 8192k journal" (1.2 s).
