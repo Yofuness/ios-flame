@@ -27,6 +27,9 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
 - The shim rescues the previous kernel's RAM log on every boot into the last 1153 blocks of userdata (rescue block 28728186). Read it before rebooting, or it is lost.
 - Read: `toybox cmp -l /dev/rufsroot0 /dev/zero $((28728186*4096)) 0 | toybox head -n 262144` (cmp seeks and reads large aligned chunks; sub-block raw reads are broken). The overnight run also used `toybox xxd -s 117670649856 -l 262144 -p /dev/rufsroot0` (64 blocks at nblocks-1153). Details: [features/storage.md](features/storage.md).
 
+## Babysitter for long tests
+- `tools/sunfish-babysit.sh [LIVELOG]` checks every 60 s without touching the phone (ping, `fastboot devices`, the live log): prints `ALERT ...` (phone in fastboot or unreachable, live log silent > 180 s, the listener gone, a GPU hang not recovered, panic, watchdog, battery < 3700 mV, a test script STOP), `NOTE ...` (a recovered GPU hang, the phone back) and an `OK ...` heartbeat every 15 min (HEARTBEAT=s). The main session runs it under a Monitor (re-armed every 30 min) during soaks and benches, and push-notifies the user on alerts that need them.
+
 ## App soak
 - `tools/sunfish-appsoak.sh TAG SECONDS` opens 6 stock apps in cycles. Stopping an agent does not stop the background scripts it started: check `ps` for scratchpad scripts after every TaskStop.
 
