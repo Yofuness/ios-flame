@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:50 lead: the vsync tick stops ~83 ms after display off
+- From the k79 panel test: in 6/10 cycles the framebuffer fade stopped at step 5, i.e. the vsync tick ran ~5 times after `display off` and then not at all for 3 s. Nothing in SweetFramebuffer.cpp stops it (vsyncFired re-arms itself first, line 372; sel 72 only clears the notify entry; the fade has no gate), so the workloop thread is probably blocked by something else at display off (GPU/present path?). The unrecoverable GPU hangs cluster 0.1-6 s after display on/off. Worth checking whether the same thing blocks the GPU side; a stack sample of the workloop thread right after display off would show it.
+
 ### 2026-10-28 14:15 k78: recover3 (cold GMU restart) also fails; display power changes as a trigger
 - kernel78, boot k78, during the panel-sleep test: hang at 490.88 s, 1.0 s after `display off` (fence 3155 done 3143, rbbm c30d15, cp_status1 8113471f: the busy type). recover2 failed (me_init rptr 0, cp_status1 81104006), the GBIF-halt path failed, then recover3 FAILED after 8412393 us; recover2 total 12813545 us. Diag before gx off: cp hw_fault 0 int 0 protect 0, gbif halt 3 ack 1, gmu cx busy 71000000, cx gdsc f8222000. gpucc diff: 8 regs differ from boot (+0000 d1000005 -> d1800005, CBCRs +105c..+1094 80000000 -> 0, +1554 1 -> 0).
 - `gbif halt 0 ack 1` before me_init is the same in recovered hangs (17x), so not the difference.
