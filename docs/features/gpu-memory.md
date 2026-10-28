@@ -19,6 +19,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 18:25 sk93 (kernel93, defaults + sweetbl=2 sweettorch=1 sweetse9=2 sweetampreset=1): 40 min app soak, pool higher than the 20 min soak
+- 100 app opens in 3 pieces (agent 10 min limit), 0 resets, 0 GPU hangs, UIWDT armed only. CRASH: WebKit 5, PhotosFileProvider 4.
+- Pool: 39 MB at 62 s, peak 486 MB, 347 MB at 2365 s (the 20 min soak after bridge 0105: 198 / 324 peak / 245 MB). Not flat proof either way at this length; watch in the next 2 h soak (B-list: per-process census if it keeps climbing).
+
 ### 2026-10-28 11:05-11:20 A/B: the pool cap costs no speed
 - Same boot as bl4 (kernel70), sunfish-m2env-bench.sh, no logging/telemetry. Panel updates/s: cap 0: 12.9 (only 3 samples, a GPU hang in that run) / 17.1; cap 8: 19.0 / 17.9 (default, no env: 18.9 / 18.1; ab-end 17.4); cap 32: 18.8 / 18.9. Means: cap 8 18.5, cap 32 18.85, clean cap-0 run 17.1. Within the ±3 noise, the cap is not slower; bl4's 16.0/16.2 was the SWEET_BOLEAK + telemetry logging.
 - 1 GPU hang (ab-off, uptime 1693 s, present path, fence 36567 done 36545, smmu fsr 0; ring me_init TIMEOUT x3, then the GPU came back).
