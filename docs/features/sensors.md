@@ -16,5 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:15 orientation without sensors: the path (read-only)
+- BackBoardServices BKSAccelerometer (setOrientationEventsEnabled:, currentDeviceOrientation; notify state + a mach port from backboardd); SpringBoard SBDeviceOrientationUpdateManager (_enqueueOrientationUpdateToDeviceOrientation:), SBOrientationLockManager; backboardd's _handleDeviceOrientationChangedHIDEvent: takes kIOHIDEventTypeOrientation (10), subtype CMUsage (1) (backboardd itself is not in the shared cache: its HID matching keys are unknown).
+- AccessibilityUtilities `-[AXBackBoardServer setDeviceOrientation:]` (AssistiveTouch's rotate) sends AXIPCMessage key 0x81b {deviceOrientation: n} to backboardd.
+- Plan: from SweetMetal2.bundle in SpringBoard, watch /var/local/sweet-orient (1/2/3/4) and call the AX path (fallback: SBDeviceOrientationUpdateManager). The real path later: a kernel HID orientation service once backboardd is pulled from the root and disassembled.
+
 ### 2026-10-28 14:10 survey (read-only)
 - Findings above. Also seen: locationd exec'd 223 times in the live log (a respawn loop, not yet checked; plan B19).
