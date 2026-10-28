@@ -1,0 +1,126 @@
+From 0598edf4e8a8672f21090607d5da7f5b8680f15c Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 14:33:19 -0400
+Subject: [PATCH] sunfish: panel thread finishes the fade and sleeps the panel
+ 150 ms after display off (does not wait for the vsync tick)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 62 ++++++++++++++++++++++-----
+ 1 file changed, 51 insertions(+), 11 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index a413a71..f954e8b 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -349,6 +349,18 @@ sweet_uiwdt_check(bool power_off, uint64_t now)
+ 	}
+ }
+ 
++/* Fade step: halve every channel (step < 6) or black (6). 0204: the panel thread reuses it for its own black. */
++static void
++sweet_fb_fade(AppleCLCD *fb, uint32_t step)
++{
++	for (uint32_t y = 0; y < fb->fHeight; y++) {
++		volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
++		for (uint32_t x = 0; x < fb->fWidth; x++) {
++			row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
++		}
++	}
++}
++
+ void
+ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ {
+@@ -414,12 +426,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		}
+ 		IOLockUnlock(fb->fLock);
+ 		if (step <= 6) {
+-			for (uint32_t y = 0; y < fb->fHeight; y++) {
+-				volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
+-				for (uint32_t x = 0; x < fb->fWidth; x++) {
+-					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+-				}
+-			}
++			sweet_fb_fade(fb, step);
+ 		}
+ 		return;
+ 	}
+@@ -509,7 +516,7 @@ sweet_dsi_dcs_short(uint8_t cmd)
+ 		return false;
+ 	}
+ 	if (sweet_dsi[0] != 0x20030000 || (sweet_dsi[0x4 / 4] & 1) == 0) {
+-		IOLog("SWEET PANEL: DSI0 version %x ctrl %x: refused\n", sweet_dsi[0], sweet_dsi[0x4 / 4]);
++		printf("SWEET PANEL: DSI0 version %x ctrl %x: refused\n", sweet_dsi[0], sweet_dsi[0x4 / 4]);
+ 		return false;
+ 	}
+ 	sweet_dcsbuf[0] = 0x80050000 | cmd;     /* LAST | DTYPE 05 | cmd (device memory: uncached) */
+@@ -544,19 +551,51 @@ AppleCLCD::panelLoop(void *arg)
+ 		return;	/* no requests are served: fade only */
+ 	}
+ 	volatile uint32_t *ar = sweet_mdp + 0xab4 / 4;
++	uint64_t off0 = 0;	/* 0204: when this thread first saw the pending off */
+ 	for (;;) {
+ 		IOLockLock(fb->fLock);
+-		bool sleep;
++		bool sleep, own = false;
+ 		while ((sleep = fb->fPowerOff && fb->fFadeStep > 6 && !fb->fPanelFailed) == fb->fPanelAsleep) {
+ 			fb->fPanelReq = false;
+-			IOLockSleep(fb->fLock, &fb->fPanelReq, THREAD_UNINT);
++			if (!fb->fPowerOff || fb->fPanelAsleep || fb->fPanelFailed) {
++				off0 = 0;
++				IOLockSleep(fb->fLock, &fb->fPanelReq, THREAD_UNINT);
++				continue;
++			}
++			/*
++			 * 0204: off, fade not done. The tick's fade stalled at step 5 in 6/10 k79 cycles; after 150 ms
++			 * (10 ms steps, re-checked under the lock: an on aborts) the thread blacks the frame itself.
++			 */
++			uint64_t now = mach_absolute_time(), ms;
++			if (off0 == 0) {
++				off0 = now;
++			}
++			absolutetime_to_nanoseconds(now - off0, &ms);
++			if (ms / 1000000 >= 150) {
++				fb->fFadeStep = 7;	/* the tick stops fading; its black write, if running, is the same */
++				own = true;
++				continue;
++			}
++			uint64_t dl;
++			clock_interval_to_deadline(10, kMillisecondScale, &dl);
++			IOLockSleepDeadline(fb->fLock, &fb->fPanelReq, dl, THREAD_UNINT);
+ 		}
++		uint32_t fade = fb->fFadeStep;
+ 		if (sleep) {
+ 			fb->fPanelAsleep = true;	/* 0203: no present from the first DCS on; a half sleep-in still gets 11/29 */
+ 		}
+ 		IOLockUnlock(fb->fLock);
+ 		bool ok;
+ 		if (sleep) {
++			uint64_t ms = 0;
++			if (off0) {
++				absolutetime_to_nanoseconds(mach_absolute_time() - off0, &ms);
++			}
++			off0 = 0;
++			printf("SWEET PANEL: sleep-in after %u ms (fade %u)\n", (uint32_t)(ms / 1000000), own ? 0 : fade);
++			if (own) {
++				sweet_fb_fade(fb, 6);	/* 0204: the tick's last-step black */
++			}
+ 			uint32_t v = *ar;
+ 			ok = (v >> 31) != 0;
+ 			if (ok) {
+@@ -570,9 +609,10 @@ AppleCLCD::panelLoop(void *arg)
+ 			}
+ 		} else {
+ 			*ar = 0;
+-			ok = sweet_dsi_dcs_short(0x11);
++			bool ok11 = sweet_dsi_dcs_short(0x11);	/* 0204: 29 is sent even if 11 timed out */
+ 			IOSleep(120);
+-			ok = sweet_dsi_dcs_short(0x29) && ok;
++			bool ok29 = sweet_dsi_dcs_short(0x29);
++			ok = ok11 && ok29;
+ 			IOSleep(20);
+ 			*ar = (fb->fPanelAR >> 31) ? fb->fPanelAR : 0x80000001;
+ 		}
+-- 
+2.56.0
+
