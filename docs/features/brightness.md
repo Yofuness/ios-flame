@@ -18,6 +18,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 16:20 CoreBrightness read (research/re/CoreBrightness.s)
+- Find: `-[CBDisplayContaineriOS findBacklight]` matches only {IOPropertyMatch: {backlight-control: true}}; built-in only if IOObjectConformsTo(svc, "AppleARMBacklight") (else handleDisplayArrival treats it as external, looks up kUSBContainerID). DisplayOpen also opens IOMobileFramebuffer and reads MG "OLEDDisplay".
+- Set: `_SetBLDriverNitsValue` -> "brightness-nits" = CFNumber SInt32 nits*65536 via IORegistryEntrySetCFProperty (= setProperties on our side), then `_SetIOMFBBrightness` -> "IOMFBBrightnessLevel" (SInt32 16.16) on the IOMFB service; also "brightness-nits-cap", "BLNitsCap", "AmbientBrightness", "TrustedLux". No user-client selector. Writes are skipped in low-power mode.
+- Next (xnu 0209): rename the service class to AppleARMBacklight; sweetbl=2 maps nits (cap 500) to DCS 0x51 4..511 from the kernel panel thread; AppleCLCD accepts the IOMFB brightness keys.
+
 ### 2026-10-28 12:40 Control Center slider: design (read-only)
 - Nothing reaches the kernel today: backboardd and SpringBoard look for an IOService with `backlight-control` = true and find none (live log, e.g. `[ 270.802] IOK SpringBoard: matching1 ... backlight-control ... -> none`, also at 28.2 / 35.5 / 98.7 / 991-997 s). SweetFramebuffer.cpp:874-945 answers sels 3, 4, 5, 7, 8, 12, 18, 28, 72 only; no setProperties override.
 - Shared-cache strings (sub-cache .13, likely CoreBrightness): AppleARMBacklight, backlight-control, brightness-nits, brightness-nits-cap, IODisplayParameters, IOMFBBrightnessLevel, rawBrightness. Likely (~60%): CoreBrightness sets `brightness-nits` / IODisplayParameters via IORegistryEntrySetCFProperty -> setProperties(). Not disassembled yet.
