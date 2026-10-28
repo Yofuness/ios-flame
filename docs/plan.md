@@ -26,7 +26,7 @@ B11. [ ] **UI watchdog only catches a frozen UI**, not a kernel hang with swaps 
 B12. [surveyed 2026-10-28; waits for the ADSP] **Sensors**: none is on an AP bus; all sit behind the SSC in the ADSP (features/sensors.md). Path: ADSP boot (audio M0) -> QRTR + QMI SNS client -> accelerometer -> a HID service for auto-rotation (weeks). Cheap fallback: a sysctl that injects rotation events (1-2 days).
 B13. [ ] **Battery % while discharging** unchecked (set aside by the user; needs the phone off the charger 30 min).
 B14. [ ] **Charging** (~0.5 A drain under load on the charger): PMIC charger writes; ask the user before any write (docs/reference/charger-regs.md).
-B15. [ ] **Bluetooth**: survey first (WCN3990 BT over the same SoC path as Wi-Fi?). Weeks.
+B15. [surveyed 2026-10-28; later] **Bluetooth** (features/bluetooth.md): WCN3990 BT over QUP0 SE3 UART (no GENI UART driver yet) + QCA rampatch/NVM (crbtfw21.tlv, crnv21.bin), then a fake-Broadcom shim for bluetoothd. 1-3 weeks, high uncertainty on the iOS side.
 B16. [ ] **Audio** (dream): **Audio M0: boot the ADSP** (features/audio.md): reuse wland's PAS loader with pas-id 1 + adsp.mdt; the glink "lpass" edge must come up. Then M1 a speaker beep (APR + CS35L41, -20 dB, ≤3 s). M0 tool adspboot is built, not run (features/audio.md).
 B17. [ ] **Camera** (dream): **Camera M1: read the rear sensor's chip ID** (features/camera.md): first read CAMCC/GDSC registers read-only and find the camx sensor bins in the vendor image; then slg51000 + camcc + CCI drivers. (features/camera.md)
 B18. [ ] Cellular: not planned.

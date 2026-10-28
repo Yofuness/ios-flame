@@ -47,7 +47,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Sleep and wake](docs/features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel stays on |
 | [Audio](docs/features/audio.md) | ⬜ | not started; plan: boot the audio DSP, then a speaker beep (~1-2 weeks) |
 | [Camera](docs/features/camera.md) | ⬜ | not started; plan: sensor ID over CCI (~1 week), then raw frames via RDI |
-| [Bluetooth](docs/features/not-started.md) | ⬜ | not started |
+| [Bluetooth](docs/features/bluetooth.md) | ⬜ | not started; surveyed: a UART driver + firmware + an iOS shim, 1-3 weeks |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ⬜ | not started; all sensors sit behind the audio DSP, so they wait for it |
 
