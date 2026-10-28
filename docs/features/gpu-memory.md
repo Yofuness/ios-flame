@@ -1,5 +1,5 @@
 # GPU memory
-**State:** 🟡 backboardd leaks its own 1024 KB kernel BOs (~1 per 25-30 s while opening apps); pool not flat in 2 h. **Updated:** 2026-10-28.
+**State:** ✅ the backboardd pool leak is fixed (bridge 0105, spare command pools capped at 8); pool flat over a 20 min soak. **Updated:** 2026-10-28.
 
 ## How to use
 - Census: `sweetbocensus=N` (xnu 0196) per-client census of live 1-8 MB BOs older than 60 s; Turnip side `TU_DEBUG=bos` for backboardd via `tools/sunfish-m2env-bench.sh` (output in /var/local/turnip-backboardd.log).
@@ -18,6 +18,11 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-28 11:05-11:20 A/B: the pool cap costs no speed
+- Same boot as bl4 (kernel70), sunfish-m2env-bench.sh, no logging/telemetry. Panel updates/s: cap 0: 12.9 (only 3 samples, a GPU hang in that run) / 17.1; cap 8: 19.0 / 17.9 (default, no env: 18.9 / 18.1; ab-end 17.4); cap 32: 18.8 / 18.9. Means: cap 8 18.5, cap 32 18.85, clean cap-0 run 17.1. Within the ±3 noise, the cap is not slower; bl4's 16.0/16.2 was the SWEET_BOLEAK + telemetry logging.
+- 1 GPU hang (ab-off, uptime 1693 s, present path, fence 36567 done 36545, smmu fsr 0; ring me_init TIMEOUT x3, then the GPU came back).
+- Keep the cap at 8 (default). The GPU memory leak is fixed: bridge 0105.
 
 ### 2026-10-28 10:35-11:01 bl4: bridge 0105 (spare command pool cap 8) stops the growth
 - kernel70 `sweetbocensus=300`, 4455 mV, Linux-built bundle 7053013 (bridge 0105, turnip 0107 off by default), SWEET_BOLEAK=1 + mtl2 telemetry on.

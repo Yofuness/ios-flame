@@ -14,7 +14,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Smoothness](features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd | 2026-10-27 |
 | [Brightness](features/brightness.md) | 🟡 | panel brightness via DCS 0x51 works from a tool; no Control Center slider yet | 2026-10-28 |
 | [GPU](features/gpu.md) | ✅ | Adreno 618 at 565 MHz; full recovery from injected and real hangs (~26 ms) | 2026-10-28 |
-| [GPU memory](features/gpu-memory.md) | 🟡 | backboardd leaks its own 1024 KB kernel BOs (~1 per 25-30 s while opening apps); pool not flat in 2 h | 2026-10-28 |
+| [GPU memory](features/gpu-memory.md) | ✅ | leak fixed by bridge 0105 (spare command pools capped at 8): pool flat over a 20 min app soak (198 / 324 peak / 245 MB), no speed cost | 2026-10-28 |
 | [Metal](features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) on the A618 | 2026-10-26 |
 | [Touch](features/touch.md) | ✅ | ST FTM5 over SE7 I²C 0x49 (patch 0125, `sweettouch=2`) | 2026-10-28 |
 | [Buttons](features/buttons.md) | ✅ | power, vol-down (PON), vol-up (PM6150L GPIO2, patch 0126) | 2026-10-23 |
