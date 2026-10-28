@@ -1,0 +1,157 @@
+From 6056355a13910e2a04499a523c4cd67e97210d48 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 13:35:27 -0400
+Subject: [PATCH] sunfish: Wi-Fi link-up events for wland's own join
+ (sweetwifiev=1)
+
+---
+ bsd/dev/flame_sta.c          | 45 ++++++++++++++++++++++++++++++++++++
+ bsd/dev/redwood_apple80211.c | 41 ++++++++++++++++++++++++++++++++
+ 2 files changed, 86 insertions(+)
+
+diff --git a/bsd/dev/flame_sta.c b/bsd/dev/flame_sta.c
+index 7e40bda..fca8841 100644
+--- a/bsd/dev/flame_sta.c
++++ b/bsd/dev/flame_sta.c
+@@ -4,6 +4,7 @@
+  * C API, flame_wlan_*, the one topaz_wlan_* was). When wland says the radio is up, en0 is made (a radio,
+  * link down until a join) and the station attached, so that wifid finds a Wi-Fi interface.
+  */
++#include <kern/kalloc.h>
+ #include <kern/thread.h>
+ #include <libkern/libkern.h>
+ #include <pexpert/pexpert.h>
+@@ -41,6 +42,21 @@ extern bool flame_wlan_link_bss(struct flame_wlan_bss *bss);
+ static struct redwood_sta_bss sta_joined_bss;
+ static int sta_last_error;
+ 
++/* 0199: sweetwifiev=1 tells wifid about a join wland made by itself (link events, ASSOC_DONE, the scan's elements) */
++static bool
++sta_events(void)
++{
++	static int on = -1;
++
++	if (on < 0) {
++		int v = 0;
++
++		PE_parse_boot_argn("sweetwifiev", &v, sizeof(v));
++		on = v != 0;
++	}
++	return on != 0;
++}
++
+ static const uint16_t sta_freqs[] = {
+ 	2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472,
+ 	5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
+@@ -149,6 +165,25 @@ sta_state(struct redwood_sta_state *state)
+ 				state->bss.elements_length = t.elements_length < REDWOOD_STA_ELEMENTS_MOST ? t.elements_length : REDWOOD_STA_ELEMENTS_MOST;
+ 				memcpy(state->bss.elements, t.elements, state->bss.elements_length);
+ 			}
++			/* 0199: wland's own scan did not hear it: channel, RSSI and elements (RSN) from iOS's last scan */
++			if (sta_events() && state->bss.frequency == 0 && state->bss.ssid_length != 0) {
++				struct redwood_sta_bss *b = kalloc_data(sizeof(*b), Z_WAITOK);
++
++				for (unsigned i = 0; b != NULL && redwood_sta_heard(i, b); i++) {
++					if (memcmp(b->bssid, state->bss.bssid, 6) == 0) {
++						state->bss.frequency = b->frequency;
++						state->bss.rssi = b->rssi;
++						state->bss.beacon_interval = b->beacon_interval;
++						state->bss.capability = b->capability;
++						state->bss.elements_length = b->elements_length;
++						memcpy(state->bss.elements, b->elements, b->elements_length);
++						break;
++					}
++				}
++				if (b != NULL) {
++					kfree_data(b, sizeof(*b));
++				}
++			}
+ 		}
+ 	}
+ 	state->last_error = sta_last_error;
+@@ -198,6 +233,16 @@ sta_link_changed(bool up)
+ 	if (!up && sta_last_error == 0) {
+ 		redwood_sta_lost(ECONNRESET);
+ 	}
++	/* 0199: the link came up: wifid re-reads SSID/BSSID/...; a join wifid never asked for also gets ASSOC_DONE */
++	if (up && sta_events()) {
++		bool self_join = sta_joined_bss.ssid_length == 0;
++
++		if (self_join) {
++			redwood_apple80211_event(REDWOOD_STA_JOIN_DONE, 0);
++		}
++		redwood_apple80211_event(REDWOOD_STA_LINK, 1);
++		printf("SWEET WIFI: link up event posted%s\n", self_join ? " (wland's own join, ASSOC_DONE too)" : "");
++	}
+ }
+ 
+ static struct redwood_net_link sta_link = {
+diff --git a/bsd/dev/redwood_apple80211.c b/bsd/dev/redwood_apple80211.c
+index 0f7ad6a..50eed93 100644
+--- a/bsd/dev/redwood_apple80211.c
++++ b/bsd/dev/redwood_apple80211.c
+@@ -211,6 +211,21 @@ static uint32_t join_result;                    /* of the last join asked for: 0
+ static int wifi_accept = -1;
+ static char country[3] = "XX";
+ 
++/* 0199: sweetwifiev=1 also answers PHY_MODE, RATE, NOISE and MCS for the network joined, with fixed values */
++static int wifi_events = -1;
++
++static bool
++events_on(void)
++{
++	if (wifi_events < 0) {
++		int on = 0;
++
++		PE_parse_boot_argn("sweetwifiev", &on, sizeof(on));
++		wifi_events = on != 0;
++	}
++	return wifi_events != 0;
++}
++
+ static bool
+ accepting(void)
+ {
+@@ -490,6 +505,28 @@ get(struct apple80211req *request)
+ 		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
+ 		break;
+ 	}
++	case 14: {                              /* 0199: PHY mode: a/b/g/n supported, n in use (APPLE80211_MODE_*) */
++		struct {
++			uint32_t version, supported, active;
++		} answer = { .version = 1, .supported = 0x1f, .active = 0x10 };
++
++		error = !events_on() ? EOPNOTSUPP : state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
++		break;
++	}
++	case 8:                                 /* 0199: the rate, Mbit/s, in the value */
++	case 57:                                /* 0199: the MCS index, in the value */
++		error = !events_on() ? EOPNOTSUPP : state->phase != REDWOOD_STA_JOINED ? ENXIO : 0;
++		request->req_val = error == 0 ? (request->req_type == 8 ? 72 : 7) : request->req_val;
++		break;
++	case 17: {                              /* 0199: the noise floor, dBm, laid out as RSSI (16) is */
++		struct {
++			uint32_t version, radios, unit;
++			int32_t each[4], all, each_ext[4], all_ext;
++		} answer = { .version = 1, .radios = 1, .each = { -92 }, .all = -92, .each_ext = { -92 }, .all_ext = -92 };
++
++		error = !events_on() ? EOPNOTSUPP : state->phase != REDWOOD_STA_JOINED ? ENXIO : give(request, &answer, sizeof(answer));
++		break;
++	}
+ 	default:
+ 		error = EOPNOTSUPP;
+ 		break;
+@@ -616,6 +653,10 @@ out:
+ static int
+ set(const struct apple80211req *request, char *said, size_t said_size)
+ {
++	/* 0199: wifid leaving or joining while wland holds its own join is the main risk: say every one */
++	if (request->req_type == 20 || request->req_type == 22) {
++		printf("SWEET WIFI: wifid set %d\n", request->req_type);
++	}
+ 	switch (request->req_type) {
+ 	case 20:
+ 		return set_join(request, said, said_size);
+-- 
+2.56.0
+
