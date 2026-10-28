@@ -22,6 +22,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 12:00 silent resets: analysis (read-only)
+- Nothing records a reset reason: the shim writes 0x77665500 to IMEM 0x146aa65c at every boot (shim/shim.c:27, :80), so every reset lands in fastboot and the IMEM word says nothing.
+- Ruled out for sk70: the kernel's own reboot paths (flamereboot, boot watchdog 0189, UI watchdog rung 2) all log a FLAME WDT / SWEET BOOTWDT line first, and none is in sk70-rescue.txt. The UFS rst3 reset was a real panic, fixed in 0175.
+- What fits: a hang that stops every printer, including the 5 s APSS watchdog pet thread (SweetPlatformExpert.cpp:49-104; the shim arms a 20-30 s bite), or an instant TZ/XPU/NoC or PMIC reset. Ranked: GPU/SMMU bus stall ~45% (kernel70 had 3 real GPU hangs in ~45 min, one with the SMMU stalled and not recovered; sk68 on kernel68 had 0 in 2 h); XPU/TZ from Wi-Fi ~20% (exec wifip2pd 45 ms before the end); non-GPU hard hang ~15%; PMIC UVLO ~10%.
+- Next: log the PMIC PON/POFF/fault reason registers (SID 0 periph 0x08) at boot (read-only SPMI), so the boot after the next reset says what it was; then a kernel68-vs-kernel70 soak with the same bundle.
+
 ### 2026-10-28 11:40-11:55 sk70: silent reset to fastboot at 337.8 s (2 h soak aborted)
 - kernel70 `sweetbocensus=600`, bundle 7053013 (bridge 0105), 4455 mV. Fresh-boot bench sk70p: 22.7 / 22.1 swaps/s, 16.1 / 15.6 panel updates/s (below the 21-24 of earlier kernels/bundles; not yet explained).
 - App soak cycle 2: the phone fell into fastboot at uptime ~337.8 s. RAM-log rescue (sk70r boot; header total 495807, n 258048, logs/sk70-rescue.txt) ends mid-swipe at `[ 337.776] SWEET CMD: swipe 540,1800 -> 540,1000 in 30 steps`: no panic, watchdog, GPU hang, SError, jetsam or thermal line. GPU pool 160 MB (backboardd), GPU busy 13%. Same pattern as the unexplained 10-25 soak resets (468 s, ~179 s; storage suspect: the UFS I/O error path), the first since 0175/0176. sk68 (2 h, kernel68) had none.
