@@ -1,0 +1,198 @@
+From 0bd507ef7a703c432b0790a28b2beed0ec081aa9 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 13:58:49 -0400
+Subject: [PATCH] sunfish: GPU recover3 cold restart (GMU restart + boot-time
+ HFI/CP init) after a failed recover2, hang diag lines, a correct status3
+ print (sweetgpucold)
+
+---
+ bsd/dev/sweet_a6xx.c | 89 ++++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_a6xx.h |  2 +
+ bsd/dev/sweet_gpu.c  | 19 +++++++++-
+ 3 files changed, 108 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index c949b07..19095c6 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -482,6 +482,8 @@ static void hfi_table(struct a6_gpu *g)
+ 		wr32(h + 24, 1);
+ 		wr32(h + 28, 1);
+ 		wr32(h + 32, 1);
++		wr32(h + 40, 0);	/* 0200: read/write index (zero at boot; a cold restart needs them reset) */
++		wr32(h + 44, 0);
+ 	}
+ }
+ 
+@@ -528,11 +530,19 @@ static int fw_load(struct a6_gpu *g)
+ 	return n;
+ }
+ 
++static int gmu_start(struct a6_gpu *g);
++
+ static int gmu_boot(struct a6_gpu *g)
+ {
+ 	if (gmu_smmu(g))
+ 		return -1;
+ 	rpmh_init();
++	return gmu_start(g);
++}
++
++/* 0200: the part of gmu_boot that may run again (a6_recover_cold): no SMMU bank pick, no RSCC/PDC init */
++static int gmu_start(struct a6_gpu *g)
++{
+ 	hfi_table(g);
+ 
+ 	wr32(GMU_REG(GMU_GENERAL_7), 1);
+@@ -1514,6 +1524,37 @@ static int gpu_cp(struct a6_gpu *g)
+ #if A6_GPU_ID == 618
+ static bool recover2_active;
+ 
++/* 0200: sweetgpucold=0 turns off the hang diagnostics and a6_recover_cold (default 1) */
++bool a6_cold_enabled(void)
++{
++	static int v = -1;
++	if (v < 0) {
++		v = 1;
++		(void)PE_parse_boot_argn("sweetgpucold", &v, sizeof(v));
++	}
++	return v != 0;
++}
++
++/*
++ * 0200: one line of CP / GBIF / power state. CP_HW_FAULT 0x821, CP_INTERRUPT_STATUS 0x823, CP_PROTECT_STATUS 0x824
++ * (a6xx.xml.h; a6xx has no plain CP_STATUS), CP_STATUS_1, RBBM_GBIF_HALT(_ACK) 0x16/0x17 only with GX up;
++ * GBIF_HALT(_ACK) 0x3c45/6 (CX), GMU_AO_GPU_CX_BUSY_STATUS and both GDSCs always.
++ */
++static void a6_hang_diag(const char *when)
++{
++	if (!a6_cold_enabled())
++		return;
++	uint32_t cx = rd32(GPUCC + GPUCC_CX_GDSCR), gx = rd32(GPUCC + GPUCC_GX_GDSCR);
++	if (a6_gx_up())
++		a6_log("hang diag (%s): cp hw_fault %x int %x protect %x status1 %x, rbbm gbif halt %x ack %x, "
++		    "gbif halt %x ack %x, gmu cx busy %x, cx gdsc %x gx gdsc %x\n", when, rd32(GREG(CP_HW_FAULT)),
++		    rd32(GREG(0x823)), rd32(GREG(0x824)), rd32(GREG(CP_STATUS_1)), rd32(GREG(0x16)), rd32(GREG(0x17)),
++		    rd32(GREG(0x3c45)), rd32(GREG(0x3c46)), rd32(GMU_REG(GMU_CX_BUSY)), cx, gx);
++	else
++		a6_log("hang diag (%s): gx off, gbif halt %x ack %x, gmu cx busy %x, cx gdsc %x gx gdsc %x\n", when,
++		    rd32(GREG(0x3c45)), rd32(GREG(0x3c46)), rd32(GMU_REG(GMU_CX_BUSY)), cx, gx);
++}
++
+ static void r2_stage(const char *what, int rc)
+ {
+ 	if (a6_gx_up())
+@@ -1546,8 +1587,10 @@ static int a6_recover_full(struct a6_gpu *g)
+ 	wr32(GREG(0x43), 0);
+ 	a6_delay_ms(1);
+ 	r2_stage("sw reset", 0);
++	a6_hang_diag("before gx off");		/* 0200 */
+ 	rc = a6_gx_off();
+ 	r2_stage("gx off", rc);
++	a6_hang_diag("after gx off");
+ 	if (rc == 0) {
+ 		rc = a6_gx_on(g);
+ 		r2_stage("gx on", rc);
+@@ -1569,6 +1612,52 @@ static int a6_recover_full(struct a6_gpu *g)
+ }
+ #endif
+ 
++#if A6_GPU_ID == 618
++#define R3(x, rc) a6_log("recover3 cold: stage %s -> %d, cx gdsc %x gx gdsc %x\n", x, rc, \
++	    rd32(GPUCC + GPUCC_CX_GDSCR), rd32(GPUCC + GPUCC_GX_GDSCR))
++/*
++ * 0200: third stage after recover2 and the GBIF-halt path failed (CP never fetches the ring): GX off, GMU CM3 into
++ * reset, firmware + HFI again (gmu_start, gmu_hfi as at boot), PLL0, CP init + zap. Kept: CX (the SMMU banks and
++ * their SMR/S2CR live there, and those global registers are not ours to rewrite), RSCC/PDC, page tables, mappings.
++ */
++int a6_recover_cold(struct a6_gpu *g)
++{
++	int rc = 0;
++	if (a6_gx_up()) {
++		wr32(GREG(CP_SQE_CNTL), 0);
++		rc = gbif_halt_bounded();
++	}
++	R3("cp stop + gbif halt", rc);
++	rc = a6_gx_off();
++	R3("gx off", rc);
++	wr32(GMU_REG(GMU_SYSRESET), 1);		/* CM3 held in reset */
++	a6_delay_ms(1);
++	wr32(GMU_REG(GMU_G2H_CLR), 0xffffffff);
++	wr32(GMU_REG(GMU_H2G_SET), 0);
++	R3("gmu reset", 0);
++	rc = gmu_start(g);
++	R3("gmu fw", rc);
++	if (rc)
++		return -1;
++	rc = gmu_hfi(g);
++	R3("hfi + gx on", rc);
++	if (rc || !a6_gx_up())
++		return -1;
++	rc = gpucc_pll0_restore();
++	R3("pll0", rc);
++	a6_clk_diag(g, "recover3");
++	(void)a6_clear_fault(g);
++	a6_tlb_flush(g);
++	a6_smmu_gbif_reset(g);
++	recover2_active = true;			/* zap_load, then zap_resume if TZ still has it */
++	rc = gpu_cp_init(g, false);
++	recover2_active = false;
++	R3("cp init + zap", rc);
++	a6_hang_diag("recover3 end");
++	return rc;
++}
++#endif
++
+ /* After a hang or fault: soft reset of the GPU core, then the CP up again (page tables and SMMU banks kept). */
+ int a6_recover(struct a6_gpu *g)
+ {
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index 6608fd6..deff6df 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -86,6 +86,8 @@ extern int a6_recover_mode;	/* 0167: 2 = GX power cycle in a6_recover */
+ extern int a6_inject_stall_ib;	/* 0177: sweethangtest bit 30: the next async submit carries a wait-forever IB */
+ extern int a6_inject_bad_ib;	/* 0167: sweethangtest: the next async submit carries a bad IB */
+ int a6_recover(struct a6_gpu *g);	/* after a hang/fault: soft reset, CP re-init (mappings kept); 0 = ok */
++int a6_recover_cold(struct a6_gpu *g);	/* 0200: GMU restart + HFI + CP init (CX and SMMU kept); 0 = ok */
++bool a6_cold_enabled(void);	/* 0200: boot-arg sweetgpucold (default 1) */
+ bool a6_cx_up(void);
+ bool a6_gx_up(void);
+ bool a6_core_cycles(uint64_t *out);	/* 0169: RBBM always-count perf counter; false if GX is down */
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index c6d21ff..e908c2d 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -693,12 +693,27 @@ gpu_recover_locked(const char *why)
+ 	    a6_rd(A6_GREG(0x908)));
+ 	uint32_t dg[4];
+ 	a6_diag_status(&gpu, dg);
+-	a6_log("%s: rbbm status1 %x status2 %x status3 %x (bit24 smmu stalled), cb fsr raw %x\n", why, dg[0], dg[1], dg[2], dg[3]);
++	if (a6_cold_enabled())	/* 0200: the real bit 24 (SMMU stalled) and the FSR fault bits */
++		a6_log("%s: rbbm status1 %x status2 %x status3 %x (bit24 %d), cb fsr raw %x fault %x\n", why, dg[0], dg[1],
++		    dg[2], (dg[2] >> 24) & 1, dg[3], dg[3] & A6_FSR_FAULT);
++	else
++		a6_log("%s: rbbm status1 %x status2 %x status3 %x (bit24 smmu stalled), cb fsr raw %x\n", why, dg[0], dg[1], dg[2], dg[3]);
+ 	lost[recoveries % LOST_RING].lo = done;
+ 	lost[recoveries % LOST_RING].hi = gpu.fence;
+ 	recoveries++;
+ 	bool rec_ok = true;
+-	if (a6_recover(&gpu)) {
++	int rrc = a6_recover(&gpu);
++	if (rrc && a6_recover_mode == 2 && a6_cold_enabled()) {
++		/* 0200: recover2 and the GBIF-halt path failed: GMU cold restart (sweetgpucold=0: off) */
++		uint64_t t3 = mach_absolute_time(), ns3;
++		rrc = a6_recover_cold(&gpu);
++		absolutetime_to_nanoseconds(mach_absolute_time() - t3, &ns3);
++		if (rrc)
++			a6_log("recover3: FAILED after %llu us\n", ns3 / 1000);
++		else
++			a6_log("recover3: done in %llu us\n", ns3 / 1000);
++	}
++	if (rrc) {
+ 		a6_log("%s: GPU not recovered\n", why);
+ 		gpu_ready = false;
+ 		rec_ok = false;
+-- 
+2.56.0
+
