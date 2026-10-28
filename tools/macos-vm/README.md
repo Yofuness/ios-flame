@@ -22,7 +22,7 @@ Setup from scratch (2026-10-28, about 2 h, mostly the macOS download): clone kho
 `qemu-img create -f qcow2 mac_hdd.qcow2 128G`, copy `OVMF_VARS-1920x1080.fd` to `OVMF_VARS.fd`, symlink these
 scripts into `$MACOS_VM_DIR`, `mac-vm.sh install`, then in Recovery: Terminal `diskutil eraseDisk APFS
 'Macintosh HD' GPT disk2`, Reinstall macOS, the setup assistant (local account `builder`, no Apple ID), Remote
-Login + passwordless sudo, Xcode CLT, jq/gum/ninja/cmake/bash 5.2 into /usr/local (Homebrew no longer supports
+Login + passwordless sudo, auto-login (/etc/kcpassword + loginwindow autoLoginUser; sysadminctl -autologin failed with error 22), Xcode CLT, jq/gum/ninja/cmake/bash 5.2 into /usr/local (Homebrew no longer supports
 Intel), and Xcode 15.0.1 from developer.apple.com (needs an Apple ID) into `/Applications/Xcode_15.0.1.app`.
 
 Apple's licence only allows macOS on Apple hardware; the user chose to run it here.
