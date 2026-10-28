@@ -3,9 +3,10 @@
 //   vcopy [-x EXCL]... SRC DST      recursive copyfile(3) COPYFILE_ALL; EXCL = path prefix of SRC to skip
 //   vcopy -l PATH                   xattr names, st_flags, ACL yes/no of one path
 //   vcopy -c SRC DST [-x EXCL]...   compare trees (type, uid, gid, mode, flags, xattr names, size); read-only
-// Sockets are skipped. Exit 1 on any error (or any difference with -c).
+// Regular-file data is copied with read/write (see copydata). Sockets are skipped. Exit 1 on any error (or any difference with -c).
 #include <copyfile.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <fts.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +18,7 @@
 
 static const char *excl[64];
 static int nexcl;
-static long nfiles, ndirs, nlinks, nskip, nerr;
+static long nfiles, ndirs, nlinks, nskip, nerr, nretry;
 
 static int excluded(const char *p)
 {
@@ -41,6 +42,79 @@ static void fixowner(const char *src, const char *dst)
 	}
 }
 
+// Data with plain read/write: copyfile's data path (fcopyfile) got EFAULT on 5691 files (sqlite *.db, -shm, -wal)
+// from our block driver; buffered read/write works. align != 0: 4096-byte aligned buffer and 4096-byte reads.
+// Returns 0, or -1 with *step set and errno kept.
+static int copydata(const char *src, const char *dst, int align, const char **step)
+{
+	size_t bs = align ? 4096 : 256 * 1024;
+	char *buf = NULL;
+	int in = -1, out = -1, e = 0;
+	*step = "open";
+	if (align ? posix_memalign((void **)&buf, 4096, bs) : !(buf = malloc(bs))) {
+		e = ENOMEM;
+		goto done;
+	}
+	if ((in = open(src, O_RDONLY)) < 0 || (out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600)) < 0) {
+		e = errno;
+		goto done;
+	}
+	for (;;) {
+		ssize_t n = read(in, buf, bs);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n < 0) {
+			e = errno;
+			*step = "read";
+			goto done;
+		}
+		if (n == 0)
+			break;
+		for (ssize_t o = 0; o < n;) {
+			ssize_t w = write(out, buf + o, n - o);
+			if (w < 0 && errno == EINTR)
+				continue;
+			if (w < 0) {
+				e = errno;
+				*step = "write";
+				goto done;
+			}
+			o += w;
+		}
+	}
+done:
+	if (in >= 0)
+		close(in);
+	if (out >= 0)
+		close(out);
+	free(buf);
+	errno = e;
+	return e ? -1 : 0;
+}
+
+// Regular file: data ourselves, then copyfile for ACL, xattrs, mode, owner, flags, times only.
+static void copyreg(const char *src, const char *dst)
+{
+	const char *step;
+	int r = copydata(src, dst, 0, &step);
+	if (r && errno == EFAULT && !strcmp(step, "read")) {
+		nretry++;
+		unlink(dst);
+		r = copydata(src, dst, 1, &step);
+	}
+	if (!r && copyfile(src, dst, NULL, COPYFILE_METADATA | COPYFILE_STAT | COPYFILE_NOFOLLOW) < 0) {
+		r = -1;
+		step = "meta";
+	}
+	if (r) {
+		fprintf(stderr, "vcopy: %s: %s: %s\n", src, step, strerror(errno));
+		nerr++;
+		return;
+	}
+	nfiles++;
+	fixowner(src, dst);
+}
+
 static int cb(int what, int stage, copyfile_state_t st, const char *src, const char *dst, void *ctx)
 {
 	(void)st; (void)ctx;
@@ -55,6 +129,10 @@ static int cb(int what, int stage, copyfile_state_t st, const char *src, const c
 		if (stage == COPYFILE_START) {
 			if (excluded(src) || (!lstat(src, &s) && S_ISSOCK(s.st_mode))) {
 				nskip++;
+				return COPYFILE_SKIP;
+			}
+			if (!lstat(src, &s) && S_ISREG(s.st_mode)) {
+				copyreg(src, dst);
 				return COPYFILE_SKIP;
 			}
 		} else if (stage == COPYFILE_FINISH) {
@@ -222,7 +300,8 @@ int main(int argc, char **argv)
 		nerr++;
 	}
 	copyfile_state_free(st);
-	printf("files %ld dirs %ld symlinks %ld skipped %ld errors %ld\n", nfiles, ndirs, nlinks, nskip, nerr);
+	printf("files %ld dirs %ld symlinks %ld skipped %ld errors %ld efault-retries %ld\n", nfiles, ndirs, nlinks, nskip,
+	       nerr, nretry);
 	return nerr > 0;
 usage:
 	fprintf(stderr, "usage: vcopy [-x EXCL]... SRC DST | vcopy -l PATH | vcopy -c SRC DST [-x EXCL]...\n");
