@@ -1,0 +1,202 @@
+From dd78a2d4b6ad28605abf21bfa66e15e6961c7327 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 18:39:23 -0400
+Subject: [PATCH] sunfish: sweetcampmic=1/2 reads / drives the SLG51000 enable
+ and cs GPIOs (PM6150L GPIO 1/5, 4/6)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_spmi.c | 123 +++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 100 insertions(+), 23 deletions(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 773f4be..3580bc0 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -9,6 +9,8 @@
+  * sweet_spmi_write accepts only its six control registers (sweettorch=1).
+  * 0217: and PM6150L GPIO 8/11 (SID 4, 0xc700/0xca00), the CS35L41 amp resets
+  * (sweetampreset=1): MODE/VIN/PULL/OUT_SRC/OUT_DRV/EN only.
++ * 0218: and PM6150L GPIO 1/4/5/6 (SID 4, 0xc000/0xc300/0xc400/0xc500), the SLG51000
++ * camera PMIC enable/cs lines (sweetcampmic=1 read, =2 drive), same registers.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -103,6 +105,8 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	    peripheral == 0x12 || peripheral == 0x13 || peripheral == 0x48 || peripheral == 0x60);
+ 	ok = ok || (sid == 5 && peripheral == 0xd3); /* 0190: PM6150L flash LED */
+ 	ok = ok || (sid == 4 && (peripheral == 0xc7 || peripheral == 0xca)); /* 0217: amp reset GPIOs */
++	ok = ok || (sid == 4 && (peripheral == 0xc0 || peripheral == 0xc3 ||
++	    peripheral == 0xc4 || peripheral == 0xc5)); /* 0218: SLG51000 GPIOs */
+ 	ok = ok || (sid == 0 && peripheral == 0x08); /* 0197: PM6150 PON reasons, read only */
+ 	if (!sp_ready || !out || addr > 0xffffu || !ok) {
+ 		return -1;
+@@ -146,6 +150,8 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ static vm_offset_t sp_chnl;
+ static uint16_t sp_chnl_apid = SP_NO_APID;
+ 
++static bool campmic_writes; /* 0218: set only inside campmic_late with sweetcampmic=2 */
++
+ int
+ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ {
+@@ -156,7 +162,12 @@ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ 	/* 0217: PM6150L GPIO 8 and 11 (amp resets), MODE..EN_CTL minus 0x43 */
+ 	bool ampgpio = sid == 4 && ((addr & 0xff00u) == 0xc700u || (addr & 0xff00u) == 0xca00u) &&
+ 	    reg >= 0x40 && reg <= 0x46 && reg != 0x43;
+-	if (addr > 0xffffu || !(torch || ampgpio)) {
++	/* 0218: PM6150L GPIO 1/4/5/6 (SLG51000 enable/cs), only while sweetcampmic=2 runs */
++	unsigned per = (addr >> 8) & 0xffu;
++	bool camgpio = campmic_writes && sid == 4 &&
++	    (per == 0xc0 || per == 0xc3 || per == 0xc4 || per == 0xc5) &&
++	    reg >= 0x40 && reg <= 0x46 && reg != 0x43;
++	if (addr > 0xffffu || !(torch || ampgpio || camgpio)) {
+ 		printf("SWEET TORCH: refused write sid %u %#x <- %#x\n", sid, addr, val);
+ 		return EPERM;
+ 	}
+@@ -352,7 +363,7 @@ sweet_torch_register(void)
+  * MODE_CTL [6:4] = 1 output, [3:1] = 0 normal, bit0 = level (medium confidence).
+  */
+ static void
+-ampreset_dump(const char *tag, unsigned base)
++gpio_dump(const char *who, const char *tag, unsigned base)
+ {
+ 	static const uint8_t regs[6] = { 0x40, 0x41, 0x42, 0x44, 0x45, 0x46 };
+ 	uint8_t v[6];
+@@ -360,12 +371,30 @@ ampreset_dump(const char *tag, unsigned base)
+ 		v[i] = 0xee;
+ 		(void)sweet_spmi_read(4, base + regs[i], &v[i]);
+ 	}
+-	printf("SWEET AMPRESET: %s %#x 40 %02x 41 %02x 42 %02x 44 %02x 45 %02x 46 %02x\n",
+-	    tag, base, v[0], v[1], v[2], v[3], v[4], v[5]);
++	printf("SWEET %s: %s %#x 40 %02x 41 %02x 42 %02x 44 %02x 45 %02x 46 %02x\n",
++	    who, tag, base, v[0], v[1], v[2], v[3], v[4], v[5]);
++}
++
++/* Digital output, constant source, level high (0217 values; 0218 shares them). */
++static int
++gpio_out_high(unsigned b, uint8_t subtype)
++{
++	int err;
++	if (subtype >= 0x10 && subtype <= 0x13) {
++		if ((err = sweet_spmi_write(4, b + 0x40, 0x01)) == 0 &&
++		    (err = sweet_spmi_write(4, b + 0x44, 0x80)) == 0) {
++			err = sweet_spmi_write(4, b + 0x46, 0x80);
++		}
++	} else {
++		if ((err = sweet_spmi_write(4, b + 0x40, 0x11)) == 0) {
++			err = sweet_spmi_write(4, b + 0x46, 0x80);
++		}
++	}
++	return err;
+ }
+ 
+ static void
+-ampreset_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++ampreset_run(void)
+ {
+ 	static const unsigned bases[2] = { 0xc700u, 0xca00u }; /* GPIO 8 (amp 0x40), 11 (0x41) */
+ 	if (sweet_spmi_init() != 0) {
+@@ -382,33 +411,81 @@ ampreset_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ 			continue;
+ 		}
+ 		printf("SWEET AMPRESET: %#x TYPE %#x SUBTYPE %#x\n", b, type, subtype);
+-		ampreset_dump("before", b);
+-		bool lvmv = subtype >= 0x10 && subtype <= 0x13;
+-		int err;
+-		if (lvmv) {
+-			if ((err = sweet_spmi_write(4, b + 0x40, 0x01)) == 0 &&
+-			    (err = sweet_spmi_write(4, b + 0x44, 0x80)) == 0) {
+-				err = sweet_spmi_write(4, b + 0x46, 0x80);
+-			}
+-		} else {
+-			if ((err = sweet_spmi_write(4, b + 0x40, 0x11)) == 0) {
+-				err = sweet_spmi_write(4, b + 0x46, 0x80);
+-			}
+-		}
++		gpio_dump("AMPRESET", "before", b);
++		int err = gpio_out_high(b, subtype);
+ 		if (err) {
+ 			printf("SWEET AMPRESET: %#x write failed %d\n", b, err);
+ 		}
+-		ampreset_dump("after", b);
++		gpio_dump("AMPRESET", "after", b);
++	}
++}
++
++/* 0218: sweetcampmic=1 logs, =2 also drives SLG51000 enable GPIO 1/5 then cs GPIO 4/6 */
++static int campmic_mode;
++
++static void
++campmic_late(void)
++{
++	static const unsigned bases[4] = { 0xc000u, 0xc400u, 0xc300u, 0xc500u }; /* GPIO 1, 5 (en), 4, 6 (cs) */
++	bool isgpio[4] = { false };
++	uint8_t sub[4] = { 0 };
++	if (sweet_spmi_init() != 0) {
++		printf("SWEET CAMPMIC: no SPMI\n");
++		return;
++	}
++	for (unsigned g = 0; g < 4; g++) {
++		unsigned b = bases[g];
++		uint8_t type = 0;
++		(void)sweet_spmi_read(4, b + 0x04, &type);
++		(void)sweet_spmi_read(4, b + 0x05, &sub[g]);
++		isgpio[g] = type == 0x10;
++		printf("SWEET CAMPMIC: gpio%u %#x TYPE %#x SUBTYPE %#x%s\n", ((b >> 8) & 0xfu) + 1,
++		    b, type, sub[g], isgpio[g] ? "" : ": not a GPIO, no writes");
++		gpio_dump("CAMPMIC", "before", b);
++	}
++	if (campmic_mode != 2) {
++		return;
++	}
++	/* DT: enable-gpios <1 0>, <5 0>, cs-gpios <4 0>, <6 0>: flags 0 = active high */
++	campmic_writes = true;
++	for (unsigned g = 0; g < 4; g++) {
++		if (g == 2) {
++			delay(5000); /* 5 ms between enables and cs */
++		}
++		if (!isgpio[g]) {
++			continue;
++		}
++		int err = gpio_out_high(bases[g], sub[g]);
++		if (err) {
++			printf("SWEET CAMPMIC: %#x write failed %d\n", bases[g], err);
++		}
++	}
++	campmic_writes = false;
++	for (unsigned g = 0; g < 4; g++) {
++		gpio_dump("CAMPMIC", "after", bases[g]);
+ 	}
+ }
+ 
+-/* Called from SweetBattery::start; no-op without sweetampreset=1. */
++static int ampreset_on;
++
++static void
++ampreset_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	if (ampreset_on == 1) {
++		ampreset_run();
++	}
++	if (campmic_mode == 1 || campmic_mode == 2) {
++		campmic_late(); /* 0218: after the amp reset */
++	}
++}
++
++/* Called from SweetBattery::start; no-op without sweetampreset=1 or sweetcampmic=1/2. */
+ void
+ sweet_ampreset_register(void)
+ {
+-	int on = 0;
+-	(void)PE_parse_boot_argn("sweetampreset", &on, sizeof(on));
+-	if (on != 1) {
++	(void)PE_parse_boot_argn("sweetampreset", &ampreset_on, sizeof(ampreset_on));
++	(void)PE_parse_boot_argn("sweetcampmic", &campmic_mode, sizeof(campmic_mode)); /* 0218 */
++	if (ampreset_on != 1 && campmic_mode != 1 && campmic_mode != 2) {
+ 		return;
+ 	}
+ 	thread_call_t c = thread_call_allocate(ampreset_late, NULL);
+-- 
+2.56.0
+
