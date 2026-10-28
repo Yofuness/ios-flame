@@ -18,6 +18,13 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 12:40 Control Center slider: design (read-only)
+- Nothing reaches the kernel today: backboardd and SpringBoard look for an IOService with `backlight-control` = true and find none (live log, e.g. `[ 270.802] IOK SpringBoard: matching1 ... backlight-control ... -> none`, also at 28.2 / 35.5 / 98.7 / 991-997 s). SweetFramebuffer.cpp:874-945 answers sels 3, 4, 5, 7, 8, 12, 18, 28, 72 only; no setProperties override.
+- Shared-cache strings (sub-cache .13, likely CoreBrightness): AppleARMBacklight, backlight-control, brightness-nits, brightness-nits-cap, IODisplayParameters, IOMFBBrightnessLevel, rawBrightness. Likely (~60%): CoreBrightness sets `brightness-nits` / IODisplayParameters via IORegistryEntrySetCFProperty -> setProperties(). Not disassembled yet.
+- The DCS 0x51 send exists only in tools/sunfish-panel-bright.sh (pmem); no kernel code maps 0x0ae94000 / 0x0ae6bab4.
+- Design (~200 lines, new SweetBacklight.cpp): publish an AppleARMBacklight-like service with backlight-control and IODisplayParameters; setProperties() logs every key and, with `sweetbl=1`, maps nits 0-500 to DCS 4..511 (only opcode 0x51, never 0x53, never 0x0ae44000), at most one send per 50 ms, on a work thread under the fb lock.
+- Test: boot A log-only (the matching line must find the service; record the keys); boot B with sweetbl=1 at 10/30/50%, webcam + battery mA + one swipe bench.
+
 ### 2026-10-28 00:00-02:10 overnight run, part 2 (brightness part)
 - Panel brightness (pb1, kernel68): tools/sunfish-panel-bright.sh sends DCS 51 HH LL through the DSI0 command DMA (packet at 0x9d6ff000, MDP autorefresh paused around it). TRIG_CTRL was already SW (4). 128/32/400/128: all done, ack_err 0, no faults; webcam: 32 near-black, 400 brighter. Works; resets on reboot.
 
