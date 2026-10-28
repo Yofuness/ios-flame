@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:55 adsp1/adsp2 (kernel93, booted k93a): the ADSP authenticates and runs, then err-fatal in the sensor PD
+- adsp1: `pas supported(1) -> 0/0` stopped the tool; 1cf0cf5 only logs it now (wland never asks).
+- adsp2: votes lcx/lmx 384 -> 0/0; mdt 28 phdrs, linked 0x93c00000-0x95e00000, relocated to 0x96b00000; pas init (8860 B metadata) 0/0; mem setup 0x96b00000+0x2200000 0/0; 26 segments 15963961 bytes; smp2p out 443; QMP `load_state adsp on` acked; auth-and-reset 0/0. Then no ready in 10 s; glink items 478/480 present, 479 none; crash reason (SMEM 423): `err_qdi.c:1040:EF:sensor_process:0x1:rcinit_worker:0xf9:sar.cc:27:chre_utils fatal`. The phone stayed up, no SMMU/XPU lines.
+- So: the firmware runs; the sensors user PD (CHRE, SAR sensor init) fails fatally during rcinit and takes the ADSP down. Next: what it wants from the AP (files over TFTP/FastRPC, servreg/PDR, sensor registry).
+
 ### 2026-10-28 17:50 k93a (kernel93, sweetse9=2 sweetampreset=1): both CS35L41 amps answer
 - xnu 0217: PM6150L GPIO 8 (0xc700) and 11 (0xca00) are TYPE 0x10 SUBTYPE 0x11 (MV); before MODE 0x00 OUT_SRC 0x00 (input), after MODE 0x01 OUT_SRC 0x80 EN 0x80 (output high) at 30.67 s.
 - `apr_tone --probe --amp both`: "2 amp(s) answer"; each: devid 0x35a40, revid 0xb2, pwr_ctrl1 0, pwr_ctrl2 0x3321, amp_dig_vol 0x8000, amp_gain_ctrl 0x273, irq1_status1 0. The resets were the blocker.
