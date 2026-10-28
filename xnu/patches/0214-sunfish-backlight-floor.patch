@@ -1,0 +1,39 @@
+From efb6581a4b231fb5e590e15b6bb3cd9883808823 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 16:57:52 -0400
+Subject: [PATCH] sunfish: backlight ignores nits 0 and floors DCS 51 at 32
+ (k88a went black at nits 0)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ iokit/Kernel/arm/SweetBacklight.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
+index 5edb25e..6bf9c64 100644
+--- a/iokit/Kernel/arm/SweetBacklight.cpp
++++ b/iokit/Kernel/arm/SweetBacklight.cpp
+@@ -6,6 +6,9 @@
+  * 0209: named AppleARMBacklight (CoreBrightness treats only that class as the
+  * built-in display). brightness-nits (16.16) is logged; sweetbl=2 also sends
+  * DCS 51 = 4 + nits * 507 / 500 (4..511) through SweetFramebuffer's panel thread.
++ * 0214: CoreBrightness sends nits 0 at start (k88a: the panel went to DCS 4,
++ * black). 0 is not sent to the panel (sleep blanks the panel on its own), and
++ * the DCS floor is 32 (visible at 10%): DCS = 32 + nits * 479 / 500 (32..511).
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <IOKit/IOLib.h>
+@@ -124,8 +127,8 @@ AppleARMBacklight::setNits(uint32_t raw)
+ 	}
+ 	OSSafeReleaseNULL(bright);
+ 	OSSafeReleaseNULL(params);
+-	if (fMode >= 2) {
+-		sweet_panel_brightness((uint16_t)(4 + c * (511 - 4) / 500));
++	if (fMode >= 2 && nits > 0) {
++		sweet_panel_brightness((uint16_t)(32 + c * (511 - 32) / 500));
+ 	}
+ }
+ 
+-- 
+2.56.0
+

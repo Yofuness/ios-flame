@@ -18,6 +18,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 16:55 k88a (kernel88, sweetbl=2): black screen at boot; fix 0214 (kernel90)
+- backlight-control matching now finds AppleARMBacklight. At 32.927 s CoreBrightness set brightness-nits = 0 and DisplayBrightnessSliderPosition = 0; the kernel sent DCS 51 = 4 (panel minimum, near-black) at 32.958 s and nothing raised it. Recovered with tools/sunfish-panel-bright.sh 128.
+- xnu 0214 (kernel90): nits 0 is not sent to the panel; DCS = 32 + nits * 479 / 500 (32..511). Test k90a pending.
+
 ### 2026-10-28 16:20 CoreBrightness read (research/re/CoreBrightness.s)
 - Find: `-[CBDisplayContaineriOS findBacklight]` matches only {IOPropertyMatch: {backlight-control: true}}; built-in only if IOObjectConformsTo(svc, "AppleARMBacklight") (else handleDisplayArrival treats it as external, looks up kUSBContainerID). DisplayOpen also opens IOMobileFramebuffer and reads MG "OLEDDisplay".
 - Set: `_SetBLDriverNitsValue` -> "brightness-nits" = CFNumber SInt32 nits*65536 via IORegistryEntrySetCFProperty (= setProperties on our side), then `_SetIOMFBBrightness` -> "IOMFBBrightnessLevel" (SInt32 16.16) on the IOMFB service; also "brightness-nits-cap", "BLNitsCap", "AmbientBrightness", "TrustedLux". No user-client selector. Writes are skipped in low-power mode.
