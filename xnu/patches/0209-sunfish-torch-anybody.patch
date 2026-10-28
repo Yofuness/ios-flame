@@ -1,0 +1,76 @@
+From 9476083beaf9b40f1351078fc4ee5050ded99bfe Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 15:48:42 -0400
+Subject: [PATCH] sunfish: kern.sweet_torch writable by mobile
+ (CTLFLAG_ANYBODY), auto-off from sweettorchmax (default 300 s)
+
+---
+ bsd/dev/sweet_spmi.c | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 78013a9..c18ea33 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -202,8 +202,10 @@ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ 	return ETIMEDOUT;
+ }
+ 
+-/* 0190: kern.sweet_torch (mA, 0 = off), LED1 only, auto-off after 5 s. */
++/* 0190: kern.sweet_torch (mA, 0 = off), LED1 only. 0197: auto-off after sweettorchmax s
++ * (default 300, 0 = never); writable by mobile (SpringBoard's Control Center button). */
+ #define TORCH_BASE 0xd300u
++static int torch_max_s = 300;
+ static IOLock *torch_lock;
+ static thread_call_t torch_call;
+ static int torch_ma;
+@@ -221,7 +223,7 @@ static void
+ torch_timeout(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ {
+ 	IOLockLock(torch_lock);
+-	printf("SWEET TORCH: 5 s auto-off\n");
++	printf("SWEET TORCH: %d s auto-off\n", torch_max_s);
+ 	torch_off_locked();
+ 	IOLockUnlock(torch_lock);
+ }
+@@ -258,7 +260,7 @@ torch_on_locked(int ma)
+ 	}
+ 	(void)sweet_spmi_read(5, TORCH_BASE + 0x46, &en);
+ 	(void)sweet_spmi_read(5, TORCH_BASE + 0x4c, &ch);
+-	printf("SWEET TORCH: on %d mA, readback 0x46=%#x 0x4c=%#x\n", ma, en, ch);
++	printf("SWEET TORCH: on %d mA (auto-off in %d s), readback 0x46=%#x 0x4c=%#x\n", ma, torch_max_s, en, ch);
+ 	torch_ma = ma;
+ 	return 0;
+ }
+@@ -279,9 +281,9 @@ sysctl_sweet_torch SYSCTL_HANDLER_ARGS
+ 		thread_call_cancel(torch_call);
+ 	} else {
+ 		err = torch_on_locked(v);
+-		if (!err) {
++		if (!err && torch_max_s > 0) {
+ 			uint64_t deadline;
+-			clock_interval_to_deadline(5, NSEC_PER_SEC, &deadline);
++			clock_interval_to_deadline(torch_max_s, NSEC_PER_SEC, &deadline);
+ 			thread_call_enter_delayed(torch_call, deadline);
+ 		}
+ 	}
+@@ -292,7 +294,7 @@ sysctl_sweet_torch SYSCTL_HANDLER_ARGS
+ /* 0195: a manual (non-permanent) OID; SYSCTL_PROC nodes are permanent and
+  * sysctl_register_oid() after lockdown panics on them. */
+ SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_torch,
+-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
+     0, 0, sysctl_sweet_torch, "I", "sunfish torch LED current in mA (0190)");
+ 
+ /* Runs 10 s after SweetBattery start, well after bsd_init set up sysctl. */
+@@ -324,6 +326,7 @@ sweet_torch_register(void)
+ 	if (on != 1 || torch_call) {
+ 		return;
+ 	}
++	(void)PE_parse_boot_argn("sweettorchmax", &torch_max_s, sizeof(torch_max_s));
+ 	torch_lock = IOLockAlloc();
+ 	torch_call = thread_call_allocate(torch_timeout, NULL);
+ 	thread_call_t reg = thread_call_allocate(torch_register_late, NULL);
+-- 
+2.56.0
+

@@ -1,0 +1,321 @@
+From f951297c85fddf51fdb8f26f5a12869c33674be9 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 15:48:42 -0400
+Subject: [PATCH] sunfish: AppleARMBacklight (brightness-nits -> DCS 0x51 with
+ sweetbl=2), AppleCLCD accepts the IOMFB brightness keys
+
+---
+ iokit/Kernel/arm/SweetBacklight.cpp   |  59 +++++++++++---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 107 +++++++++++++++++++++++++-
+ iokit/KernelConfigTables.cpp          |   4 +-
+ 3 files changed, 154 insertions(+), 16 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
+index b4c0b53..5edb25e 100644
+--- a/iokit/Kernel/arm/SweetBacklight.cpp
++++ b/iokit/Kernel/arm/SweetBacklight.cpp
+@@ -3,6 +3,9 @@
+  * backboardd/SpringBoard match IOPropertyMatch { backlight-control = true }
+  * and found nothing. This publishes one (boot-arg sweetbl=1, default off)
+  * and logs every setProperties / open / newUserClient. No panel writes.
++ * 0209: named AppleARMBacklight (CoreBrightness treats only that class as the
++ * built-in display). brightness-nits (16.16) is logged; sweetbl=2 also sends
++ * DCS 51 = 4 + nits * 507 / 500 (4..511) through SweetFramebuffer's panel thread.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <IOKit/IOLib.h>
+@@ -11,8 +14,10 @@
+ #include <libkern/c++/OSSerialize.h>
+ #include <pexpert/pexpert.h>
+ 
+-class SweetBacklight : public IOService {
+-	OSDeclareDefaultStructors(SweetBacklight);
++extern "C" void sweet_panel_brightness(uint16_t v);	/* 0209: SweetFramebuffer.cpp */
++
++class AppleARMBacklight : public IOService {
++	OSDeclareDefaultStructors(AppleARMBacklight);
+ public:
+ 	IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+@@ -23,22 +28,25 @@ public:
+ private:
+ 	void putNumber(OSDictionary *d, const char *key, UInt32 value);
+ 	static void logValue(const char *key, OSObject *value);
++	void setNits(uint32_t raw);
++	uint32_t fMode;		/* 0209: sweetbl value */
+ };
+-OSDefineMetaClassAndStructors(SweetBacklight, IOService);
++OSDefineMetaClassAndStructors(AppleARMBacklight, IOService);
+ 
+ IOService *
+-SweetBacklight::probe(IOService *provider, SInt32 *score)
++AppleARMBacklight::probe(IOService *provider, SInt32 *score)
+ {
+ 	uint32_t on = 0;
+ 	(void)PE_parse_boot_argn("sweetbl", &on, sizeof(on));
+ 	if (!on) {
+ 		return NULL;
+ 	}
++	fMode = on;
+ 	return IOService::probe(provider, score);
+ }
+ 
+ void
+-SweetBacklight::putNumber(OSDictionary *d, const char *key, UInt32 value)
++AppleARMBacklight::putNumber(OSDictionary *d, const char *key, UInt32 value)
+ {
+ 	OSNumber *n = OSNumber::withNumber(value, 32);
+ 	if (n) {
+@@ -52,7 +60,7 @@ SweetBacklight::putNumber(OSDictionary *d, const char *key, UInt32 value)
+ }
+ 
+ bool
+-SweetBacklight::start(IOService *provider)
++AppleARMBacklight::start(IOService *provider)
+ {
+ 	if (!IOService::start(provider)) {
+ 		return false;
+@@ -83,7 +91,7 @@ SweetBacklight::start(IOService *provider)
+ }
+ 
+ void
+-SweetBacklight::logValue(const char *key, OSObject *value)
++AppleARMBacklight::logValue(const char *key, OSObject *value)
+ {
+ 	char buf[201];
+ 	buf[0] = '\0';
+@@ -97,8 +105,32 @@ SweetBacklight::logValue(const char *key, OSObject *value)
+ 	IOLog("SWEET BL: setProperties key %s = %s\n", key, buf);
+ }
+ 
++/* 0209: 16.16 nits from CoreBrightness: keep read-backs current, drive the panel with sweetbl=2. */
++void
++AppleARMBacklight::setNits(uint32_t raw)
++{
++	uint32_t nits = raw >> 16;
++	IOLog("SWEET BL: nits %u (raw %x)\n", nits, raw);
++	putNumber(NULL, "brightness-nits", raw);
++	uint32_t c = nits > 500 ? 500 : nits;
++	OSDictionary *params = OSDictionary::withCapacity(1);
++	OSDictionary *bright = OSDictionary::withCapacity(3);
++	if (params && bright) {
++		putNumber(bright, "min", 0);
++		putNumber(bright, "max", 65536);
++		putNumber(bright, "value", c * 65536 / 500);
++		params->setObject("brightness", bright);
++		setProperty("IODisplayParameters", params);
++	}
++	OSSafeReleaseNULL(bright);
++	OSSafeReleaseNULL(params);
++	if (fMode >= 2) {
++		sweet_panel_brightness((uint16_t)(4 + c * (511 - 4) / 500));
++	}
++}
++
+ IOReturn
+-SweetBacklight::setProperties(OSObject *properties)
++AppleARMBacklight::setProperties(OSObject *properties)
+ {
+ 	OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
+ 	if (!dict) {
+@@ -113,7 +145,12 @@ SweetBacklight::setProperties(OSObject *properties)
+ 	while ((key = OSDynamicCast(OSSymbol, it->getNextObject()))) {
+ 		OSObject *value = dict->getObject(key);
+ 		logValue(key->getCStringNoCopy(), value);
+-		/* Store it so a read-back sees the new value. */
++		OSNumber *n = OSDynamicCast(OSNumber, value);
++		if (n && key->isEqualTo("brightness-nits")) {
++			setNits(n->unsigned32BitValue());
++			continue;
++		}
++		/* Store it so a read-back sees the new value (also brightness-nits-cap, BLNitsCap). */
+ 		if (value) {
+ 			setProperty(key, value);
+ 		}
+@@ -123,7 +160,7 @@ SweetBacklight::setProperties(OSObject *properties)
+ }
+ 
+ IOReturn
+-SweetBacklight::newUserClient(task_t owningTask, void *securityID, UInt32 type,
++AppleARMBacklight::newUserClient(task_t owningTask, void *securityID, UInt32 type,
+     IOUserClient **handler)
+ {
+ 	(void)owningTask; (void)securityID; (void)handler;
+@@ -132,7 +169,7 @@ SweetBacklight::newUserClient(task_t owningTask, void *securityID, UInt32 type,
+ }
+ 
+ bool
+-SweetBacklight::handleOpen(IOService *forClient, IOOptionBits options, void *arg)
++AppleARMBacklight::handleOpen(IOService *forClient, IOOptionBits options, void *arg)
+ {
+ 	IOLog("SWEET BL: open by %s\n",
+ 	    forClient ? forClient->getMetaClass()->getClassName() : "(null)");
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 60215d0..a03f283 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -166,10 +166,14 @@ public:
+ 	bool          fPanelFailed;   /* a DMA timed out this off period: fade only */
+ 	bool          fPanelReq;      /* wakes panelLoop */
+ 	uint32_t      fPanelAR;       /* saved MDP autorefresh */
++	uint16_t      fBLReq;         /* 0209: DCS 51 value to send (4..511), 0 = none; panelLoop sends it awake */
++	uint64_t      fPropLog[5];    /* 0209: last log time per brightness key */
+ 	static void panelLoop(void *arg);
++	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
++static AppleCLCD *sweet_clcd;	/* 0209: for sweet_panel_brightness */
+ 
+ class IOMobileFramebufferUserClient : public IOUserClient {
+ 	OSDeclareDefaultStructors(IOMobileFramebufferUserClient);
+@@ -287,8 +291,11 @@ AppleCLCD::start(IOService *provider)
+ 
+ 	uint32_t ps = 0;	/* 0201 */
+ 	PE_parse_boot_argn("sweetpanelsleep", &ps, sizeof(ps));
+-	if (ps != 0 && IOCreateThread(&AppleCLCD::panelLoop, this) != NULL) {
+-		fPanelSleep = true;
++	uint32_t bl = 0;	/* 0209: sweetbl=2 needs panelLoop for DCS 51 */
++	PE_parse_boot_argn("sweetbl", &bl, sizeof(bl));
++	sweet_clcd = this;
++	if ((ps != 0 || bl >= 2) && IOCreateThread(&AppleCLCD::panelLoop, this) != NULL) {
++		fPanelSleep = ps != 0;
+ 	}
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+@@ -564,6 +571,89 @@ sweet_dsi_dcs_short(uint8_t cmd)
+ 	return done;
+ }
+ 
++/* 0209: DCS long write 51 HH LL (10-bit brightness), as tools/sunfish-panel-bright.sh. Only 4..511; never 0x53. */
++static bool
++sweet_dsi_dcs_brightness(uint16_t v)
++{
++	if (v < 4 || v > 511) {
++		return false;
++	}
++	if (sweet_dsi[0] != 0x20030000 || (sweet_dsi[0x4 / 4] & 1) == 0) {
++		printf("SWEET PANEL: DSI0 version %x ctrl %x: refused\n", sweet_dsi[0], sweet_dsi[0x4 / 4]);
++		return false;
++	}
++	volatile uint32_t *ar = sweet_mdp + 0xab4 / 4;
++	uint32_t a = *ar;
++	if ((a >> 31) == 0) {
++		printf("SWEET PANEL: dcs 51 refused, autorefresh %x\n", a);
++		return false;
++	}
++	sweet_dcsbuf[0] = 0xC0390003;   /* LAST | long write 39 | 3 bytes */
++	sweet_dcsbuf[1] = 0xFF000051 | ((uint32_t)(v >> 8) << 8) | ((uint32_t)(v & 0xff) << 16);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	*ar = 0;
++	IOSleep(30);
++	sweet_dsi[0x110 / 4] |= 1;
++	sweet_dsi[0x48 / 4] = SWEET_DCS_BUF;
++	sweet_dsi[0x4c / 4] = 8;
++	sweet_dsi[0x90 / 4] = 1;
++	uint32_t t = 0;
++	bool done = false;
++	while (!(done = (sweet_dsi[0x110 / 4] & 1) != 0) && t < 200) {
++		IOSleep(1);
++		t++;
++	}
++	uint32_t ack = sweet_dsi[0x68 / 4];
++	*ar = a;
++	sweet_dsi[0x110 / 4] |= 1;
++	printf("SWEET PANEL: dcs 51 %u done %d t %u ms ack %x\n", v, done, t, ack);
++	return done;
++}
++
++/* 0209: SweetBacklight (sweetbl=2) asks for a value; panelLoop sends the latest, at most every 50 ms. */
++extern "C" void
++sweet_panel_brightness(uint16_t v)
++{
++	AppleCLCD *fb = sweet_clcd;
++	if (fb == NULL || v < 4 || v > 511) {
++		return;
++	}
++	IOLockLock(fb->fLock);
++	fb->fBLReq = v;
++	fb->fPanelReq = true;
++	IOLockWakeup(fb->fLock, &fb->fPanelReq, true);
++	IOLockUnlock(fb->fLock);
++}
++
++/* 0209: CoreBrightness sets these on the IOMFB service: accept, store, log once per second per key. */
++IOReturn
++AppleCLCD::setProperties(OSObject *properties)
++{
++	static const char *keys[5] = { "IOMFBBrightnessLevel", "AmbientBrightness", "TrustedLux",
++		                       "DisplayAAPFactor", "IOMFBContrastEnhancerStrength" };
++	OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
++	if (dict == NULL) {
++		return kIOReturnBadArgument;
++	}
++	bool any = false;
++	for (int i = 0; i < 5; i++) {
++		OSObject *o = dict->getObject(keys[i]);
++		if (o == NULL) {
++			continue;
++		}
++		any = true;
++		setProperty(keys[i], o);
++		uint64_t now = mach_absolute_time(), ns;
++		absolutetime_to_nanoseconds(now - fPropLog[i], &ns);
++		if (fPropLog[i] == 0 || ns >= 1000000000ULL) {
++			fPropLog[i] = now;
++			OSNumber *n = OSDynamicCast(OSNumber, o);
++			IOLog("SWEET FB: %s = %lld\n", keys[i], n ? (long long)n->unsigned64BitValue() : -1LL);
++		}
++	}
++	return any ? kIOReturnSuccess : IOMobileFramebuffer::setProperties(properties);
++}
++
+ /* 0201: own thread; sleeps the panel when off and black, wakes it when on. Re-checks, so the latest request wins. */
+ void
+ AppleCLCD::panelLoop(void *arg)
+@@ -584,7 +674,10 @@ AppleCLCD::panelLoop(void *arg)
+ 	for (;;) {
+ 		IOLockLock(fb->fLock);
+ 		bool sleep, own = false;
+-		while ((sleep = fb->fPowerOff && fb->fFadeStep > 6 && !fb->fPanelFailed) == fb->fPanelAsleep) {
++		while ((sleep = fb->fPanelSleep && fb->fPowerOff && fb->fFadeStep > 6 && !fb->fPanelFailed) == fb->fPanelAsleep) {
++			if (fb->fBLReq != 0 && !fb->fPanelAsleep) {
++				break;	/* 0209: brightness while awake; asleep keeps it for after the wake */
++			}
+ 			fb->fPanelReq = false;
+ 			if (!fb->fPowerOff || fb->fPanelAsleep || fb->fPanelFailed) {
+ 				off0 = 0;
+@@ -609,6 +702,14 @@ AppleCLCD::panelLoop(void *arg)
+ 			clock_interval_to_deadline(10, kMillisecondScale, &dl);
+ 			IOLockSleepDeadline(fb->fLock, &fb->fPanelReq, dl, THREAD_UNINT);
+ 		}
++		if (sleep == fb->fPanelAsleep) {	/* 0209: only a brightness request */
++			uint16_t v = fb->fBLReq;
++			fb->fBLReq = 0;
++			IOLockUnlock(fb->fLock);
++			sweet_dsi_dcs_brightness(v);
++			IOSleep(50);	/* rate limit; later requests coalesce into fBLReq */
++			continue;
++		}
+ 		uint32_t fade = fb->fFadeStep;
+ 		if (sleep) {
+ 			fb->fPanelAsleep = true;	/* 0203: no present from the first DCS on; a half sleep-in still gets 11/29 */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 9ce185a..a3e520c 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -88,9 +88,9 @@ const char * gIOKernelConfigTables =
+     "     'IOMatchCategory' = SweetAccelerator;"
+     "   },"
+     "   {"
+-    "     'IOClass'         = SweetBacklight;"
++    "     'IOClass'         = AppleARMBacklight;"
+     "     'IOProviderClass' = IOResources;"
+-    "     'IOMatchCategory' = SweetBacklight;"
++    "     'IOMatchCategory' = AppleARMBacklight;"
+     "   },"
+     "   {"
+     "     'IOClass'         = AppleMobileFileIntegrity;"
+-- 
+2.56.0
+
