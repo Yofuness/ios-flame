@@ -22,6 +22,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:50 correction: the failing hangs are not SMMU stalls
+- One SMMU (kgsl-iommu 0x05040000), GPU bank cb1 (SMR2 SID 0, SCTLR e7 = stall-on-fault on, `sweetsmmustall`). `smmu fsr 0` (masked with 0xc00001fe) and `cb fsr raw 400` are the same CB_FSR: 0x400 = FSR.FORMAT [10:9] = AArch64, read-only (survives the write-1 clear; every hang, recovered or not, shows it). Real stalled faults read 40000402 (SS + TF) and recover through xnu 0181/0182 (8 injected). The "(bit24 smmu stalled)" text is a fixed string (sweet_gpu.c:696); 0xce00000 has bit 24 clear.
+- What separates them: recovered (26x, ~26 ms) = rbbm 800005, status3 20000, ib2 rem 0 (CP idle); failed (6x, ~3.9 s) = rbbm c30d15/c30d35, status3 ce00000, ib2 rem 1236 (busy mid-IB2); after GX off/on the registers look clean but me_init gets rptr 0 three times. Suspect (~50%): state outside GX (GBIF/GMU side) survives our GX power cycle.
+
 ### 2026-10-28 11:49-13:51 sk71: 2 h soak, no reset, but an unrecoverable SMMU-stalled GPU hang at 256.8 s
 - kernel70, bundle 7053013, booted as sk70r (no census). 122 min, 414 app steps (sk71a 60 + sk71b 62 min), no open failures, 0 panics / UIWDT / reboots; PhotosFileProvider 1 crash (254.97 s).
 - 256.8 s: fence 2361 done 2345, smmu fsr 0; rbbm status3 bit24 (SMMU stalled), cb fsr raw 400 -> recover2 failed, GBIF-halt path: soft reset + CP init -> -1 twice, "GPU not recovered", backboardd killed once, "recover2: FAILED after 3994512 us". No SWEET GPU lines after 261 s.
