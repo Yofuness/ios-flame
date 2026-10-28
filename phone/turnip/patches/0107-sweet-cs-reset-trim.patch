@@ -1,0 +1,97 @@
+diff --git a/src/freedreno/vulkan/tu_cs.cc b/src/freedreno/vulkan/tu_cs.cc
+index 47e1939d611..82bb6cbff1a 100644
+--- a/src/freedreno/vulkan/tu_cs.cc
++++ b/src/freedreno/vulkan/tu_cs.cc
+@@ -34,6 +34,7 @@ tu_cs_init(struct tu_cs *cs,
+    cs->device = device;
+    cs->mode = mode;
+    cs->next_bo_size = initial_size;
++   cs->sweet_initial_bo_size = initial_size;
+    cs->name = name;
+ }
+ 
+@@ -496,6 +497,8 @@ tu_cs_reserve_space(struct tu_cs *cs, uint32_t reserved_size)
+    return VK_SUCCESS;
+ }
+ 
++uint64_t tu_sweet_cs_trims;
++
+ /**
+  * Reset a command stream to its initial state.  This discards all comand
+  * packets in \a cs, but does not necessarily release all resources.
+@@ -522,6 +525,34 @@ tu_cs_reset(struct tu_cs *cs)
+ 
+    assert(!cs->writeable);
+ 
++   /* 0107: don't keep a big last BO forever in pooled command buffers.
++    * SWEET_CS_TRIM_KB (default 256, 0 = off): a kept BO above it is freed
++    * too and next_bo_size goes back to its initial value. */
++   static int64_t trim_kb = -1;
++   if (trim_kb < 0)
++      trim_kb = debug_get_num_option("SWEET_CS_TRIM_KB", 256);
++   bool trimmed = false;
++   if (trim_kb > 0) {
++      struct tu_bo_array *arrs[2] = { &cs->read_only, &cs->read_write };
++      for (unsigned a = 0; a < 2; a++) {
++         struct tu_bo_array *bos = arrs[a];
++         if (!bos->bo_count)
++            continue;
++         struct tu_bo *last = bos->bos[bos->bo_count - 1];
++         if (last->size <= (uint64_t)trim_kb * 1024)
++            continue;
++         TU_RMV(resource_destroy, cs->device, last);
++         tu_bo_finish(cs->device, last);
++         bos->bo_count = 0;
++         trimmed = true;
++         p_atomic_inc(&tu_sweet_cs_trims);
++      }
++   }
++   if (trimmed && cs->sweet_initial_bo_size)
++      cs->next_bo_size = cs->sweet_initial_bo_size;
++   if (trimmed && !cs->read_only.bo_count && !cs->refcount_bo)
++      cs->start = cs->cur = cs->reserved_end = cs->end = NULL;
++
+    if (cs->read_only.bo_count) {
+       cs->read_only.bos[0] = cs->read_only.bos[cs->read_only.bo_count - 1];
+       cs->read_only.bo_count = 1;
+diff --git a/src/freedreno/vulkan/tu_cs.h b/src/freedreno/vulkan/tu_cs.h
+index 6a66de1caa3..e93dea43831 100644
+--- a/src/freedreno/vulkan/tu_cs.h
++++ b/src/freedreno/vulkan/tu_cs.h
+@@ -95,6 +95,7 @@ struct tu_cs
+    enum tu_cs_mode mode;
+    bool writeable;
+    uint32_t next_bo_size;
++   uint32_t sweet_initial_bo_size; /* 0107: next_bo_size restored by a trim */
+ 
+    struct tu_cs_entry *entries;
+    uint32_t entry_count;
+@@ -120,6 +121,9 @@ struct tu_cs
+    tu_crb crb(uint32_t nregs);
+ };
+ 
++/* 0107: number of cs BOs trimmed by tu_cs_reset (SWEET_CS_TRIM_KB) */
++extern uint64_t tu_sweet_cs_trims;
++
+ void
+ tu_breadcrumbs_init(struct tu_device *device);
+ 
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+index 625832673c9..c2f2b592f5e 100644
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -974,12 +974,12 @@ darwin_queue_submit(struct tu_queue *queue, void *_submit,
+          int failed = retire->failure != VK_SUCCESS;
+          pthread_mutex_unlock(&retire->lock);
+          mesa_logi("SWEETBOLEAK t %llu ring %u/%u head size %llu fence %u done %u alloc1m %llu free1m %llu "
+-                   "retired1m %llu live_tu_bos %llu last %u%s",
++                   "retired1m %llu live_tu_bos %llu last %u trim %llu%s",
+                    (unsigned long long)((now - sbl.t0_ns) / 1000000000ull), count, (unsigned)DARWIN_RETIRED_BOS,
+                    (unsigned long long)(head_size >> 10), head_fence, sbl.done,
+                    (unsigned long long)sbl.alloc_1m, (unsigned long long)sbl.free_1m,
+                    (unsigned long long)sbl.retired_1m, (unsigned long long)sbl.live, fence,
+-                   failed ? " FAILED" : "");
++                   (unsigned long long)p_atomic_read(&tu_sweet_cs_trims), failed ? " FAILED" : "");
+          fflush(NULL);
+       }
+    }
