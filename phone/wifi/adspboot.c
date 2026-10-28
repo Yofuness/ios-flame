@@ -6,6 +6,7 @@
  *
  *   adspboot [boot]   votes, load adsp.mdt + .bNN, PAS init / mem setup / auth-and-reset, SMP2P ready, glink
  *   adspboot status   read-only: SMP2P state, glink items, crash reason
+ *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
  *
  * Facts (recon/live.dts): qcom,lpass@62400000 pas-id 1, smem-id 423 (crash reason), proxy rails lcx.lvl /
  * lmx.lvl (>= 385); pil_adsp_mem 0x96b00000+0x2200000; smp2p-adsp out 443 / in 429, IPC bit 26; glink_adsp
@@ -17,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
@@ -374,12 +376,277 @@ static int boot(void)
 	return rc || r1 ? -1 : 0;
 }
 
-/* ---- glink "lpass" edge: handshake and the channels the ADSP opens ---- */
+/* ---- glink "lpass" edge: handshake, channels, QRTR on IPCRTR ---- */
 
-static int glink_watch(int secs)
+/*
+ * audio M0b: the edge comes up right after auth-and-reset (not only after ready), so the ADSP's init can reach
+ * the AP: VERSION/OPEN/INTENT are answered and QRTR on "IPCRTR" gets HELLO back and empty lookups (no servers).
+ * `--no-early` = the old order (edge only after ready).
+ */
+#define QRTR_NODE_AP	1
+#define QRTR_PORT_CTRL	0xfffffffeu
+#define NCHAN		8
+#define NPEND		4
+
+struct chan {
+	char name[32];
+	uint16_t rcid, lcid;
+	uint32_t r_iid[16], r_isz[16];
+	int r_n, ndata;
+	uint8_t pend[NPEND][64];
+	uint32_t pend_len[NPEND];
+	int npend;
+};
+static struct chan ch[NCHAN];
+static int nch, edge_up, ver_seen, our_iid = 100;
+static uint8_t rxbuf[16384];
+static size_t rx_have;
+static uint32_t rx_iid;
+
+static uint64_t now_ms(void)
 {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static struct chan *by_rcid(uint16_t rcid)
+{
+	for (int i = 0; i < nch; i++)
+		if (ch[i].rcid == rcid)
+			return &ch[i];
+	return NULL;
+}
+
+static void hex32(const char *tag, const uint8_t *p, size_t n)
+{
+	printf("adsp: %s %zu bytes:", tag, n);
+	for (size_t i = 0; i < n && i < 32; i++)
+		printf(" %02x", p[i]);
+	printf("\n");
+}
+
+static void give_intents(struct chan *c, int n)
+{
+	uint32_t e[8];
+	for (int i = 0; i < n && i < 4; i++) {
+		e[2 * i] = 4096;
+		e[2 * i + 1] = (uint32_t)our_iid++;
+	}
+	glink_send(GLINK_CMD_INTENT, c->lcid, (uint32_t)n, e, 8u * n);
+}
+
+/* Send one packet on c using a remote intent; without one, queue it and ask (RX_INTENT_REQ). */
+static void chan_send(struct chan *c, const void *pkt, size_t n)
+{
+	int i;
+	for (i = 0; i < c->r_n && c->r_isz[i] < n; i++)
+		;
+	if (i >= c->r_n) {
+		if (c->npend < NPEND && n <= sizeof(c->pend[0])) {
+			memcpy(c->pend[c->npend], pkt, n);
+			c->pend_len[c->npend++] = (uint32_t)n;
+			glink_send(GLINK_CMD_RX_INTENT_REQ, c->lcid, (uint32_t)n, NULL, 0);
+		} else {
+			printf("adsp: %s: tx %zu bytes dropped (no intent, queue full)\n", c->name, n);
+		}
+		return;
+	}
+	uint32_t iid = c->r_iid[i];
+	c->r_iid[i] = c->r_iid[--c->r_n];
+	c->r_isz[i] = c->r_isz[c->r_n];
+	uint8_t d[8 + 64];
+	uint32_t cl[2] = { (uint32_t)n, 0 };
+	memcpy(d, cl, 8);
+	memcpy(d + 8, pkt, n);
+	glink_send(GLINK_CMD_TX_DATA, c->lcid, iid, d, 8 + n);
+}
+
+static void flush_pend(struct chan *c)
+{
+	int n = c->npend;
+	c->npend = 0;
+	for (int i = 0; i < n; i++)
+		chan_send(c, c->pend[i], c->pend_len[i]);
+}
+
+static const char *qrtr_type(uint32_t t)
+{
+	static const char *n[] = { "?0", "DATA", "HELLO", "BYE", "NEW_SERVER", "DEL_SERVER", "DEL_CLIENT",
+				   "RESUME_TX", "EXIT", "PING", "NEW_LOOKUP", "DEL_LOOKUP" };
+	return t < 12 ? n[t] : "?";
+}
+
+/* QRTR v1 control packet from us (node 1, ctrl port) to dst. */
+static void qrtr_ctrl(struct chan *c, uint32_t type, uint32_t dnode, uint32_t dport)
+{
+	uint32_t p[8 + 5] = { 1, type, QRTR_NODE_AP, QRTR_PORT_CTRL, 0, 20, dnode, dport, type, 0, 0, 0, 0 };
+	printf("adsp: qrtr tx %s -> %u:%x\n", qrtr_type(type), dnode, dport);
+	chan_send(c, p, sizeof(p));
+}
+
+static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
+{
+	uint32_t h[8];
+	if (n < sizeof(h)) {
+		hex32("qrtr short", p, n);
+		return;
+	}
+	memcpy(h, p, sizeof(h));
+	uint32_t ty = h[1], sz = h[5];
+	const uint8_t *body = p + 32;
+	size_t blen = n - 32 < sz ? n - 32 : sz;
+	printf("adsp: qrtr rx v%u %s %u:%x -> %u:%x size %u confirm %u", h[0], qrtr_type(ty), h[2], h[3], h[6], h[7],
+	       sz, h[4]);
+	if (ty != 1 && blen >= 20) {
+		uint32_t k[5];
+		memcpy(k, body, 20);
+		if (ty == 4 || ty == 5 || ty == 10 || ty == 11)
+			printf(" svc %u inst %u node %u port %x", k[1], k[2], k[3], k[4]);
+		else if (ty == 6 || ty == 7)
+			printf(" client %u:%x", k[1], k[2]);
+	}
+	printf("\n");
+	if (h[0] != 1)
+		return;
+	if (ty == 2)
+		qrtr_ctrl(c, 2, h[2], QRTR_PORT_CTRL);
+	else if (ty == 10)
+		qrtr_ctrl(c, 4, h[2], h[3]);	/* all-zero NEW_SERVER = end of lookup, no servers */
+	else if (ty == 1)
+		hex32("qrtr data to unserved port, dropped:", body, blen);
+}
+
+/* Parse one glink command; 0 = nothing (more) complete. Bounds: every read is checked against rx_avail. */
+static int pump_one(void)
+{
+	if (glink_rx_avail() < 8)
+		return 0;
+	uint16_t h[2];
+	uint32_t p2;
+	glink_rx_peek(h, 0, 4);
+	glink_rx_peek(&p2, 4, 4);
+	size_t n = 8;
+	struct chan *c = by_rcid(h[1]);
+	switch (h[0]) {
+	case GLINK_CMD_VERSION:
+		glink_send(GLINK_CMD_VERSION_ACK, h[1], p2 & 1, NULL, 0);
+		printf("adsp: glink remote version %u features %x\n", h[1], p2);
+		ver_seen = 1;
+		break;
+	case GLINK_CMD_VERSION_ACK:
+		printf("adsp: glink version acked (%u, %x)\n", h[1], p2);
+		ver_seen = 1;
+		break;
+	case GLINK_CMD_OPEN: {
+		if (p2 > 1024)
+			return -1;
+		n = 8 + ((p2 + 7) & ~7u);
+		if (glink_rx_avail() < n)
+			return 0;
+		char name[64] = { 0 };
+		glink_rx_peek(name, 8, p2 < 63 ? p2 : 63);
+		printf("adsp: channel \"%s\" (rcid %u)\n", name, h[1]);
+		if (!c && nch < NCHAN) {
+			c = &ch[nch];
+			memset(c, 0, sizeof(*c));
+			strncpy(c->name, name, sizeof(c->name) - 1);
+			c->rcid = h[1];
+			c->lcid = (uint16_t)(++nch);
+			glink_send(GLINK_CMD_OPEN_ACK, h[1], 0, NULL, 0);
+			size_t l = strlen(c->name) + 1;
+			glink_send(GLINK_CMD_OPEN, c->lcid, (uint32_t)l, c->name, l);
+		}
+		break;
+	}
+	case GLINK_CMD_OPEN_ACK:
+		for (int i = 0; i < nch; i++)
+			if (ch[i].lcid == h[1]) {
+				printf("adsp: %s: OPEN_ACK (lcid %u)\n", ch[i].name, h[1]);
+				give_intents(&ch[i], 4);
+			}
+		break;
+	case GLINK_CMD_CLOSE:
+		printf("adsp: remote CLOSE cid %u (%s)\n", h[1], c ? c->name : "?");
+		glink_send(GLINK_CMD_CLOSE_ACK, h[1], 0, NULL, 0);
+		break;
+	case GLINK_CMD_INTENT:
+		if (p2 > 64)
+			return -1;
+		n = 8 + 8ull * p2;
+		if (glink_rx_avail() < n)
+			return 0;
+		for (uint32_t i = 0; c && i < p2; i++) {
+			uint32_t e[2];
+			glink_rx_peek(e, 8 + 8 * i, 8);
+			if (c->r_n < 16) {
+				c->r_isz[c->r_n] = e[0];
+				c->r_iid[c->r_n++] = e[1];
+			}
+		}
+		if (c)
+			flush_pend(c);
+		break;
+	case GLINK_CMD_RX_INTENT_REQ:
+		printf("adsp: %s asks for an intent of %u bytes\n", c ? c->name : "?", p2);
+		if (c) {
+			glink_send(GLINK_CMD_RX_INTENT_REQ_ACK, c->lcid, 1, NULL, 0);
+			give_intents(c, 1);
+		}
+		break;
+	case GLINK_CMD_TX_DATA:
+	case GLINK_CMD_TX_DATA_CONT: {
+		if (glink_rx_avail() < 16)
+			return 0;
+		uint32_t cl[2];
+		glink_rx_peek(cl, 8, 8);
+		if (cl[0] > 65536)
+			return -1;
+		n = (16 + cl[0] + 7) & ~(size_t)7;
+		if (glink_rx_avail() < n)
+			return 0;
+		if (h[0] == GLINK_CMD_TX_DATA) {
+			rx_have = 0;
+			rx_iid = p2;
+		}
+		if (rx_have + cl[0] <= sizeof(rxbuf)) {
+			glink_rx_peek(rxbuf + rx_have, 16, cl[0]);
+			rx_have += cl[0];
+		}
+		if (!cl[1] && c) {
+			glink_send(GLINK_CMD_RX_DONE, c->lcid, rx_iid, NULL, 0);
+			give_intents(c, 1);
+			if (!strcmp(c->name, "IPCRTR"))
+				qrtr_rx(c, rxbuf, rx_have);
+			else if (c->ndata++ < 4) {
+				char tag[48];
+				snprintf(tag, sizeof(tag), "%s data", c->name);
+				hex32(tag, rxbuf, rx_have);
+			}
+		}
+		break;
+	}
+	case GLINK_CMD_RX_DONE:
+	case GLINK_CMD_RX_DONE_W_REUSE:
+	case GLINK_CMD_SIGNALS:
+	case GLINK_CMD_READ_NOTIF:
+	case GLINK_CMD_CLOSE_ACK:
+	case GLINK_CMD_RX_INTENT_REQ_ACK:
+		break;
+	default:
+		printf("adsp: glink cmd %u (p1 %u p2 %u): skipped as 8 bytes\n", h[0], h[1], p2);
+	}
+	glink_rx_advance(n);
+	return 1;
+}
+
+/* Wait up to ms for the rx FIFO (item 480), attach and send our VERSION. */
+static int edge_open(int ms)
+{
+	if (edge_up)
+		return 0;
 	int t;
-	for (t = 0; t < secs * 10; t++) {
+	for (t = 0; t < ms / 100; t++) {
 		uint64_t pa;
 		uint32_t sz;
 		if (smem_get(SMEM_HOST_ADSP, 480, &pa, &sz) == 0)
@@ -387,49 +654,61 @@ static int glink_watch(int secs)
 		usleep(100000);
 	}
 	glink_select(SMEM_HOST_ADSP, IPC_ADSP_GLINK);
-	if (t >= secs * 10 || glink_init()) {
-		printf("adsp: glink lpass edge: no rx fifo (item 480) in %d s\n", secs);
+	if (t >= ms / 100 || glink_init()) {
+		printf("adsp: glink lpass edge: no rx fifo (item 480) in %d ms\n", ms);
 		return -1;
 	}
 	printf("adsp: glink lpass edge: rx fifo after %d00 ms ok\n", t);
 	glink_send(GLINK_CMD_VERSION, 1, 1, NULL, 0);	/* version 1, intent reuse */
-	int up = 0, chans = 0;
-	for (t = 0; t < 50; t++) {
-		while (glink_rx_avail() >= 8) {
-			uint16_t h[2];
-			uint32_t p2;
-			glink_rx_peek(h, 0, 4);
-			glink_rx_peek(&p2, 4, 4);
-			size_t n = 8;
-			if (h[0] == GLINK_CMD_VERSION) {
-				glink_send(GLINK_CMD_VERSION_ACK, h[1], p2 & 1, NULL, 0);
-				printf("adsp: glink remote version %u features %x\n", h[1], p2);
-				up = 1;
-			} else if (h[0] == GLINK_CMD_VERSION_ACK) {
-				printf("adsp: glink version acked (%u, %x)\n", h[1], p2);
-				up = 1;
-			} else if (h[0] == GLINK_CMD_OPEN) {
-				n = 8 + ((p2 + 7) & ~7u);
-				if (glink_rx_avail() < n)
-					break;
-				char name[64] = { 0 };
-				glink_rx_peek(name, 8, p2 < 63 ? p2 : 63);
-				printf("adsp: channel \"%s\" (rcid %u)\n", name, h[1]);
-				chans++;
-			} else if (h[0] == GLINK_CMD_INTENT) {
-				n = 8 + 8ull * p2;	/* param1 = channel id, param2 = intent count (8 bytes each) */
-				if (glink_rx_avail() < n)
-					break;
-			} else if (h[0] != GLINK_CMD_CLOSE && h[0] != GLINK_CMD_SIGNALS && h[0] != GLINK_CMD_READ_NOTIF) {
-				printf("adsp: glink cmd %u (p1 %u p2 %u): stop parsing\n", h[0], h[1], p2);
-				return up ? 0 : -1;
-			}
-			glink_rx_advance(n);
+	edge_up = 1;
+	return 0;
+}
+
+/* Pump the edge for ms; with stop, poll SMP2P each second: 1 = ready, 2 = err-fatal, 0 = time up. */
+static int edge_loop(int ms, int stop, uint64_t t0)
+{
+	uint64_t end = now_ms() + (uint64_t)ms, next = 0;
+	while (now_ms() < end) {
+		int r;
+		while ((r = pump_one()) > 0)
+			;
+		if (r < 0) {
+			printf("adsp: glink rx garbage: stop parsing\n");
+			return 0;
 		}
-		usleep(100000);
+		if (stop && now_ms() >= next) {
+			next = now_ms() + 1000;
+			uint32_t v;
+			if (smp2p_in(&v) == 0 && (v & 1)) {
+				printf("adsp: CRASH after %llu ms (state %x)\n", (unsigned long long)(now_ms() - t0), v);
+				crash_reason();
+				return 2;
+			}
+			if (smp2p_in(&v) == 0 && (v & 2)) {
+				printf("adsp: READY after %llu ms (state %x)\n", (unsigned long long)(now_ms() - t0), v);
+				return 1;
+			}
+		}
+		usleep(2000);
 	}
-	printf("adsp: glink %s, %d channels\n", up ? "up" : "no version from the ADSP", chans);
-	return up ? 0 : -1;
+	return 0;
+}
+
+static int glink_watch(int secs)
+{
+	if (edge_open(secs * 1000))
+		return -1;
+	edge_loop(5000, 0, 0);
+	printf("adsp: glink %s, %d channels\n", ver_seen ? "up" : "no version from the ADSP", nch);
+	return ver_seen ? 0 : -1;
+}
+
+/* SCM PIL shutdown (cmd 6), as wland: lets a rerun after a crash boot again without a reboot. */
+static void pas_shutdown(void)
+{
+	uint64_t r1 = 0;
+	int64_t rc = scm(6, 1, PAS_ADSP, 0, 0, &r1);
+	printf("adsp: pas shutdown(%d) -> %lld/%llx\n", PAS_ADSP, (long long)rc, (unsigned long long)r1);
 }
 
 static int status(void)
@@ -454,10 +733,24 @@ int main(int argc, char **argv)
 	if (smem_init())
 		return 1;
 	printf("adsp: smem ok\n");
-	if (argc > 1 && !strcmp(argv[1], "status"))
+	int watch = 20, early = 1, i;
+	const char *cmd = "boot";
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
+			watch = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--no-early"))
+			early = 0;
+		else
+			cmd = argv[i];
+	}
+	if (!strcmp(cmd, "status"))
 		return status();
-	if (argc > 1 && strcmp(argv[1], "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status]\n");
+	if (!strcmp(cmd, "shutdown")) {
+		pas_shutdown();
+		return 0;
+	}
+	if (strcmp(cmd, "boot")) {
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown] [--watch S] [--no-early]\n");
 		return 2;
 	}
 
@@ -465,25 +758,40 @@ int main(int argc, char **argv)
 	if (smp2p_in(&v) == 0 && (v & 2) && !(v & 1)) {
 		printf("adsp: already running (state %x), skipping the boot\n", v);
 	} else {
+		pas_shutdown();
 		if (boot())
 			return 1;
+		uint64_t t0 = now_ms();
+		int st = 0;
+		if (early && edge_open(2000) == 0) {
+			st = edge_loop(watch * 1000, 1, t0);
+			printf("adsp: early watch: %s, %d channels\n", st == 1 ? "ready" : st == 2 ? "crash" : "time up",
+			       nch);
+			if (st == 2)
+				return 1;
+		}
 		int t;
-		for (t = 0; t < 100; t++) {
+		for (t = 0; st != 1 && t < 100; t++) {
 			if (smp2p_in(&v) == 0 && (v & 3))
 				break;
-			usleep(100000);
+			if (edge_up)
+				edge_loop(100, 0, 0);
+			else
+				usleep(100000);
 		}
-		if (t >= 100) {
-			printf("adsp: no ready in 10 s\n");
-			status();
-			return 1;
+		if (st != 1) {
+			if (t >= 100) {
+				printf("adsp: no ready in 10 s\n");
+				status();
+				return 1;
+			}
+			if (v & 1) {
+				printf("adsp: ERR-FATAL after %d00 ms (state %x)\n", t, v);
+				crash_reason();
+				return 1;
+			}
+			printf("adsp: ready after %d00 ms (state %x)\n", t, v);
 		}
-		if (v & 1) {
-			printf("adsp: ERR-FATAL after %d00 ms (state %x)\n", t, v);
-			crash_reason();
-			return 1;
-		}
-		printf("adsp: ready after %d00 ms (state %x)\n", t, v);
 	}
 	return glink_watch(10) ? 1 : 0;
 }
