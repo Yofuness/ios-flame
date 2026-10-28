@@ -2,9 +2,11 @@
 
 **Apple's iOS 16 userland running on a Pixel 4a, booted from RAM with Google's own bootloader.**
 
+Pixel 4a (`sunfish`): Qualcomm SM7150 (Snapdragon 730G), Adreno 618 GPU, 1080x2340 OLED panel.
+
 ## Lineage
 
-A port of ios-flame (the Pixel 4 port), which is itself a port of
+A port of [ios-flame](docs/archive/flame/) (the Pixel 4 port), which is itself a port of
 [ios-sweet](https://github.com/dipa-studio/ios-sweet) (Redmi Note 10 Pro). Apple's open-source XNU kernel
 (xnu-8796, the iOS 16 generation), with ios-sweet's, flame's and the sunfish patches on top, runs the iOS 16.7.16
 userland of the iPhone X. The phone is booted with `fastboot boot`; nothing is flashed to the boot chain, and the
