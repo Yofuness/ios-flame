@@ -19,6 +19,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 08:45-09:31 bl3: turnip 0107 (trim cs BOs > 256 KiB on reset) stops the 1 MiB leak but costs speed
+- kernel70 `sweetbocensus=300`, 4456 mV, Linux-built bundle with 0107. Bench bl3p: 19.7 / 20.3 swaps/s but 13.6 / 13.6 panel updates/s (baseline ~20-22).
+- 20 min app soak (72 opens, 0 fail, 0 GPU hangs, 0 reboots): alloc1m 0 throughout, trims 308 -> 3619; the census has no 1024 KB class any more.
+- Still growing: live_tu_bos 1275 -> 5737 during the soak; census backboardd live 1276 -> 5781 BOs, 176 -> 356 MB; pool first 39, peak 443, last 381 MB.
+- So the trim fixes the 1 MiB class but freeing the big BO on every reset is too expensive. Next: cap the bridge's spare command pools (metal2vulkan-runtime spares.rs keep_command_pool, no cap; reset without RELEASE_RESOURCES) instead, with 0107 off (SWEET_CS_TRIM_KB=0) or at a high threshold; then find the other growth (live BO count).
+
 ### 2026-10-28 08:20-08:40 bl2: the leaking 1 MiB BOs are Turnip 'cmd cs' BOs that are never retired
 - Linux-built bundle (tools/build-metal2-linux.sh, turnip 0106 + per-pid Turnip logs in /var/local/turnip/), kernel70 `sweetbocensus=300`, 4455 mV; app soak bl2 + bl2b: 53 opens, 52 ok (1 Photos open failure, FBSOpenApplicationServiceErrorDomain 5).
 - 0106: every 1 MiB BoAlloc in backboardd is named 'cmd cs'. alloc1m: pid 58 2 (t 122) -> 6 -> 11 -> 19 -> 28 -> 34 (t 576); pid 740 1 (t 30) -> 5 -> 10 -> 18 -> 25 -> 26 (t 442). retired1m 0 and free1m 0 throughout, 0 skip lines, retire ring 0-49/256, never FAILED; live_tu_bos levels off at ~7.5-8.2k. One identical 8-frame backtrace per pid (two variants in pid 740), being symbolized.

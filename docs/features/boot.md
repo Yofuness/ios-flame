@@ -31,6 +31,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 09:30-10:20 kernel builds move to a local macOS VM
+- macOS 14.8.9 (OSX-KVM OpenCore, QEMU/KVM) in ~/VMs/macos, Xcode 15.0.1 (the user downloaded it with their Apple ID), 8 vCPUs as 8x1 cores pinned to host E-cores 4-11, 8 GB.
+- tools/vm-build-xnu.sh (4515b6f) mirrors xnu.yml: full build 337 s, no-change rebuild 54-68 s. kernel71 (kernel70's patch set) has the same size (17895944), load commands and segment sizes as CI's kernel70; only the version string's "runner" becomes "builder".
+- Cold cycle (VM off -> start -> incremental build -> VM off): 159 s; kernel72 byte-identical to kernel71.
+- GitHub's macOS arm64 runners failed with "job not acquired" for 3 of 4 metal2 runs today; CI stays as the fallback.
+
 ### 2026-10-27 ~21:50- overnight run (user away until 05:00; plan.md "Overnight run") (escape hatch and boot watchdog part)
 - Escape hatch 0186 `sweetnofstab=1` (kernel62): /etc/fstab hidden from LOOKUP; boot normal. `rm` fails (it stats first); `toybox unlink /private/etc/fstab` works -> that is the repair command.
 - Boot watchdog 0189 `sweetbootwdt=N`: the counter starts when the pet thread starts (~26 s kernel time). N=20 never fired (UI drew first); N=5 (kernel66): "SWEET BOOTWDT: no swap 5 s after boot, resetting" at 31.3 s, phone in fastboot ~35 s later. Live log only starts ~27 s after boot (early kernel lines like "SWEET UFS" never appear).

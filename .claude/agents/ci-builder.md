@@ -11,9 +11,10 @@ Kernel:
 1. Commit in `work/src/xnu` with `-c user.name=Yofuness -c user.email=compiledchickennuggets@gmail.com`.
 2. Export it with `git format-patch -1 --stdout > ../../../xnu/patches/NNNN-sunfish-<name>.patch`.
 3. Commit that file in `port/`, ending the message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-4. Push to `main`, then run `gh workflow run xnu.yml --ref main`.
-5. Run `gh run watch ID --exit-status`, then `gh run download ID -n xnu-kernel -D work/kernelNN`, using the next
-   free NN.
+4. Push to `main`, then build locally in the macOS VM with `tools/vm-build-xnu.sh NN --stop`, using the next free NN
+   (about 1 min incremental). On failure return its error lines.
+5. CI fallback only if the VM build can't run: `gh workflow run xnu.yml --ref main`, `gh run watch ID --exit-status`,
+   `gh run download ID -n xnu-kernel -D work/kernelNN`.
 
 metal2 and userland: build locally first (no runner queue):
 - `tools/build-metal2-linux.sh` (about 5 min full, seconds when little changed) -> work/metal2-linux/out/phone/metal2/out

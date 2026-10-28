@@ -35,7 +35,10 @@
   1. `tools/build-userland-linux.sh`
   2. `python3 -I tools/flame-files.py put work/userland-linux/out/NAME /var/local/bin/NAME 755`
 - **CI fallback:** pushing `phone/turnip/patches` or `phone/metal2` to `main` starts the metal2 CI, and `phone/**` starts
-  the userland CI (details in `docs/methods.md`). The kernel still builds only in CI.
+  the userland CI (details in `docs/methods.md`).
+- **Kernel:** `tools/vm-build-xnu.sh NN --stop` builds in the local macOS VM (`~/VMs/macos`; CI `xnu.yml` is the
+  fallback). Never start a second VM instance, and never `pkill -f` a pattern that matches your own shell: the VM
+  scripts use `~/VMs/macos/qemu.pid`.
 - **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
   provides the USB network link.
 
