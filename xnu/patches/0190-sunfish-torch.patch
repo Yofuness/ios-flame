@@ -1,0 +1,299 @@
+From 280528ab1528bded6c913af47ece06eb9d2d763d Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:55:48 -0400
+Subject: [PATCH] sunfish: torch LED through a whitelisted SPMI write
+ (sweettorch=1, kern.sweet_torch)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_spmi.c              | 213 +++++++++++++++++++++++++++++-
+ bsd/dev/sweet_spmi.h              |   3 +
+ iokit/Kernel/arm/SweetBattery.cpp |   2 +
+ 3 files changed, 215 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 6a121c5..792db2e 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -5,12 +5,19 @@
+  * Init is serialized by the single built-in SweetBattery personality.
+  * Battery APIDs are disjoint from the existing keys' 008/4c1 APIDs.
+  * Also the PM8150 RTC (peripheral 0x60) for the time of day (SweetPlatformExpert.cpp).
++ * 0190: one exception, the PM6150L flash LED (SID 5, 0xd300) for the torch:
++ * sweet_spmi_write accepts only its six control registers (sweettorch=1).
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <machine/machine_routines.h>
+ #include <IOKit/IOLocks.h>
++#include <sys/sysctl.h>
++#include <sys/errno.h>
++#include <kern/thread_call.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
+ #include "sweet_spmi.h"
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+@@ -18,6 +25,7 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ #define SP_CORE_PA 0x0c440000u
+ #define SP_OBS_PA  0x0e600000u
+ #define SP_CFG_PA  0x0c40a000u
++#define SP_CHNL_PA 0x0c600000u /* 0190: RW channels, v5: 0x10000 per APID */
+ #define SP_NO_APID 0xffffu
+ 
+ static vm_offset_t sp_core, sp_obs, sp_cfg;
+@@ -89,9 +97,10 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ {
+ 	/* Restrict access to the battery blocks and the RTC (0x60); keys retain their own lanes. */
+ 	unsigned peripheral = addr >> 8;
+-	if (!sp_ready || !out || sid != 0 || addr > 0xffffu ||
+-	    (peripheral != 0x10 && peripheral != 0x11 && peripheral != 0x12 &&
+-	    peripheral != 0x13 && peripheral != 0x48 && peripheral != 0x60)) {
++	bool ok = sid == 0 && (peripheral == 0x10 || peripheral == 0x11 ||
++	    peripheral == 0x12 || peripheral == 0x13 || peripheral == 0x48 || peripheral == 0x60);
++	ok = ok || (sid == 5 && peripheral == 0xd3); /* 0190: PM6150L flash LED */
++	if (!sp_ready || !out || addr > 0xffffu || !ok) {
+ 		return -1;
+ 	}
+ 	IOLockLock(sp_lock);
+@@ -124,4 +133,202 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	IOLockUnlock(sp_lock);
+ 	return -1;
+ }
++
++/*
++ * 0190: EXT_WRITEL through the RW channel (Linux spmi-pmic-arb v5: channel
++ * offset 0x10000 * apid; CMD +0x00, STATUS +0x08, WDATA0 +0x10; opcode 0).
++ * Hard whitelist: PM6150L flash LED control registers only.
++ */
++static vm_offset_t sp_chnl;
++static uint16_t sp_chnl_apid = SP_NO_APID;
++
++int
++sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
++{
++	unsigned reg = addr & 0xffu;
++	if (sid != 5 || addr > 0xffffu || (addr & 0xff00u) != 0xd300u ||
++	    (reg != 0x40 && reg != 0x43 && reg != 0x46 && reg != 0x47 &&
++	    reg != 0x49 && reg != 0x4c)) {
++		printf("SWEET TORCH: refused write sid %u %#x <- %#x\n", sid, addr, val);
++		return EPERM;
++	}
++	if (!sp_ready) {
++		return ENXIO;
++	}
++	IOLockLock(sp_lock);
++	uint16_t apid = sp_find_apid((sid << 8) | (addr >> 8));
++	if (apid == SP_NO_APID || sp_poisoned[apid]) {
++		IOLockUnlock(sp_lock);
++		return ENXIO;
++	}
++	unsigned owner = sp_rd(sp_cfg, 0x700u + 4u * apid) & 7u;
++	if (owner != 0) {
++		IOLockUnlock(sp_lock);
++		printf("SWEET TORCH: APID %u owned by EE %u, not 0: refused\n", apid, owner);
++		return EPERM;
++	}
++	if (sp_chnl_apid != apid) {
++		/* Map only this APID's channel page (the full window is 32 MB). */
++		vm_offset_t m = ml_io_map(SP_CHNL_PA + 0x10000u * apid, 0x1000);
++		if (!m) {
++			IOLockUnlock(sp_lock);
++			return ENOMEM;
++		}
++		sp_chnl = m;
++		sp_chnl_apid = apid;
++	}
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(sp_chnl + 0x10u) = val; /* WDATA0 */
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(sp_chnl + 0x00u) = (0u << 27) | (reg << 4); /* EXT_WRITEL, BC=0 */
++	__asm__ volatile("dsb osh" ::: "memory");
++	for (unsigned i = 0; i < 1000; ++i) {
++		uint32_t status = sp_rd(sp_chnl, 0x08u);
++		if (status & 1u) {
++			IOLockUnlock(sp_lock);
++			if (status & 0x0eu) {
++				printf("SWEET TORCH: write %#x status %#x\n", addr, status);
++				return EIO;
++			}
++			printf("SWEET TORCH: sid 5 %#x <- %#x\n", addr, val);
++			return 0;
++		}
++		delay(1);
++	}
++	sp_poisoned[apid] = true;
++	printf("SWEET TORCH: SPMI write timeout %#x APID=%u disabled\n", addr, apid);
++	IOLockUnlock(sp_lock);
++	return ETIMEDOUT;
++}
++
++/* 0190: kern.sweet_torch (mA, 0 = off), LED1 only, auto-off after 5 s. */
++#define TORCH_BASE 0xd300u
++static IOLock *torch_lock;
++static thread_call_t torch_call;
++static int torch_ma;
++
++static void
++torch_off_locked(void)
++{
++	(void)sweet_spmi_write(5, TORCH_BASE + 0x4c, 0x00);
++	(void)sweet_spmi_write(5, TORCH_BASE + 0x49, 0x00);
++	(void)sweet_spmi_write(5, TORCH_BASE + 0x46, 0x00);
++	torch_ma = 0;
++}
++
++static void
++torch_timeout(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	IOLockLock(torch_lock);
++	printf("SWEET TORCH: 5 s auto-off\n");
++	torch_off_locked();
++	IOLockUnlock(torch_lock);
++}
++
++static int
++torch_on_locked(int ma)
++{
++	uint8_t type = 0, subtype = 0, ires = 0, en = 0, ch = 0;
++	if (sweet_spmi_read(5, TORCH_BASE + 0x04, &type) != 0 ||
++	    sweet_spmi_read(5, TORCH_BASE + 0x05, &subtype) != 0) {
++		return EIO;
++	}
++	printf("SWEET TORCH: TYPE %#x SUBTYPE %#x\n", type, subtype);
++	if (type != 0x18) {
++		printf("SWEET TORCH: not a flash block, refused\n");
++		return ENODEV;
++	}
++	if (sweet_spmi_read(5, TORCH_BASE + 0x47, &ires) != 0) {
++		return EIO;
++	}
++	int code = ma * 1000 / 5000 - 1;
++	if (code < 0) {
++		code = 0;
++	}
++	int err;
++	if ((err = sweet_spmi_write(5, TORCH_BASE + 0x47, (uint8_t)((ires & ~3u) | 3u))) ||
++	    (err = sweet_spmi_write(5, TORCH_BASE + 0x43, (uint8_t)(code & 0x7f))) ||
++	    (err = sweet_spmi_write(5, TORCH_BASE + 0x40, 0x00)) ||
++	    (err = sweet_spmi_write(5, TORCH_BASE + 0x46, 0x80)) ||
++	    (err = sweet_spmi_write(5, TORCH_BASE + 0x49, 0x01)) ||
++	    (err = sweet_spmi_write(5, TORCH_BASE + 0x4c, 0x01))) {
++		torch_off_locked();
++		return err;
++	}
++	(void)sweet_spmi_read(5, TORCH_BASE + 0x46, &en);
++	(void)sweet_spmi_read(5, TORCH_BASE + 0x4c, &ch);
++	printf("SWEET TORCH: on %d mA, readback 0x46=%#x 0x4c=%#x\n", ma, en, ch);
++	torch_ma = ma;
++	return 0;
++}
++
++static int
++sysctl_sweet_torch SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int v = torch_ma, changed = 0;
++	int err = sysctl_io_number(req, v, sizeof(v), &v, &changed);
++	if (err || !changed) {
++		return err;
++	}
++	v = v < 0 ? 0 : (v > 100 ? 100 : v);
++	IOLockLock(torch_lock);
++	if (v == 0) {
++		torch_off_locked();
++		thread_call_cancel(torch_call);
++	} else {
++		err = torch_on_locked(v);
++		if (!err) {
++			uint64_t deadline;
++			clock_interval_to_deadline(5, NSEC_PER_SEC, &deadline);
++			thread_call_enter_delayed(torch_call, deadline);
++		}
++	}
++	IOLockUnlock(torch_lock);
++	return err;
++}
++
++SYSCTL_PROC(_kern, OID_AUTO, sweet_torch,
++    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_torch, "I", "sunfish torch LED current in mA (0190)");
++
++/* Runs 10 s after SweetBattery start, well after bsd_init set up sysctl. */
++static void
++torch_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	if (sweet_spmi_init() != 0) {
++		return;
++	}
++	uint8_t type = 0, subtype = 0, r[13];
++	(void)sweet_spmi_read(5, TORCH_BASE + 0x04, &type);
++	(void)sweet_spmi_read(5, TORCH_BASE + 0x05, &subtype);
++	for (unsigned i = 0; i < 13; i++) {
++		r[i] = 0xee;
++		(void)sweet_spmi_read(5, TORCH_BASE + 0x40 + i, &r[i]);
++	}
++	printf("SWEET TORCH: TYPE %#x SUBTYPE %#x 40-4c: %02x %02x %02x %02x %02x %02x "
++	    "%02x %02x %02x %02x %02x %02x %02x\n", type, subtype, r[0], r[1], r[2],
++	    r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12]);
++	sysctl_register_oid(&sysctl__kern_sweet_torch);
++}
++
++/* Called from SweetBattery::start; kern.sweet_torch exists only with sweettorch=1. */
++void
++sweet_torch_register(void)
++{
++	int on = 0;
++	(void)PE_parse_boot_argn("sweettorch", &on, sizeof(on));
++	if (on != 1 || torch_call) {
++		return;
++	}
++	torch_lock = IOLockAlloc();
++	torch_call = thread_call_allocate(torch_timeout, NULL);
++	thread_call_t reg = thread_call_allocate(torch_register_late, NULL);
++	if (!torch_lock || !torch_call || !reg) {
++		return;
++	}
++	uint64_t deadline;
++	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(reg, deadline);
++}
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_spmi.h b/bsd/dev/sweet_spmi.h
+index 45565d1..00b98a9 100644
+--- a/bsd/dev/sweet_spmi.h
++++ b/bsd/dev/sweet_spmi.h
+@@ -8,6 +8,9 @@ extern "C" {
+ int sweet_spmi_init(void);
+ /* Thread context only; 0 success, -1 failure; *out unchanged on failure. */
+ int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++/* 0190: flash LED control registers only (SID 5, 0xd3xx); 0 or errno. */
++int sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val);
++void sweet_torch_register(void);
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 701029e..6996f4f 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -15,6 +15,7 @@
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++extern "C" void sweet_torch_register(void); /* 0190 */
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -330,6 +331,7 @@ SweetBattery::start(IOService *provider)
+ 	int real = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
++	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+ 	if (fReal) {
+-- 
+2.56.0
+
