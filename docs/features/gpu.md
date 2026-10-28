@@ -22,6 +22,13 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 11:49-13:51 sk71: 2 h soak, no reset, but an unrecoverable SMMU-stalled GPU hang at 256.8 s
+- kernel70, bundle 7053013, booted as sk70r (no census). 122 min, 414 app steps (sk71a 60 + sk71b 62 min), no open failures, 0 panics / UIWDT / reboots; PhotosFileProvider 1 crash (254.97 s).
+- 256.8 s: fence 2361 done 2345, smmu fsr 0; rbbm status3 bit24 (SMMU stalled), cb fsr raw 400 -> recover2 failed, GBIF-halt path: soft reset + CP init -> -1 twice, "GPU not recovered", backboardd killed once, "recover2: FAILED after 3994512 us". No SWEET GPU lines after 261 s.
+- Yet the UI kept working for 2 h (webcam frames 11:49-1:51 show changing apps; SWEET FB 5s lines to 7475 s, ~30 swaps/5 s): presumably CPU compositing after the GPU died (not checked).
+- The same signature as bl1 (kernel70, 227 s, also unrecovered). The recovered real hangs (bc1, bl2, ab-off) had no SMMU stall. Pool data stops at 261 s (160 / peak 416 / 24 MB): the "pool flat" check could not be made.
+- Verdict for plan priority 1: reboots PASS, unrecovered hangs FAIL, pool flat not measurable.
+
 ### 2026-10-28 12:00 silent resets: analysis (read-only)
 - Nothing records a reset reason: the shim writes 0x77665500 to IMEM 0x146aa65c at every boot (shim/shim.c:27, :80), so every reset lands in fastboot and the IMEM word says nothing.
 - Ruled out for sk70: the kernel's own reboot paths (flamereboot, boot watchdog 0189, UI watchdog rung 2) all log a FLAME WDT / SWEET BOOTWDT line first, and none is in sk70-rescue.txt. The UFS rst3 reset was a real panic, fixed in 0175.
