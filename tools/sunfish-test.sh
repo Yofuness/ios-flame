@@ -102,7 +102,7 @@ if [ $noreboot = 0 ]; then
 	waitssh || rescue
 	say "ssh up after $tssh s"
 	mark "ssh up $tssh s"
-	tools/sunfish-dim.sh 10 >/dev/null 2>&1 && mark "dim 10"
+	tools/sunfish-dim.sh ${DIM:-10} >/dev/null 2>&1 && mark "dim ${DIM:-10}"
 else
 	sshok || { say "-n: no SSH"; rescue; }
 fi
