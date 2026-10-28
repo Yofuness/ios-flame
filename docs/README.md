@@ -20,11 +20,11 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Buttons](features/buttons.md) | ✅ | power, vol-down (PON), vol-up (PM6150L GPIO2, patch 0126) | 2026-10-23 |
 | [Flashlight](features/flashlight.md) | 🟡 | LED works from a tool (kernel69, `sweettorch=1`); no Control Center button yet | 2026-10-28 |
 | [Clock](features/clock.md) | ✅ | PM6150 RTC + `sweetrtcoff`; timezone America/Toronto since 2026-10-28 | 2026-10-28 |
-| [Wi-Fi](features/wifi.md) | 🟡 | wland joins the home network at boot from /var/local/wlan.conf; the iOS join from Settings (wifid) still fails | 2026-10-28 |
+| [Wi-Fi](features/wifi.md) | 🟡 | wland joins at boot; iOS shows the status-bar icon and the network in Settings with sweetwifiev=1 (xnu 0199); the join from Settings is untested | 2026-10-28 |
 | [Battery](features/battery.md) | 🟡 | real reading works; IR-compensated % (0128) shows no jumps at idle, discharge unchecked | 2026-10-28 |
-| [Charging](features/charging.md) | ❌ | the battery drains ~0.5 A under load even on the charger; the charger is never configured | 2026-10-24 |
+| [Charging](features/charging.md) | 🟡 | charger already configured by XBL/ABL (FAST_CHARGE, FCC 2.0 A, FV 4.45 V, ICL 1.5 A); the drain under load is the USB source budget (TB4 + 240 W cable: +968 mA) | 2026-10-28 |
 | [Apps](features/apps.md) | ✅ | 32 staged apps installed in /Applications; crash-looping launchd jobs dropped | 2026-10-28 |
-| [Sleep and wake](features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel is not switched off | 2026-10-23 |
+| [Sleep and wake](features/sleep-wake.md) | ✅ | power-button sleep/wake; panel off via LM alpha blank + DCS 28/10, on via 11/29 (sweetpanelsleep=1, xnu 0202-0205, 10/10) | 2026-10-28 |
 | [Audio](features/audio.md) | ⬜ | not started; survey done: boot the ADSP (pas-id 1), APR to Q6AFE, CS35L41 amps on SE9 | 2026-10-28 |
 | [Camera](features/camera.md) | ⬜ | not started; survey done: rear IMX363 via CCI + CSIPHY0 -> RDI raw frames first | 2026-10-28 |
 | [Sensors](features/sensors.md) | ⬜ | survey done: all behind the SSC in the ADSP; waits for the ADSP boot | 2026-10-28 |

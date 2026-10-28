@@ -19,7 +19,7 @@ iOS root lives in the `userdata` partition.
 > mostly switched off (permissive AMFI and sandbox, stub keystore), and many parts are missing. Do not put
 > anything personal on it.
 
-## Status (2026-10-28)
+## Status (2026-10-28, updated 16:00)
 
 States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/README.md](docs/README.md).
 
@@ -27,7 +27,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 |---|---|---|
 | [Boot](docs/features/boot.md) | ✅ | RAM-only `fastboot boot`; iOS 16.7.16 (iPhone X userland) root on userdata |
 | [CPU](docs/features/cpu.md) | ✅ | 8 cores; A55 1804 MHz, A76 2208 MHz |
-| [Storage](docs/features/storage.md) | ✅ | /private/var on a 94 GB HFSX volume (ufsroot1) via /private/etc/fstab |
+| [Storage](docs/features/storage.md) | ✅ | /private/var on a 94 GB HFSX volume (ufsroot1) via /private/etc/fstab; direct (uncached) I/O fixed |
 | [USB network](docs/features/usb-network.md) | ✅ | Ethernet 192.168.7.2, live kernel log |
 | [SSH](docs/features/ssh.md) | ✅ | dropbear + dash + toybox |
 | [Display](docs/features/display.md) | ✅ | 1080x2340, GPU-composited (Metal → Turnip), vsync-paced |
@@ -40,11 +40,11 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Buttons](docs/features/buttons.md) | ✅ | power, volume down, volume up |
 | [Flashlight](docs/features/flashlight.md) | 🟡 | LED works from a tool (`sweettorch=1`); no Control Center button |
 | [Clock](docs/features/clock.md) | ✅ | PM6150 RTC |
-| [Wi-Fi](docs/features/wifi.md) | 🟡 | wland joins a network at boot from a config file; joining from Settings fails |
+| [Wi-Fi](docs/features/wifi.md) | 🟡 | joins at boot from a config file; iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining from Settings untested |
 | [Battery](docs/features/battery.md) | 🟡 | real reading; % shows no jumps at idle, discharge unchecked |
-| [Charging](docs/features/charging.md) | ❌ | drains ~0.5 A under load on the charger; charger not configured |
+| [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed in /Applications |
-| [Sleep and wake](docs/features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel stays on |
+| [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | ⬜ | not started; plan: boot the audio DSP, then a speaker beep (~1-2 weeks) |
 | [Camera](docs/features/camera.md) | ⬜ | not started; plan: sensor ID over CCI (~1 week), then raw frames via RDI |
 | [Bluetooth](docs/features/bluetooth.md) | ⬜ | not started; surveyed: a UART driver + firmware + an iOS shim, 1-3 weeks |
