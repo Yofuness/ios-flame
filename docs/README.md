@@ -25,8 +25,9 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Charging](features/charging.md) | ❌ | the battery drains ~0.5 A under load even on the charger; the charger is never configured | 2026-10-24 |
 | [Apps](features/apps.md) | ✅ | 32 staged apps installed in /Applications; crash-looping launchd jobs dropped | 2026-10-28 |
 | [Sleep and wake](features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel is not switched off | 2026-10-23 |
+| [Audio](features/audio.md) | ⬜ | not started; survey done: boot the ADSP (pas-id 1), APR to Q6AFE, CS35L41 amps on SE9 | 2026-10-28 |
 | [Camera](features/camera.md) | ⬜ | not started; survey done: rear IMX363 via CCI + CSIPHY0 -> RDI raw frames first | 2026-10-28 |
-| [Not started](features/not-started.md) | ⬜ | audio, Bluetooth, cellular, camera, sensors | 2026-10-23 |
+| [Not started](features/not-started.md) | ⬜ | Bluetooth, cellular, sensors (audio and camera have their own files now) | 2026-10-23 |
 
 States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started.
 

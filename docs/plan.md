@@ -14,6 +14,10 @@ Old plan: `docs/plans/2026-10-27-usability-quick-wins.md`. Rules still apply: RA
 7. [ ] **Wi-Fi status in iOS.** Answer wifid's get 103 (CURRENT_NETWORK), SSID, BSSID, channel, RSSI from wland's joined state, plus the link event, so the status bar shows Wi-Fi and Settings lists the network. ~half a day. Analysis (features/wifi.md 2026-10-28 12:45): the gets are already answered once joined; the missing piece is the link-up event on wland's self-join (~5 LOC) + fixed answers for 14/8/17/57. First a webcam check: the icon may already show.
 8. [ ] **Flashlight button in Control Center.** iOS drives the torch through the camera stack; find the smallest hook (AVCaptureDevice torch -> a kernel call to kern.sweet_torch). Investigate after 5-7.
 
+## B2. Big features (weeks; started 2026-10-28)
+12. [ ] **Audio M0: boot the ADSP** (features/audio.md): reuse wland's PAS loader with pas-id 1 + adsp.mdt; the glink "lpass" edge must come up. Then M1 a speaker beep (APR + CS35L41, -20 dB, ≤3 s).
+13. [ ] **Camera M1: read the rear sensor's chip ID** (features/camera.md): first read CAMCC/GDSC registers read-only and find the camx sensor bins in the vendor image; then slg51000 + camcc + CCI drivers.
+
 ## C. Small fixes (no phone, any time)
 9. [ ] `/var/local/mtl2.log` rotation in the frontend (it reached 321 MB).
 10. [ ] macOS VM auto-login (sysadminctl error 22) so a reboot doesn't stop at the login prompt.

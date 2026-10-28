@@ -45,7 +45,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Charging](docs/features/charging.md) | ❌ | drains ~0.5 A under load on the charger; charger not configured |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed in /Applications |
 | [Sleep and wake](docs/features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel stays on |
-| [Audio](docs/features/not-started.md) | ⬜ | speaker, earpiece, headphone jack, mic: not started (survey under way) |
+| [Audio](docs/features/audio.md) | ⬜ | not started; plan: boot the audio DSP, then a speaker beep (~1-2 weeks) |
 | [Camera](docs/features/camera.md) | ⬜ | not started; plan: sensor ID over CCI (~1 week), then raw frames via RDI |
 | [Bluetooth](docs/features/not-started.md) | ⬜ | not started |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
