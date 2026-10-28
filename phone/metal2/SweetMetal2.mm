@@ -421,8 +421,11 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 		return;
 	if (!dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
 		sm2_log("orient: AccessibilityUtilities: %s", dlerror());
-	dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+	/* static: a local source was freed under ARC when the constructor returned (k90a: no orient lines at all). */
+	static dispatch_source_t t;
+	t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
 	dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 10);
+	sm2_log("orient: watching /var/local/sweet-orient");
 	dispatch_source_set_event_handler(t, ^{
 		static struct timespec last;
 		struct stat st;

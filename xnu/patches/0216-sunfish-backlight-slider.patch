@@ -1,0 +1,40 @@
+From 0839a7deafde486f2468eea463916dd8bdf40600 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 17:07:30 -0400
+Subject: [PATCH] sunfish: backlight maps the slider's brightness key
+ (0..0x10000) to DCS 51 32..511 (0216)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ iokit/Kernel/arm/SweetBacklight.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
+index 6bf9c64..7431015 100644
+--- a/iokit/Kernel/arm/SweetBacklight.cpp
++++ b/iokit/Kernel/arm/SweetBacklight.cpp
+@@ -9,6 +9,9 @@
+  * 0214: CoreBrightness sends nits 0 at start (k88a: the panel went to DCS 4,
+  * black). 0 is not sent to the panel (sleep blanks the panel on its own), and
+  * the DCS floor is 32 (visible at 10%): DCS = 32 + nits * 479 / 500 (32..511).
++ * 0216: the Control Center slider sends "brightness" / "backlight-level"
++ * (0..0x10000, k90a), never nits: sweetbl=2 maps "brightness" to
++ * DCS = 32 + b * 479 / 65536 (32..511).
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <IOKit/IOLib.h>
+@@ -153,6 +156,11 @@ AppleARMBacklight::setProperties(OSObject *properties)
+ 			setNits(n->unsigned32BitValue());
+ 			continue;
+ 		}
++		if (n && fMode >= 2 && key->isEqualTo("brightness")) {
++			uint32_t b = n->unsigned32BitValue();
++			b = b > 0x10000 ? 0x10000 : b;
++			sweet_panel_brightness((uint16_t)(32 + b * (511 - 32) / 65536));
++		}
+ 		/* Store it so a read-back sees the new value (also brightness-nits-cap, BLNitsCap). */
+ 		if (value) {
+ 			setProperty(key, value);
+-- 
+2.56.0
+
