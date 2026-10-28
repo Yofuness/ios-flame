@@ -19,6 +19,13 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 12:45 iOS Wi-Fi status: analysis (read-only)
+- Correction: the shim (redwood_apple80211.c get(), :444-485) already answers SSID/BSSID/CHANNEL/RSSI/AUTH/CURRENT_NETWORK from wland's own join (fw_link_up set by FW_LINK from bridge.c:48 -> flame_sta.c:135-150). The 54 "get 103 error 6" in wj1 all fall in the 1.6 s before the link came up (88.84-90.0 s); from 90.39 s get 103 is answered every ~6 s. Error 6 = ENXIO while phase != JOINED.
+- CURRENT_NETWORK is the scan-result struct (req_len 1164, the same as SCAN_RESULT), filled by give_network() :275. If wland joined before the kernel heard the AP's beacon, only ssid/bssid are filled (no RSN element).
+- The gap: sta_link_changed() (flame_sta.c:189) posts only link-down; on a self-join nothing posts SSID_CHANGED/BSSID_CHANGED/LINK_CHANGED, so wifid never re-reads 1/9/4/16/2 after the link is up.
+- Design (~40-60 LOC, kernel): post redwood_apple80211_event(REDWOOD_STA_LINK, 1) on link-up (and maybe ASSOC_DONE); fill the details from the last scan's heard[] list when the beacon wasn't heard; answer PHY_MODE 14 / RATE 8 / NOISE 17 / MCS 57 with fixed values. Risk: wifid may send DISASSOC 22 / LEAVE for an unknown network and stop wland's rejoin (bridge_joins=1): gate with a boot arg, log every set 22/20.
+- First check (no patch): a webcam frame of the status bar and Settings > Wi-Fi on a joined boot; the icon may already show.
+
 ### 2026-10-28 06:35-06:45 Wi-Fi join on the home network
 - Lasting setup at the user's request: the network file lives on the phone at /var/local/wlan.conf (mode 600), read by wland at every boot; the PC copy is in a gitignored file under work/.
 - wj1 (kernel69, 4456 mV, SSH after 43 s): joined on the first try (-63 dBm); DHCP address and default route; DNS 46 ms, TCP 96 ms, HTTP 200 in 403 ms.
