@@ -31,6 +31,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 10:20-10:30 build VM hibernates instead of shutting down
+- vm-stop.sh saves the VM (QEMU migrate to a zstd file) and vm-start.sh resumes from it. Hibernate 5.0 s (2.5 GB) / 11.3 s (4.1 GB after a build); resume 5.5 s / 13-15 s to SSH (boot was 26-35 s). Needed `tsc-frequency=2496000000` (invtsc blocked migration) and max-bandwidth 16 GiB/s (the default 128 MiB/s made the save take 33 s).
+- tools/vm-build-xnu.sh 73 --stop from hibernation: 134 s total (159 s with boot + shutdown); kernel73 byte-identical to kernel72. vCPU pinning (8 on E-cores 4-11) and the guest clock are reapplied after resume.
+
 ### 2026-10-28 09:30-10:20 kernel builds move to a local macOS VM
 - macOS 14.8.9 (OSX-KVM OpenCore, QEMU/KVM) in ~/VMs/macos, Xcode 15.0.1 (the user downloaded it with their Apple ID), 8 vCPUs as 8x1 cores pinned to host E-cores 4-11, 8 GB.
 - tools/vm-build-xnu.sh (4515b6f) mirrors xnu.yml: full build 337 s, no-change rebuild 54-68 s. kernel71 (kernel70's patch set) has the same size (17895944), load commands and segment sizes as CI's kernel70; only the version string's "runner" becomes "builder".
