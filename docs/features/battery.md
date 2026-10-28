@@ -13,6 +13,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:00 k76: the xnu 0197 PON line never reached the PC
+- The code is in kernel74/76 (strings show it) and sweetbattery=1 is set, but SweetBattery::start prints it before the USB live log is up (this boot's log starts at ~41 s; the first SWEET BATTERY line at 324 s). Fix: repeat the PON line with the first periodic battery print (or expose a sysctl).
+
 ### 2026-10-28 00:00-02:10 overnight run, part 2 (battery numbers from sk68)
 - sk68 2 h exit soak (kernel68, /var on ufsroot1, 15 chunks, 120.7 min): 408/408 app opens, 0 resets, 0 GPU hangs, 0 SMMU faults, 0 UIWDT, CRASH only PhotosFileProvider x4 (AegirPoster 0). Pool 192 -> 709 peak -> 631 MB end: "pool flat" not met. Battery 4431 -> 4429 mV, 0 mA, 100% (full on the charger; discharge still untested).
 

@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:58 k76: direct I/O works (xnu 0198)
+- fcopyfile cached and F_NOCACHE (`fcopy -n`) copies of 1 MB and 64 MB scratch files in /private/var/tmp: three identical sha1s each, rc 0, no SWEET UFS errors. tools/sunfish-ufs-dio-test.sh itself is broken (toybox has no dd: it compared three sha1s of a missing file and still said PASS); run by hand with `head -c N /dev/urandom`. Fix the script.
+
 ### 2026-10-28 13:45 direct-I/O EFAULT: root cause + xnu 0198 (kernel75, not booted)
 - 0175 took B_PHYS alone as "user address". Cluster direct I/O (CL_DIRECT_IO, e.g. fcopyfile with F_NOCACHE) is B_PHYS too but UPL-backed (B_CLUSTER, vfs_bio.c:798); buf_map maps the UPL into the kernel, so copyout/copyin on it gave EFAULT. 0198: user VA = B_PHYS && !B_CLUSTER (physio keeps copyout/copyin, the 0175 PAN fix stays). Boot arg sweetufsdio=0 restores the old test. VM build 168 s.
 - Test tool phone/tools/fcopy + tools/sunfish-ufs-dio-test.sh (scratch files only); the uncached `fcopy -n` copy is the real check.

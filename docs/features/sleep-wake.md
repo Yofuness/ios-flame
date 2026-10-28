@@ -13,6 +13,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:00 k76: panel off/on from the shell works (tools/sunfish-panel-sleep.sh)
+- 3 cycles: dcs 28, 10, 11, 29 all `done yes ack_err 0x00000000`; autorefresh restored to 0x80000001; webcam black at +3 s, picture back by +5-8 s, 3/3; SSH up after. Headers 0x800500NN (short write, LONG bit clear). Next: the kernel hook on IOMFB sel 12.
+
 ### 2026-10-28 12:30 panel-off design (read-only)
 - Today: sleep = IOMFB sel 12 RequestPowerChange(0/1) (SweetFramebuffer.cpp:926-937). fPowerOff makes the vsync tick fade the frame to black over 6 ticks and skip the present (:386-409); the tick and the type-5 notifications keep running; no DCS is sent, so the panel stays on in normal mode.
 - SOFEF01 sequences (recon/live.dts:12228-12296): off = 05 28 (20 ms), 05 10, then a Samsung F0 5A5A / B0 05 / F4 01 / F0 A5A5 block (120 ms). On = 05 11 (10 ms), 15 35 00 (TE on), F0-unlocked EB/B7/F2 setup, 2A 0000 0437, 2B 0000 0923, 15 53 20, B0 09 / E8 ..., 05 29. lp1/nolp use 53 22 / 53 20 (AOD): avoid.

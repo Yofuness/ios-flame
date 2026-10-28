@@ -19,6 +19,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:55 k76: iOS shows Wi-Fi (xnu 0199, sweetwifiev=1)
+- kernel76, 4456 mV. The status-bar Wi-Fi icon shows on every frame (lock screen, Settings, home); Settings' Wi-Fi row reads the home network's name. wifid set 22 / set 20: 0 / 0 (no fight with wland). get 103 answered (1164 bytes). nettest: DNS 60 ms, TCP 66 ms, HTTP 200 in 497 ms. The Wi-Fi page itself was not opened (`openapp prefs:root=WIFI` refused).
+
 ### 2026-10-28 12:45 iOS Wi-Fi status: analysis (read-only)
 - Correction: the shim (redwood_apple80211.c get(), :444-485) already answers SSID/BSSID/CHANNEL/RSSI/AUTH/CURRENT_NETWORK from wland's own join (fw_link_up set by FW_LINK from bridge.c:48 -> flame_sta.c:135-150). The 54 "get 103 error 6" in wj1 all fall in the 1.6 s before the link came up (88.84-90.0 s); from 90.39 s get 103 is answered every ~6 s. Error 6 = ENXIO while phase != JOINED.
 - CURRENT_NETWORK is the scan-result struct (req_len 1164, the same as SCAN_RESULT), filled by give_network() :275. If wland joined before the kernel heard the AP's beacon, only ssid/bssid are filled (no RSN element).
