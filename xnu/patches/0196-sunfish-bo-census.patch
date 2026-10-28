@@ -1,0 +1,167 @@
+From df3243341a196b502df79db105f1c20f5a6025ab Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 02:03:34 -0400
+Subject: [PATCH] sunfish: sweetbocensus=N, census of long-lived 1-8 MB BOs per
+ client
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ iokit/Kernel/arm/SweetAccelerator.cpp | 93 +++++++++++++++++++++++++++
+ 1 file changed, 93 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetAccelerator.cpp b/iokit/Kernel/arm/SweetAccelerator.cpp
+index c37512e..6ed119d 100644
+--- a/iokit/Kernel/arm/SweetAccelerator.cpp
++++ b/iokit/Kernel/arm/SweetAccelerator.cpp
+@@ -41,6 +41,7 @@
+ #include <IOKit/IOKitKeys.h>
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <pexpert/pexpert.h>
++#include <kern/clock.h>              /* 0196: mach_absolute_time, nanoseconds_to_absolutetime */
+ #include "SweetSurface.h"
+ #include "SweetGPUABI.h"
+ 
+@@ -82,6 +83,8 @@ struct SweetV2BO {
+ 	uint64_t iova;                  /* GPU address while mapped, else 0 */
+ 	uint64_t pool_pa;               /* allocated: its memory in the GPU pool (sweet_gpu_pool_alloc) */
+ 	bool imported;                  /* the client's own pages (no CPU-map token) */
++	uint32_t flags;                 /* 0196: bit0 imported, bit1 contiguous, bits 8-15 align_log2 */
++	uint64_t born;                  /* 0196: mach_absolute_time of the alloc/import */
+ };
+ 
+ class IOAcceleratorES : public IOService {
+@@ -170,6 +173,8 @@ class SweetAcceleratorUserClient : public IOUserClient {
+ 	uint32_t fPressureSeen;		/* 0183: sweet_gpu_pool_pressure when this client last drained */
+ 	void v2ReuseDrain(void);
+ 	void v2PressureCheck(void);
++	uint64_t fCensusAt;		/* 0196: mach time of this client's last BO census */
++	void v2Census(void);
+ 
+ public:
+ 	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
+@@ -564,6 +569,8 @@ SweetAcceleratorUserClient::v2NewSlot(IOMemoryDescriptor *md, uint64_t bytes, bo
+ 	fBO[i].bytes = bytes;
+ 	fBO[i].iova = 0;
+ 	fBO[i].imported = imported;
++	fBO[i].flags = imported ? 1 : 0;
++	fBO[i].born = mach_absolute_time();
+ 	*handle = i + 1;
+ 	return kIOReturnSuccess;
+ }
+@@ -659,6 +666,89 @@ SweetAcceleratorUserClient::v2PressureCheck(void)
+ 	}
+ }
+ 
++/*
++ * 0196: sweetbocensus=N: every N s (checked on this client's allocs/imports), if it holds >= 64 MB of live BOs,
++ * log its 1-8 MB BOs older than 60 s grouped by (size, flags): at most 12 groups, largest total first.
++ * Under fLock; fixed stack table, groups past 64 count as "other".
++ */
++static uint32_t sweet_bocensus_s = (uint32_t)-1;
++
++void
++SweetAcceleratorUserClient::v2Census(void)
++{
++	if (sweet_bocensus_s == (uint32_t)-1) {
++		uint32_t v = 0;
++		PE_parse_boot_argn("sweetbocensus", &v, sizeof(v));
++		sweet_bocensus_s = v;
++	}
++	if (sweet_bocensus_s == 0) {
++		return;
++	}
++	uint64_t now = mach_absolute_time(), period, minage, ns;
++	nanoseconds_to_absolutetime((uint64_t)sweet_bocensus_s * NSEC_PER_SEC, &period);
++	nanoseconds_to_absolutetime(60 * NSEC_PER_SEC, &minage);
++	if (fCensusAt != 0 && now - fCensusAt < period) {
++		return;
++	}
++	fCensusAt = now;
++	struct { uint64_t size, total, born; uint32_t flags, n; } g[64];
++	uint32_t ng = 0, live = 0, on = 0;
++	uint64_t livebytes = 0, ob = 0;
++	for (uint32_t i = 0; i < fBOCap; i++) {
++		SweetV2BO *bo = &fBO[i];
++		if (bo->md == NULL) {
++			continue;
++		}
++		uint64_t b = round_page_64(bo->bytes);
++		live++;
++		livebytes += b;
++		if (b < (1u << 20) || b > (8u << 20) || now - bo->born < minage) {
++			continue;
++		}
++		uint32_t k = 0;
++		while (k < ng && (g[k].size != b || g[k].flags != bo->flags)) {
++			k++;
++		}
++		if (k == ng) {
++			if (ng == 64) {
++				on++;
++				ob += b;
++				continue;
++			}
++			g[k].size = b;
++			g[k].flags = bo->flags;
++			g[k].total = g[k].n = 0;
++			g[k].born = bo->born;
++			ng++;
++		}
++		g[k].n++;
++		g[k].total += b;
++		if (bo->born < g[k].born) {
++			g[k].born = bo->born;
++		}
++	}
++	if (livebytes < (64ULL << 20)) {
++		return;
++	}
++	absolutetime_to_nanoseconds(now, &ns);
++	IOLog("SWEET BOC: %s census t %llu live %u MB %llu\n", fName, ns / NSEC_PER_SEC, live, livebytes >> 20);
++	for (uint32_t l = 0; l < 12 && ng > 0; l++) {
++		uint32_t best = 0;
++		for (uint32_t k = 1; k < ng; k++) {
++			if (g[k].total > g[best].total) {
++				best = k;
++			}
++		}
++		absolutetime_to_nanoseconds(now - g[best].born, &ns);
++		IOLog("SWEET BOC: %s size %llu flags %x n %u MB %llu oldest %llu\n", fName, g[best].size >> 10, g[best].flags,
++		    g[best].n, g[best].total >> 20, ns / NSEC_PER_SEC);
++		g[best] = g[--ng];
++	}
++	if (on != 0) {
++		IOLog("SWEET BOC: %s other groups n %u MB %llu\n", fName, on, ob >> 20);
++	}
++}
++
+ void
+ SweetAcceleratorUserClient::v2Release(SweetV2BO *bo)
+ {
+@@ -797,6 +887,7 @@ SweetAcceleratorUserClient::v2Method(uint32_t method, const void *in, uint32_t i
+ 		IOReturn r = v2NewSlot(md, rq->bytes, false, &h);
+ 		if (r == kIOReturnSuccess) {
+ 			fBO[h - 1].pool_pa = pa;
++			fBO[h - 1].flags = (rq->contiguous ? 2 : 0) | ((uint32_t)rq->align_log2 << 8);
+ 			fPoolBytes += len;
+ 			if (fPoolBytes > fPoolPeak) {
+ 				fPoolPeak = fPoolBytes;
+@@ -821,6 +912,7 @@ SweetAcceleratorUserClient::v2Method(uint32_t method, const void *in, uint32_t i
+ 				    n[3], mb[3] >> 20, n[4], mb[4] >> 20, fReuseHits, fReuseBytes >> 20);
+ 			}
+ 		}
++		v2Census();
+ 		IOLockUnlock(fLock);
+ 		if (r != kIOReturnSuccess) {
+ 			md->release();
+@@ -855,6 +947,7 @@ SweetAcceleratorUserClient::v2Method(uint32_t method, const void *in, uint32_t i
+ 		if (r == kIOReturnSuccess) {
+ 			fImports++;
+ 		}
++		v2Census();
+ 		IOLockUnlock(fLock);
+ 		if (r != kIOReturnSuccess) {
+ 			md->complete();
+-- 
+2.56.0
+
