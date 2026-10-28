@@ -24,11 +24,11 @@ index 47e1939d611..82bb6cbff1a 100644
     assert(!cs->writeable);
  
 +   /* 0107: don't keep a big last BO forever in pooled command buffers.
-+    * SWEET_CS_TRIM_KB (default 256, 0 = off): a kept BO above it is freed
++    * SWEET_CS_TRIM_KB (default 0 = off; e.g. 256): a kept BO above it is freed
 +    * too and next_bo_size goes back to its initial value. */
 +   static int64_t trim_kb = -1;
 +   if (trim_kb < 0)
-+      trim_kb = debug_get_num_option("SWEET_CS_TRIM_KB", 256);
++      trim_kb = debug_get_num_option("SWEET_CS_TRIM_KB", 0);
 +   bool trimmed = false;
 +   if (trim_kb > 0) {
 +      struct tu_bo_array *arrs[2] = { &cs->read_only, &cs->read_write };

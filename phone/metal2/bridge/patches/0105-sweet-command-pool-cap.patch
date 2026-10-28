@@ -1,0 +1,129 @@
+diff --git a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+--- a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
++++ b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+@@ -1136,7 +1136,7 @@
+         // state.
+         let pool = lock(&self.state).pool.take();
+         if let Some(pool) = pool {
+-            self.device.shared().spares.give_command_pool(pool);
++            self.device.shared().spares.give_command_pool(self.device.shared(), pool);
+         }
+     }
+ }
+@@ -2351,6 +2351,7 @@
+                     let pool = unsafe { raw.create_command_pool(&info, None) };
+                     exit_guard::called(Call::CreateCommandPool);
+                     device.shared().counts.command_pool_made();
++                    super::spares::note_command_pool_made();
+                     CommandPool::new(pool.map_err(vulkan)?, family)
+                 }
+             };
+@@ -2723,7 +2724,7 @@
+             // buffer that completed gives back its descriptor pools too, one that failed releases
+             // them here.
+             if let Some(pool) = state.pool.take() {
+-                self.device.shared().spares.give_command_pool(pool);
++                self.device.shared().spares.give_command_pool(self.device.shared(), pool);
+             }
+             if state.status == CommandBufferStatus::Completed {
+                 state.descriptors.give_back();
+diff --git a/crates/metal2vulkan-runtime/src/lib.rs b/crates/metal2vulkan-runtime/src/lib.rs
+--- a/crates/metal2vulkan-runtime/src/lib.rs
++++ b/crates/metal2vulkan-runtime/src/lib.rs
+@@ -87,6 +87,7 @@
+ pub use execution::{ExecutedPipeline, Execution};
+ mod exit_guard;
+ pub use exit_guard::process_exiting;
++pub use spares::sweet_command_pool_stats;
+ #[doc(hidden)]
+ pub use exit_guard::{registrations as exit_registrations, Registrations as ExitRegistrations};
+ mod executed_commands;
+diff --git a/crates/metal2vulkan-runtime/src/spares.rs b/crates/metal2vulkan-runtime/src/spares.rs
+--- a/crates/metal2vulkan-runtime/src/spares.rs
++++ b/crates/metal2vulkan-runtime/src/spares.rs
+@@ -41,7 +41,39 @@
+ use super::release::{self, Released};
+ use ash::vk;
+ use std::collections::VecDeque;
+-use std::sync::Mutex;
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
++use std::sync::{Mutex, OnceLock};
++
++/// ios-on-pixel 0105: pools made, pools destroyed by the cap, and spares held now (all devices).
++static POOLS_MADE: AtomicU64 = AtomicU64::new(0);
++static POOLS_CAPPED: AtomicU64 = AtomicU64::new(0);
++static POOLS_KEPT: AtomicUsize = AtomicUsize::new(0);
++
++/// ios-on-pixel 0105: the most spare command pools a device keeps, `SWEET_CMDPOOL_CAP` (read once,
++/// default 8; 0 = no cap). Each spare keeps its command buffers' Turnip streams, up to 1 MiB each.
++fn command_pool_cap() -> usize {
++    static CAP: OnceLock<usize> = OnceLock::new();
++    *CAP.get_or_init(|| {
++        std::env::var("SWEET_CMDPOOL_CAP")
++            .ok()
++            .and_then(|v| v.trim().parse().ok())
++            .unwrap_or(8)
++    })
++}
++
++/// ios-on-pixel 0105: a command pool was made (`command_buffer/mod.rs`).
++pub(super) fn note_command_pool_made() {
++    POOLS_MADE.fetch_add(1, Ordering::Relaxed);
++}
++
++/// ios-on-pixel 0105: `[made, kept now, destroyed by the cap]`, for the frontend's telemetry.
++pub fn sweet_command_pool_stats() -> [u64; 3] {
++    [
++        POOLS_MADE.load(Ordering::Relaxed),
++        POOLS_KEPT.load(Ordering::Relaxed) as u64,
++        POOLS_CAPPED.load(Ordering::Relaxed),
++    ]
++}
+ 
+ /// The most spare descriptor pools a device keeps.
+ pub(super) const DESCRIPTOR_POOLS: usize = 32;
+@@ -127,6 +159,7 @@
+         let Some(mut pool) = take_command_pool(&mut lock(&self.command_pools), family) else {
+             return Ok(None);
+         };
++        POOLS_KEPT.fetch_sub(1, Ordering::Relaxed);
+         // SAFETY: the pool is the caller's alone now, and nothing of it is pending: a command
+         // buffer that completed gave it back.
+         let reset = unsafe {
+@@ -144,9 +177,25 @@
+     }
+ 
+     /// Keep `pool`, of a command buffer whose work ended or that was never submitted: nothing of
+-    /// it is pending, and nothing else holds it. Never released here (the module docs).
+-    pub(super) fn give_command_pool(&self, pool: CommandPool) {
+-        keep_command_pool(&mut lock(&self.command_pools), pool);
++    /// it is pending, and nothing else holds it. ios-on-pixel 0105: past [`command_pool_cap`] spares
++    /// the oldest is released (with its command buffers), as the teardown releases them.
++    pub(super) fn give_command_pool(&self, device: &DeviceShared, pool: CommandPool) {
++        let cap = command_pool_cap();
++        let past = {
++            let mut pools = lock(&self.command_pools);
++            keep_command_pool(&mut pools, pool);
++            if cap > 0 && pools.len() > cap {
++                Some(pools.remove(0))
++            } else {
++                POOLS_KEPT.fetch_add(1, Ordering::Relaxed);
++                None
++            }
++        };
++        if let Some(oldest) = past {
++            POOLS_CAPPED.fetch_add(1, Ordering::Relaxed);
++            // SAFETY: a spare: its command buffer's work ended and nothing else holds it.
++            unsafe { release_in_section(device, oldest.raw) };
++        }
+     }
+ 
+     /// A spare descriptor pool of `device`, reset, with room for one set of `needs`, the newest
+@@ -192,6 +241,7 @@
+     /// Release every spare of `device`: its teardown, when no command buffer is left.
+     pub(super) fn release(&self, device: &DeviceShared) {
+         for pool in lock(&self.command_pools).drain(..) {
++            POOLS_KEPT.fetch_sub(1, Ordering::Relaxed);
+             // SAFETY: no command buffer is left, so nothing of the pool is pending.
+             unsafe { release_in_section(device, pool.raw) };
+         }

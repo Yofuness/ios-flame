@@ -239,6 +239,17 @@ fn observe_message(message: &DebugMessage) {
     }
 }
 
+/// ios-on-pixel bridge 0105: command pools made, spares kept now, spares destroyed by SWEET_CMDPOOL_CAP, into three words.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_pool_stats(out: *mut u64) {
+    if out.is_null() {
+        return;
+    }
+    let stats = metal2vulkan_runtime::sweet_command_pool_stats();
+    // SAFETY: the header's three words.
+    unsafe { std::ptr::copy_nonoverlapping(stats.as_ptr(), out, 3) };
+}
+
 /// The sink's counts into the caller's ten words: pipeline makings (count, total us, longest us, waited us, failed), messages (info,
 /// warning or worse), and the device's shader cache hits, misses and writes.
 #[unsafe(no_mangle)]
