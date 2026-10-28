@@ -189,7 +189,7 @@ static bool listed(void)
 			}
 			fclose(ef);
 		}
-		/* debugging: Turnip options for this process from /var/local/mtl2-tu-debug (TU_DEBUG), its log to /var/local/turnip-<proc>.log */
+		/* debugging: Turnip options for this process from /var/local/mtl2-tu-debug (TU_DEBUG), its log to /var/local/turnip-<proc>.log (or /var/local/turnip/<proc>-<pid>.log) */
 		{
 			char opts[128] = { 0 };
 			FILE *f = fopen("/var/local/mtl2-tu-debug", "r");
@@ -200,7 +200,12 @@ static bool listed(void)
 			}
 			if (opts[0]) {
 				char path[128];
-				snprintf(path, sizeof(path), "/var/local/turnip-%s.log", getprogname());
+				/* one log per process instance while /var/local/turnip exists (mode 777): a respawned
+				 * client would otherwise truncate its predecessor's log */
+				if (access("/var/local/turnip", W_OK) == 0)
+					snprintf(path, sizeof(path), "/var/local/turnip/%s-%d.log", getprogname(), getpid());
+				else
+					snprintf(path, sizeof(path), "/var/local/turnip-%s.log", getprogname());
 				setenv("TU_DEBUG", opts, 1);
 				setenv("MESA_LOG_FILE", path, 1);
 				sm2_log("TU_DEBUG=%s, log %s", opts, path);
