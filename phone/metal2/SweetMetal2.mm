@@ -338,6 +338,35 @@ static void sm2_torch_swizzle(void)
 	sm2_log("flashlight: AVFlashlight -> kern.sweet_torch");
 }
 
+/* Control Center drops modules whose UIRequiredDeviceCapabilities MobileGestalt denies (FlashlightModule: camera-flash,
+ * k90a: no tile). Clear them for that module only; the original list is logged once. */
+static void sm2_torch_module(void)
+{
+	if (!dlopen("/System/Library/PrivateFrameworks/ControlCenterServices.framework/ControlCenterServices", RTLD_NOW))
+		sm2_log("flashlight: ControlCenterServices: %s", dlerror());
+	Class c = objc_getClass("CCSModuleMetadata");
+	SEL s = sel_registerName("requiredDeviceCapabilities");
+	Method mt = c ? class_getInstanceMethod(c, s) : NULL;
+	if (!mt) {
+		sm2_log("flashlight: CCSModuleMetadata%s missing", c ? " -requiredDeviceCapabilities" : "");
+		return;
+	}
+	IMP orig = method_getImplementation(mt);
+	method_setImplementation(mt, imp_implementationWithBlock(^id(id self) {
+		id caps = ((id (*)(id, SEL))orig)(self, s);
+		id mid = [self respondsToSelector:@selector(moduleIdentifier)] ? [self performSelector:@selector(moduleIdentifier)] : nil;
+		if (![mid isEqual:@"com.apple.control-center.FlashlightModule"])
+			return caps;
+		static bool logged;
+		if (!logged) {
+			logged = true;
+			sm2_log("flashlight: module caps %s cleared", [[caps description] UTF8String]);
+		}
+		return [caps isKindOfClass:[NSSet class]] ? (id)[NSSet set] : (id)@[];
+	}));
+	sm2_log("flashlight: CCSModuleMetadata caps hook");
+}
+
 __attribute__((constructor)) static void sm2_torch_init(void)
 {
 	if (strcmp(getprogname(), "SpringBoard") != 0 || access("/var/local/sweet-flashlight", F_OK) != 0)
@@ -346,6 +375,7 @@ __attribute__((constructor)) static void sm2_torch_init(void)
 	if (!dlopen("/System/Library/PrivateFrameworks/AVFCapture.framework/AVFCapture", RTLD_NOW))
 		sm2_log("flashlight: AVFCapture: %s", dlerror());
 	sm2_torch_swizzle();
+	sm2_torch_module();
 }
 
 /*
