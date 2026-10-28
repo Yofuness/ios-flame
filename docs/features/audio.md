@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:30 k92b (kernel92, sweetse9=2): SE9 pins muxed; amps don't answer
+- gpio46/47 cfg 0x4 (func 1 = qup13), io 1; S3 CBCR 0x4220; fw 0x303.
+- `apr_tone --probe --amp both`: gi2c_init OK (gcc vote 0x433c1bc0, s3 cbcr 0x4220, fw 0x303, status 0); `cs35l41 0x40: read 00000000: err 6` -> no ACK on either amp. Likely held in reset (PM6150L GPIO 8 / 11, never driven). Next: xnu 0217 `sweetampreset=1` (PM6150L GPIO 8/11 output high), then probe again.
+
 ### 2026-10-28 17:20 k92a: SE9 clocks on (xnu 0215, sweetse9=1); apr_tone --probe
 - The boot lines were not in the captured log (printed too early), so read back with pmem: GCC vote 0x15200c = 0x43bc1bc0 (bit 25 set), S3 CBCR 0x1183a4 = 0x4220 (on), RCG DFS on (0x1183bc = 0x21, left alone), SE9 fw 0xa8c068 = 0x303 (protocol 3 = I2C, like SE7), 0x48 = 0x11, CLK_SEL 0.
 - TLMM: gpio46/47 on the north tile 0x3900000 read cfg 0 (GPIO mode), io 1 (lines high: idle I2C with pull-ups); the 0x3500000 / 0x3d00000 offsets read 0 for every pin. So north is the right tile; sweetse9=2 muxes them.

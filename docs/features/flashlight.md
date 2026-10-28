@@ -17,6 +17,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:30 k92b: the caps hook (5c3e7ab) is in the installed binary but logged nothing
+- mtl2.log after SpringBoard start: `AVFlashlight -> kern.sweet_torch`, `level 0.00`, `off`, `off`; no `CCSModuleMetadata caps hook` / `missing` line. Control Center shows several tiles with noise icons (top two of the right column, one at the bottom right); taps on two guesses gave no torch line. mtl2.log has no timestamps: k92c writes a marker first.
+- Process note: the runner's stray `pmem r 0x0` timed out and the screen went black right after (SSH kept working; dim.sh hung on MDP writes). Runner specs now forbid arbitrary pmem addresses.
+
 ### 2026-10-28 17:10 k90a (kernel90, sweettorch=1, /var/local/sweet-flashlight)
 - The swizzle loads in SpringBoard (mtl2.log: `flashlight: AVFlashlight -> kern.sweet_torch`), but Control Center shows no Flashlight tile, so nothing calls it (0 SWEET TORCH lines from taps). Investigating the module's visibility gate.
 
