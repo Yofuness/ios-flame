@@ -1,0 +1,91 @@
+From 00207b553415f0ce77e59af95890cd61d30ca5de Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 14:36:56 -0400
+Subject: [PATCH] sunfish: blank with the MDP LM_0 alpha on display off instead
+ of the slow CPU fade (sweetpanelsleep)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 36 +++++++++++++++++++++++++--
+ 1 file changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index f954e8b..60215d0 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -508,6 +508,32 @@ AppleCLCD::presentLoop(void *arg)
+ #define SWEET_DCS_BUF   0x9d6ff000      /* splash tail, DMA-reachable */
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ static volatile uint32_t *sweet_dsi, *sweet_mdp, *sweet_dcsbuf;
++/* 0205: off blanks via LM_0 const alpha (as tools/sunfish-dim.sh), not the CPU fade. Own pages only, never 0x0ae44000. */
++#define SWEET_MDP_LM0_PA 0x0ae45000     /* CONST_ALPHA at +0x24/+0x3c/+0x54/+0x6c, bits 23:16 */
++#define SWEET_MDP_CTL_PA 0x0ae02000     /* CTL_0 FLUSH at +0x18, bit 6 = LM_0 */
++static volatile uint32_t *sweet_lm0, *sweet_ctl;
++static uint32_t sweet_alpha[4];
++static bool sweet_alpha_saved, sweet_panel_ok;
++
++static void
++sweet_lm0_alpha(bool blank)
++{
++	static const uint32_t o[4] = { 0x24, 0x3c, 0x54, 0x6c };
++	if (blank && !sweet_alpha_saved) {
++		for (int i = 0; i < 4; i++) {
++			sweet_alpha[i] = sweet_lm0[o[i] / 4];
++		}
++		sweet_alpha_saved = true;
++	} else if (!blank && !sweet_alpha_saved) {
++		return;
++	}
++	for (int i = 0; i < 4; i++) {
++		sweet_lm0[o[i] / 4] = blank ? (sweet_alpha[i] & ~0x00ff0000u) : sweet_alpha[i];
++	}
++	sweet_ctl[0x18 / 4] = 0x40;
++	printf("SWEET PANEL: %s alpha %s%x%s\n", blank ? "blank" : "unblank", blank ? "(saved " : "", sweet_alpha[0], blank ? ")" : "");
++	sweet_alpha_saved = blank;
++}
+ 
+ static bool
+ sweet_dsi_dcs_short(uint8_t cmd)
+@@ -546,10 +572,13 @@ AppleCLCD::panelLoop(void *arg)
+ 	sweet_dsi = (volatile uint32_t *)ml_io_map(SWEET_DSI0_PA, 0x1000);
+ 	sweet_mdp = (volatile uint32_t *)ml_io_map(SWEET_MDP_AR_PA, 0x1000);
+ 	sweet_dcsbuf = (volatile uint32_t *)ml_io_map(SWEET_DCS_BUF, 0x1000);
+-	if (sweet_dsi == NULL || sweet_mdp == NULL || sweet_dcsbuf == NULL) {
++	sweet_lm0 = (volatile uint32_t *)ml_io_map(SWEET_MDP_LM0_PA, 0x1000);	/* 0205 */
++	sweet_ctl = (volatile uint32_t *)ml_io_map(SWEET_MDP_CTL_PA, 0x1000);
++	if (sweet_dsi == NULL || sweet_mdp == NULL || sweet_dcsbuf == NULL || sweet_lm0 == NULL || sweet_ctl == NULL) {
+ 		IOLog("SWEET PANEL: map failed, panel sleep off\n");
+ 		return;	/* no requests are served: fade only */
+ 	}
++	sweet_panel_ok = true;	/* 0205: from now on an off skips the CPU fade */
+ 	volatile uint32_t *ar = sweet_mdp + 0xab4 / 4;
+ 	uint64_t off0 = 0;	/* 0204: when this thread first saw the pending off */
+ 	for (;;) {
+@@ -596,6 +625,8 @@ AppleCLCD::panelLoop(void *arg)
+ 			if (own) {
+ 				sweet_fb_fade(fb, 6);	/* 0204: the tick's last-step black */
+ 			}
++			sweet_lm0_alpha(true);	/* 0205: black at once; one black frame goes out */
++			IOSleep(20);
+ 			uint32_t v = *ar;
+ 			ok = (v >> 31) != 0;
+ 			if (ok) {
+@@ -615,6 +646,7 @@ AppleCLCD::panelLoop(void *arg)
+ 			ok = ok11 && ok29;
+ 			IOSleep(20);
+ 			*ar = (fb->fPanelAR >> 31) ? fb->fPanelAR : 0x80000001;
++			sweet_lm0_alpha(false);	/* 0205: the pre-off (dim) alpha */
+ 		}
+ 		if (!ok) {
+ 			printf("SWEET PANEL: %s failed (ar %x)\n", sleep ? "sleep-in" : "sleep-out", fb->fPanelAR);
+@@ -1088,7 +1120,7 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 			uint32_t fade = fFB->fFadeStep;
+ 			if (change) {
+ 				fFB->fPowerOff = off;
+-				fFB->fFadeStep = 0;
++				fFB->fFadeStep = (off && fFB->fPanelSleep && sweet_panel_ok) ? 7 : 0;	/* 0205: MDP blank, no CPU fade */
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+ 				fFB->fPanelFailed = false;      /* 0201 */
+ 				if (fFB->fPanelSleep) {
+-- 
+2.56.0
+
