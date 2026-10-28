@@ -66,7 +66,7 @@ cp toybox "$OUT/" ) || echo "WARNING: toybox failed (see $W/build/toybox-$TOYBOX
 echo "== wland + phone tools"
 ( cd "$ROOT"
 sh phone/wifi/build.sh
-cp phone/wifi/out/wland "$OUT/"
+cp phone/wifi/out/wland phone/wifi/out/adspboot "$OUT/"
 bash phone/tools/build.sh || echo "WARNING: some phone tools failed"
 for t in psx pstack netsvc nettest oslog prefs openapp lsreg memwarn pmem a2s vtdecode vcopy sctl; do
 	[ -f phone/tools/out/$t ] && cp phone/tools/out/$t "$OUT/" || true
