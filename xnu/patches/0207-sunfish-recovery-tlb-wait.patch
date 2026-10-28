@@ -1,0 +1,100 @@
+From 9df0a776c5392a3525beb9a84a32cf875fe7b907 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 15:23:00 -0400
+Subject: [PATCH] sunfish: wait for the GPU CB TLB sync and never start the SQE
+ with it pending during recovery (sweettlbwait)
+
+---
+ bsd/dev/sweet_a6xx.c | 57 +++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 54 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index f2a94e3..c16d7b1 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -1454,6 +1454,33 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume);
+  */
+ static bool recover_diag;
+ 
++/* 0207: sweettlbwait=0 keeps the old unchecked TLB sync in the recovery and the ungated SQE start (default 1) */
++static int a6_tlbwait(void)
++{
++	static int tw = -1;
++	if (tw < 0) {
++		int v = 1;
++		(void)PE_parse_boot_argn("sweettlbwait", &v, sizeof(v));
++		tw = v != 0;
++	}
++	return tw;
++}
++
++/* 0207: TLBIALL + TLBSYNC, then poll TLBSTATUS.SACTIVE up to 10 ms in 10 us steps; 0 = done */
++static int a6_tlb_sync_poll(uint64_t c)
++{
++	unsigned us = 0;
++	wr32(c + CB_TLBIALL, 0);
++	wr32(c + CB_TLBSYNC, 0);
++	while ((rd32(c + CB_TLBSTATUS) & 1) && us < 10000) {
++		a6_delay_us(10);
++		us += 10;
++	}
++	int busy = rd32(c + CB_TLBSTATUS) & 1;
++	a6_log("tlb sync -> %s after %u us\n", busy ? "timeout" : "done", us);
++	return busy ? -1 : 0;
++}
++
+ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ {
+ 	/* 0178: sweetsmmureset=0 skips the reset below (control runs: is it what makes stall-hang recovery work?) */
+@@ -1481,9 +1508,14 @@ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ 	wr32(c + CB_SCTLR, sctlr & ~1u);
+ 	(void)rd32(c + CB_SCTLR);
+ 	wr32(c + CB_FSR, 0xffffffff);
+-	wr32(c + CB_TLBIALL, 0);
+-	wr32(c + CB_TLBSYNC, 0);
+-	(void)wait_bit(c + CB_TLBSTATUS, 1, 0, 10);
++	if (a6_tlbwait()) {
++		if (a6_tlb_sync_poll(c))
++			(void)a6_tlb_sync_poll(c);	/* 0207: one retry */
++	} else {
++		wr32(c + CB_TLBIALL, 0);
++		wr32(c + CB_TLBSYNC, 0);
++		(void)wait_bit(c + CB_TLBSTATUS, 1, 0, 10);
++	}
+ 	wr32(c + CB_SCTLR, sctlr | smmu_stall_bit());	/* 0182: stall mode back on */
+ 	(void)rd32(c + CB_SCTLR);
+ 	wr32(GREG(0x3c45), 0);			/* GBIF_HALT */
+@@ -1784,11 +1816,30 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	if (cr)
+ 		SWEET_CRUMB("cp_init: sqe written");
+ 	wr32(GREG(CP_SQE_INSTR_BASE), (uint32_t)a6_pool_va(A6_OFF_SQE));
++	if (cr)
++		SWEET_CRUMB("cp_init: sqe base lo written");
+ 	wr32(GREG(CP_SQE_INSTR_BASE + 1), 0);
++	if (cr)
++		SWEET_CRUMB("cp_init: sqe base hi written");
+ 	wr32(GREG(CP_RB_BASE), (uint32_t)a6_pool_va(A6_OFF_RING));
++	if (cr)
++		SWEET_CRUMB("cp_init: rb base lo written");
+ 	wr32(GREG(CP_RB_BASE + 1), 0);
++	if (cr)
++		SWEET_CRUMB("cp_init: rb base hi written");
+ 	wr32(GREG(CP_RB_CNTL), 0x0800020c);	/* 32K ring, 32-byte blocks, no rptr update */
++	if (cr)
++		SWEET_CRUMB("cp_init: rb cntl written");
+ 	g->wptr = 0;
++	if (cr && g->gpu_cb >= 0 && a6_tlbwait()) {
++		/* 0207: the SQE fetches through the SMMU at once; with a TLB sync still pending that reset the SoC */
++		uint32_t ts = rd32(SMMU_CB(g->gpu_cb) + CB_TLBSTATUS);
++		SWEET_CRUMB("cp_init: tlbstatus %x before sqe start", ts);
++		if (ts & 1) {
++			a6_log("recovery aborted: TLB sync busy, SQE not started\n");
++			return -1;
++		}
++	}
+ 	wr32(GREG(CP_SQE_CNTL), 1);
+ 	if (cr)
+ 		SWEET_CRUMB("cp_init: sqe_cntl=1");
+-- 
+2.56.0
+
