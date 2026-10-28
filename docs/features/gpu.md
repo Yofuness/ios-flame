@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:10 the recover2 window looks safe; suspect lost log lines + zap_load
+- Every access between `smmu/gbif reset` and `pre-me_init` (sweet_a6xx.c ~1489-1786: SMMU CB reads, GBIF_HALT writes, ~45 GX init-table writes, perfctr, SQE write to DRAM, CP_SQE/RB base, SQE_CNTL=1, the pre-me_init reads) also ran in 12 surviving recoveries from the identical state; there are no SMC calls in it. "rbbm halt ack deafbead" = RBBM_GBIF_HALT_ACK (0x17), harmless and unimplemented on A618. So the RAM log probably lost its last lines and the reset came later: zap_load (TZ PAS on an already-loaded image; Linux loads zap once per boot and then resumes) ~55%, SQE_CNTL=1 with TLB sync busy ~25%. Next: xnu 0206 with flushed breadcrumbs (a cache-clean after each crumb, in case the console ring is cacheable).
+
 ### 2026-10-28 15:00 k81 rescue: the silent reset happened inside recover2
 - RAM-log rescue after the k81 reset (logs/k81-rescue.txt): GPU hang at 421.912 s (fence 12181 done 12162), recover2 ran gx off -> `gx on: rail+sptprac ok, dcvs acked ret 0, oob gpu_set acked` -> `stage gx on -> 0, rbbm status 1` -> `SWEET FB: GPU present re-armed` -> `recover2: smmu/gbif reset: sctlr e7 fsr 400 tlbstatus 1` at 421.949 s, then nothing. In recoveries that survive, the next line is `recover2: pre-me_init: ...`. So the SoC reset is triggered by the code between those two prints. Earlier silent resets (sk70, k77s) showed no hang line in their rescued logs: a different trigger, or the hang line was not reached.
 
