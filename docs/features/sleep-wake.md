@@ -13,6 +13,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:15 k78: kernel panel sleep (xnu 0202, sweetpanelsleep=1), 10 power-button cycles over `flame-cmd.py 'key 0'`
+- Off frames black 10/10; wake frames picture 8/10 (cycles 7 and 8 stayed black, both came back on their own later). Only 3 DCS sequences ran for 10 cycles (28/10/11/29 x3, all done 1 ack 0, t 0-1 ms, 0 failed lines); 9 display off / 11 display on lines. So the panel thread misses requests (the fade-step condition or the wake-up), and black wakes match pairs without DCS lines. A GPU hang (unrecoverable) came 1.0 s after one `display off` (gpu.md).
+
 ### 2026-10-28 15:00 k76: panel off/on from the shell works (tools/sunfish-panel-sleep.sh)
 - 3 cycles: dcs 28, 10, 11, 29 all `done yes ack_err 0x00000000`; autorefresh restored to 0x80000001; webcam black at +3 s, picture back by +5-8 s, 3/3; SSH up after. Headers 0x800500NN (short write, LONG bit clear). Next: the kernel hook on IOMFB sel 12.
 
