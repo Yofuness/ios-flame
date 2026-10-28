@@ -17,6 +17,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:10 k90a (kernel90, sweettorch=1, /var/local/sweet-flashlight)
+- The swizzle loads in SpringBoard (mtl2.log: `flashlight: AVFlashlight -> kern.sweet_torch`), but Control Center shows no Flashlight tile, so nothing calls it (0 SWEET TORCH lines from taps). Investigating the module's visibility gate.
+
 ### 2026-10-28 16:15 Control Center button: call path and plan (read-only; research/re/FlashlightModule.s, SpringBoardUI.s, AVFCapture.s)
 - FlashlightModule.bundle -> `[SBUIFlashlightController isAvailable]` -> `buttonView setEnabled:`; taps -> `turnFlashlightOn/OffForReason:`, the slider -> `setLevel:`. SBUIFlashlightController (SpringBoardUI) owns an AVFlashlight (AVFCapture) and KVO-observes available / overheated / flashlightLevel.
 - AVFlashlight: `+hasFlashlight` = MGGetBoolAnswer("camera-flash") (-init throws if NO); `_setupFlashlight` -> FigFlashlightRemoteCreate (XPC to mediaserverd's CMCapture FigFlashlight, which needs the H10 camera stack: never Available here); `-isAvailable` is a byte set by the Available notification.

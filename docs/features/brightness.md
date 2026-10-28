@@ -18,6 +18,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:10 k90a (kernel90, sweetbl=2 sweettorch=1): slider keys found; 0216 (kernel92)
+- 0214 worked as written: nits 0 at 34.978 s, no DCS 51 sent. The screen was still near-black on the webcam at dim 10 until `sunfish-panel-bright.sh 128` (no SWEET PANEL line before that, so the dark start is not from our DCS; cause open).
+- The Control Center slider works in the UI and sends `brightness` and `backlight-level` (same value, 0..0x10000: 0x79de, 0x7685 ... 0x2e93 while dragging), each with FadePeriod 0. It never sends brightness-nits.
+- xnu 0216 (kernel92): sweetbl=2 maps `brightness` to DCS 51 = 32 + b * 479 / 65536 (32..511). Test k92a running.
+
 ### 2026-10-28 16:55 k88a (kernel88, sweetbl=2): black screen at boot; fix 0214 (kernel90)
 - backlight-control matching now finds AppleARMBacklight. At 32.927 s CoreBrightness set brightness-nits = 0 and DisplayBrightnessSliderPosition = 0; the kernel sent DCS 51 = 4 (panel minimum, near-black) at 32.958 s and nothing raised it. Recovered with tools/sunfish-panel-bright.sh 128.
 - xnu 0214 (kernel90): nits 0 is not sent to the panel; DCS = 32 + nits * 479 / 500 (32..511). Test k90a pending.
