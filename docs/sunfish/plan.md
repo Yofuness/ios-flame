@@ -18,6 +18,10 @@ The GPU stability work is done apart from the 2 h exit soak (steps 1-5 of the ol
 6. [ ] **Flashlight, LED only.** Switch the PM6150L flash LED on/off from a phone tool via SPMI. Control Center hookup is a separate later step (iOS drives the torch through the camera stack).
 7. [ ] **Brightness, panel only.** OLED brightness via the panel's DCS brightness command (guess: 0x51 over DSI) from a test tool; check on the webcam and the battery current. Hooking the Control Center slider is a separate later step. `sunfish-dim.sh` stays as the fallback.
 
+### Overnight run 2026-10-27 21:45 -> 2026-10-28 05:00 (no user interaction; approved by the user)
+Order: (1) storage stage 1: newfs_hfs -s -J on /dev/rufsroot1 (kernel61, xnu 0185), copy /private/var with toybox cp -a, verify, unmount; (2) escape hatch xnu 0186 `sweetnofstab=1` (kernel hides /etc/fstab), tested alone first; (3) storage stage 2: /private/etc/fstab `/dev/ufsroot1 /private/var hfs rw,nosuid,nodev 0 2`, boot, verify; a failed boot is undone with an escape boot; (4) step 7 brightness; (5) step 6 flashlight (torch current only, short on-times; user OK'd these PMIC writes, charger registers stay off limits); (6) Wi-Fi join investigation alongside (read-only; a fix may be built, not booted); (7) step 8 exit soak from ~03:00 on the newest good kernel (also battery discharge check, AegirPoster recount); (8) write-up by 04:45.
+Rules: one phone user at a time; battery >= 3600 mV before each boot; a hard hang or an unrecoverable boot stops all phone work (write it up, read-only work only); a step that fails twice is marked failed and skipped; never flash, never charger PMIC writes, no root writes except the one fstab line; phone-runner foreground only, kill leftover loops; anything refused by permissions is skipped and logged.
+
 ### C. To do (deferred)
 8. [ ] **2 h exit soak (from the old plan).** kernel60, app switches: 0 reboots, 0 unrecovered GPU hangs, pool flat. Battery will still drain until charging is fixed; note mV/mA anyway. Run when the user says so.
 
