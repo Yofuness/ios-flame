@@ -1,0 +1,65 @@
+From 24f703075d3cdcecfc5d8f6d1db2d97ec4155bac Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 13:24:35 -0400
+Subject: [PATCH] sunfish: UFS direct I/O: cluster (UPL) bufs use the kernel
+ mapping, not copyout (0198)
+
+---
+ bsd/dev/sweet_ufs.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 4c7bacc..a84a1fc 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -462,6 +462,8 @@ sweet_ufs_close(__unused dev_t dev, __unused int flags, __unused int devtype, __
+ 	return 0;
+ }
+ 
++static int sweet_ufs_dio = 1;  /* 0198: boot-arg sweetufsdio=0 turns the B_CLUSTER check off */
++
+ static void
+ sweet_ufs_strategy(buf_t bp)
+ {
+@@ -475,6 +477,12 @@ sweet_ufs_strategy(buf_t bp)
+ 	uint64_t part_bytes = nblk * UFS_BLOCK;
+ 
+ 	bool rd = buf_flags(bp) & B_READ;
++	/* 0198: only physio bufs (B_PHYS without a UPL) carry a user address. Cluster direct
++	 * I/O (CL_DIRECT_IO, e.g. fcopyfile with F_NOCACHE) is B_PHYS too, but its pages come in
++	 * a UPL (B_CLUSTER) that buf_map maps into the kernel: copyout to that gave EFAULT.
++	 * Boot sweetufsdio=0 for the old test (B_PHYS alone). */
++	bool user_va = (buf_flags(bp) & B_PHYS) &&
++	    (!(buf_flags(bp) & B_CLUSTER) || !sweet_ufs_dio);
+ 
+ 	buf_setresid(bp, count);
+ 	if (!known) {
+@@ -517,7 +525,7 @@ sweet_ufs_strategy(buf_t bp)
+ 		if (rd) {
+ 			error = ufs_read_blocks(su.first_block + lba, blocks);
+ 			if (!error) {
+-				if (buf_flags(bp) & B_PHYS) {
++				if (user_va) {
+ 					/* 0175: raw I/O, vaddr is the user's address (physio sets
+ 					 * b_datap to the iov base; buf_map returns it unchanged). */
+ 					error = copyout((const char *)bounce + skip,
+@@ -532,7 +540,7 @@ sweet_ufs_strategy(buf_t bp)
+ 				error = ufs_read_blocks(su.first_block + lba, blocks);
+ 			}
+ 			if (!error) {
+-				if (buf_flags(bp) & B_PHYS) {
++				if (user_va) {
+ 					error = copyin((user_addr_t)(uintptr_t)(vaddr + done),
+ 					    (char *)bounce + skip, want);
+ 				} else {
+@@ -760,6 +768,7 @@ sweet_ufs_init(void)
+ 	uint32_t cache = 0, wait = 0;
+ 	PE_parse_boot_argn("ufscache", &cache, sizeof(cache));
+ 	PE_parse_boot_argn("ufswait", &wait, sizeof(wait));
++	PE_parse_boot_argn("sweetufsdio", &sweet_ufs_dio, sizeof(sweet_ufs_dio)); /* 0198 */
+ 	su.cache = (cache == 1);
+ 	su.wait = (wait == 1);
+ 
+-- 
+2.56.0
+
