@@ -10,6 +10,10 @@
 #import <AVFoundation/AVFoundation.h>
 #import <VideoToolbox/VideoToolbox.h>
 
+/* Older iOS SDK headers (theos 16.5, Linux builds) declare these for macOS only; VideoToolbox exports them. */
+extern const CFStringRef kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder;
+extern const CFStringRef kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder;
+
 int main(int argc, char **argv)
 {
 	@autoreleasepool {

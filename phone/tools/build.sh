@@ -21,9 +21,9 @@ build() {	# NAME SOURCE [FLAGS...]
 	shift 2
 	$CC -O2 -Wall "$@" -o "out/$name" "$src"
 	if [ -f "$name-ents.plist" ]; then
-		codesign -f -s - --entitlements "$name-ents.plist" "out/$name"
+		../../tools/linux-ios-sign "out/$name" "$name-ents.plist"
 	else
-		codesign -f -s - "out/$name"
+		../../tools/linux-ios-sign "out/$name"
 	fi
 }
 for c in membw pstack psx vcopy sctl; do build $c $c.c; done

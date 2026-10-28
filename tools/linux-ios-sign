@@ -1,0 +1,10 @@
+#!/bin/sh
+# Ad hoc sign a Mach-O, optionally with entitlements: linux-ios-sign FILE [ENTS.plist]
+# macOS: codesign -f -s - [--entitlements]; elsewhere: ldid -S[ENTS].
+set -e
+f=$1 ents=$2
+if [ "$(uname)" = Darwin ]; then
+	if [ -n "$ents" ]; then exec codesign -f -s - --entitlements "$ents" "$f"; fi
+	exec codesign -f -s - "$f"
+fi
+exec ldid -S"$ents" "$f"

@@ -1,3 +1,4 @@
 #!/bin/sh
-# clang for iOS 16 arm64 userland tools (dropbear, dash, toybox)
+# clang for iOS 16 arm64 userland tools (dropbear, dash, toybox); on Linux: tools/linux-ios-cc
+[ "$(uname)" = Darwin ] || exec "$(dirname "$0")/../../../tools/linux-ios-cc" "$@"
 exec "$(xcrun -f clang)" -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -miphoneos-version-min=16.0 "$@"

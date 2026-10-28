@@ -1,0 +1,7 @@
+#!/bin/sh
+# clang for iOS 16 arm64 userland on Linux: the Linux twin of work/userland/bin/ios-cc (Xcode clang).
+# SDK: $IOS_SDK, default research/sdk/theos-sdks/iPhoneOS16.5.sdk in the repo. Links with ld64.lld.
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+SDK=${IOS_SDK:-$ROOT/research/sdk/theos-sdks/iPhoneOS16.5.sdk}
+exec "${IOS_CLANG:-clang}" --target=arm64-apple-ios16.0 -isysroot "$SDK" -fuse-ld=lld \
+	-Wl,-platform_version,ios,16.0,16.5 -Wno-unused-command-line-argument "$@"
