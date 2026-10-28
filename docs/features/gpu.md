@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:56 k81: silent reset right after a bench; the bootloader state shows nothing
+- kernel81 (0205), during the dim A/B benches: the phone fell into fastboot right after bench d10b ended (14:55:50); the babysitter flagged it at 14:56:03. `fastboot getvar all` taken at once (logs/getvar-reset-k81.txt) is identical to the clean-reboot baseline (logs/getvar-clean.txt), so ABL keeps no reset reason either. RAM-log rescue on the next boot (k81r).
+
 ### 2026-10-28 14:50 lead: the vsync tick stops ~83 ms after display off
 - From the k79 panel test: in 6/10 cycles the framebuffer fade stopped at step 5, i.e. the vsync tick ran ~5 times after `display off` and then not at all for 3 s. Nothing in SweetFramebuffer.cpp stops it (vsyncFired re-arms itself first, line 372; sel 72 only clears the notify entry; the fade has no gate), so the workloop thread is probably blocked by something else at display off (GPU/present path?). The unrecoverable GPU hangs cluster 0.1-6 s after display on/off. Worth checking whether the same thing blocks the GPU side; a stack sample of the workloop thread right after display off would show it.
 
