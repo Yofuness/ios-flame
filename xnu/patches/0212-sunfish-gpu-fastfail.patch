@@ -1,0 +1,99 @@
+From 56dfd1da56d8464756142890f35908bb317cb819 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 16:49:30 -0400
+Subject: [PATCH] sunfish: GPU recovery fails faster (300 ms me_init in
+ recovery, skip the GBIF path after an rptr-0 busy hang, stop recover3 on an
+ HFI ctrl-init timeout; sweetgpufastfail)
+
+---
+ bsd/dev/sweet_a6xx.c | 34 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index c16d7b1..426b23a 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -842,6 +842,9 @@ static int gbif_halt_bounded(void)
+ }
+ #endif
+ 
++static bool a6_fastfail(void);
++static bool gmu_cold_recover;		/* 0208: gmu_hfi called from recover3 */
++
+ static int gmu_hfi(struct a6_gpu *g)
+ {
+ 	static uint32_t msg[256];
+@@ -861,6 +864,10 @@ static int gmu_hfi(struct a6_gpu *g)
+ 	wr32(GMU_REG(GMU_HFI_CTRL_INIT), 1);
+ 	int hs = wait_bit(GMU_REG(GMU_HFI_CTRL), 1, 1, 100);
+ 	a6_log("hfi: ctrl init -> status %x %s\n", rd32(GMU_REG(GMU_HFI_CTRL)), hs ? "TIMEOUT" : "ok");
++	if (hs && gmu_cold_recover && a6_fastfail()) {	/* 0208: 0 of 6 ctrl init timeouts ever got HFI up */
++		a6_log("fastfail: skipping HFI messages (recover3 hfi ctrl init timeout)\n");
++		return -1;
++	}
+ 	/* diagnostic: GMU SMMU context bank fault state + CM3 registers after the fault */
+ 	{
+ 		uint64_t cb = SMMU_CB(g->gmu_cb);
+@@ -1454,6 +1461,19 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume);
+  */
+ static bool recover_diag;
+ 
++/* 0208: sweetgpufastfail (default 1; 0 = old behaviour): 300 ms me_init wait in recoveries, skip the GBIF-halt path
++ * after recover2's me_init hung with the CP never fetching (rptr 0, cp_status1 81104006, no SMMU stall) */
++static bool a6_fastfail(void)
++{
++	static int v = -1;
++	if (v < 0) {
++		v = 1;
++		(void)PE_parse_boot_argn("sweetgpufastfail", &v, sizeof(v));
++	}
++	return v != 0;
++}
++static bool me_init_timed_out;
++
+ /* 0207: sweettlbwait=0 keeps the old unchecked TLB sync in the recovery and the ungated SQE start (default 1) */
+ static int a6_tlbwait(void)
+ {
+@@ -1680,7 +1700,9 @@ int a6_recover_cold(struct a6_gpu *g)
+ 		SWEET_CRUMB("recover3 failed (gmu fw)");
+ 		return -1;
+ 	}
++	gmu_cold_recover = true;
+ 	rc = gmu_hfi(g);
++	gmu_cold_recover = false;
+ 	R3("hfi + gx on", rc);
+ 	if (rc || !a6_gx_up()) {
+ 		SWEET_CRUMB("recover3 failed (gmu/hfi)");
+@@ -1706,10 +1728,18 @@ int a6_recover_cold(struct a6_gpu *g)
+ int a6_recover(struct a6_gpu *g)
+ {
+ #if A6_GPU_ID == 618
++	me_init_timed_out = false;		/* 0208 */
+ 	if (a6_recover_mode == 2 && a6_recover_full(g) == 0) {
+ 		a6_log("recover: full (GX power cycle) -> 0\n");
+ 		return 0;
+ 	}
++	if (a6_recover_mode == 2 && a6_fastfail() && me_init_timed_out && rd32(GREG(CP_RB_RPTR)) == 0 &&
++	    rd32(GREG(CP_STATUS_1)) == 0x81104006 && !(rd32(GREG(RBBM_STATUS)) & (1u << 17)) &&
++	    (g->gpu_cb < 0 || !(rd32(SMMU_CB(g->gpu_cb) + CB_FSR) & (1u << 30)))) {
++		/* 0208: 0 of 7 such GBIF-halt paths recovered (the 1 success had an SMMU stall, status c20015) */
++		a6_log("fastfail: skipping GBIF-halt path (recover2 me_init rptr 0, cp_status1 81104006)\n");
++		return -1;
++	}
+ 	if (a6_recover_mode == 2)
+ 		a6_log("recover2: full recovery failed, trying the GBIF-halt path\n");
+ #endif
+@@ -1861,7 +1891,9 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	uint32_t me_init[] = { a6_pkt7(A6_CP_ME_INIT, 8), 0x2f, 3, 0x20000000, 0, 0, 0, 0, 0 };
+ 	if (cr)
+ 		SWEET_CRUMB("cp_init: me_init send");
+-	if (a6_ring(g, me_init, 9, "me_init", 1000)) {
++	me_init_timed_out = false;
++	if (a6_ring(g, me_init, 9, "me_init", cr && a6_fastfail() ? 300 : 1000)) {	/* 0208 */
++		me_init_timed_out = true;
+ 		if (cr)
+ 			SWEET_CRUMB("cp_init: me_init failed");
+ 		return -1;
+-- 
+2.56.0
+
