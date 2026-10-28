@@ -1,0 +1,122 @@
+From cb9425ef07888cc2b38c5e48ead50d7627c8f4ea Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 17:04:11 -0400
+Subject: [PATCH] sunfish: 0215 SE9 clocks and pins (sweetse9=1)
+
+Votes wrapper1 + SE9 in GCC, sets the S3 RCG to XO/1 (log-only under DFS),
+polls the wrapper and S3 CBCRs, then muxes gpio46/47 to function 1 (qup13,
+guessed) at 2 mA with no pull, and logs SE9 fw/CLK_SEL/MCLK read-only.
+TLMM: the DT has one region (0x3400000 + 0xdc2000) and names no tiles;
+gpio46/47 are assumed on the NORTH tile (0x3900000) like touch's gpio6/7.
+Default sweetse9=0 changes nothing. Hooked into sweet_camprobe_register.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_camprobe.c | 78 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 78 insertions(+)
+
+diff --git a/bsd/dev/sweet_camprobe.c b/bsd/dev/sweet_camprobe.c
+index 32f7440..5d478e1 100644
+--- a/bsd/dev/sweet_camprobe.c
++++ b/bsd/dev/sweet_camprobe.c
+@@ -5,6 +5,8 @@
+  * CAMCC is read only when gcc_camera_ahb_clk runs, SE9 only when ABL left its
+  * clocks voted and I2C firmware loaded; then only SE9's own transfer setup
+  * (as in sweet_touch.c) and I2C reads are done.
++ * 0215: sweetse9=1 turns on SE9's GCC clocks (vote, RCG XO/1, CBCR poll) and
++ * gpio46/47 pins like sweet_touch.c touch_clocks() does for SE7; logs only.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -206,12 +208,88 @@ cam_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t
+ 	printf("SWEET CAM: kern.sweet_camprobe ready\n");
+ }
+ 
++/* 0215: SE9 (wrapper1 S3) clocks and pins, as touch_clocks() for SE7. */
++#define SE9_GCC_VOTE 0x5200cu
++#define SE9_RCG      0x183a8u
++#define SE9_CBCR     0x183a4u
++#define SE9_TLMM_PA  0x03900000u /* NORTH tile, as sweet_touch.c (assumed for gpio46/47) */
++
++static bool
++se9_wait_clear(vm_offset_t b, uint32_t off, uint32_t mask, unsigned us)
++{
++	for (unsigned i = 0; i < us; ++i) {
++		if (!(cam_rd(b, off) & mask)) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
++}
++
++static void
++sweet_se9_init(int mode)
++{
++	vm_offset_t gcc = ml_io_map(CAM_GCC_PA, 0x60000);
++	vm_offset_t tlmm = ml_io_map(SE9_TLMM_PA, 0x5b000);
++	if (!gcc || !tlmm) {
++		printf("SWEET SE9: MMIO mapping failed\n");
++		return;
++	}
++	uint32_t v = cam_rd(gcc, SE9_GCC_VOTE);
++	cam_wr(gcc, SE9_GCC_VOTE, v | (0x0fu << 18) | (1u << 25)); /* never clears bits */
++	uint32_t dfs = cam_rd(gcc, SE9_RCG + 0x14u), cfg = cam_rd(gcc, SE9_RCG + 4u);
++	printf("SWEET SE9: gcc vote %#x -> %#x rcg=%#x cfg=%#x dfs=%#x\n", v,
++	    cam_rd(gcc, SE9_GCC_VOTE), cam_rd(gcc, SE9_RCG), cfg, dfs);
++	if (dfs & 1u) {
++		printf("SWEET SE9: DFS on, level0=%#x (not written)\n", cam_rd(gcc, SE9_RCG + 0x1cu));
++	} else {
++		/* XO parent 0, divider 1 (touch's encoding). */
++		cam_wr(gcc, SE9_RCG + 4u, (cfg & ~(0x371fu | (1u << 20))) | 1u);
++		cam_wr(gcc, SE9_RCG, cam_rd(gcc, SE9_RCG) | 1u);
++		if (!se9_wait_clear(gcc, SE9_RCG, 1u, 1000)) {
++			printf("SWEET SE9: RCG update timeout cmd=%#x\n", cam_rd(gcc, SE9_RCG));
++		}
++	}
++	const uint32_t br[] = {0x18004, 0x18008, 0x1800c, 0x18010, SE9_CBCR};
++	for (unsigned i = 0; i < sizeof(br) / sizeof(br[0]); ++i) {
++		bool on = se9_wait_clear(gcc, br[i], 1u << 31, 10000);
++		printf("SWEET SE9: cbcr %#x = %#x%s\n", br[i], cam_rd(gcc, br[i]), on ? "" : " (off)");
++	}
++	if (cam_rd(gcc, SE9_CBCR) & (1u << 31)) {
++		printf("SWEET SE9: clocks still off\n");
++		return;
++	}
++	/* qup13 = mux 1 is a guess from qup11 = 1; no pull, 2 mA, other fields kept. */
++	/* sweetse9=1 only logs the pins (the tile for 46/47 is unconfirmed); 2 writes them. */
++	for (unsigned pin = 46; pin <= 47; ++pin) {
++		uint32_t off = pin * 0x1000u, c = cam_rd(tlmm, off);
++		if (mode >= 2) {
++			cam_wr(tlmm, off, (c & ~0x3ffu) | (1u << 2));
++		}
++		printf("SWEET SE9: gpio%u cfg %#x -> %#x\n", pin, c, cam_rd(tlmm, off));
++	}
++	vm_offset_t se = ml_io_map(CAM_SE9_PA, 0x4000);
++	if (!se) {
++		return;
++	}
++	uint32_t fw = cam_rd(se, 0x68);
++	printf("SWEET SE9: fw %#x (proto %u) clk_sel %#x mclk %#x\n", fw, (fw >> 8) & 0xffu,
++	    cam_rd(se, 0x7c), cam_rd(se, 0x48));
++}
++
+ /* Called from SweetBattery::start; no-op without sweetcamprobe=1. */
+ void
+ sweet_camprobe_register(void)
+ {
+ 	static thread_call_t reg;
+ 	int on = 0;
++	static int se9_done;
++	int se9 = 0;
++	(void)PE_parse_boot_argn("sweetse9", &se9, sizeof(se9));
++	if (se9 >= 1 && !se9_done) { /* 0215: default 0 = untouched */
++		se9_done = 1;
++		sweet_se9_init(se9);
++	}
+ 	(void)PE_parse_boot_argn("sweetcamprobe", &on, sizeof(on));
+ 	if (on != 1 || reg) {
+ 		return;
+-- 
+2.56.0
+
