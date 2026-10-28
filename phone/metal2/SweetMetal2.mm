@@ -347,3 +347,104 @@ __attribute__((constructor)) static void sm2_torch_init(void)
 		sm2_log("flashlight: AVFCapture: %s", dlerror());
 	sm2_torch_swizzle();
 }
+
+/*
+ * Orientation from a file (no sensors; /var/local/sweet-orient, SpringBoard only): a 1 s timer reads one
+ * UIDeviceOrientation (1 portrait, 2 upside down, 3 landscape left, 4 landscape right). "N" = method A, AX
+ * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager. Delete the file to turn it off.
+ */
+static void sm2_orient_b(long n)
+{
+	Class c = objc_getClass("SBDeviceOrientationUpdateManager");
+	if (!c) {
+		sm2_log("orient: SBDeviceOrientationUpdateManager missing");
+		return;
+	}
+	unsigned cnt = 0;
+	Method *ms = class_copyMethodList(object_getClass(c), &cnt);
+	for (unsigned i = 0; i < cnt; i++)
+		sm2_log("orient: B class method +%s", sel_getName(method_getName(ms[i])));
+	free(ms);
+	id mgr = nil;
+	static const char *const names[] = { "sharedInstance", "sharedManager", "defaultManager" };
+	for (const char *s : names)
+		if (class_respondsToSelector(object_getClass(c), sel_registerName(s))) {
+			mgr = ((id (*)(id, SEL))objc_msgSend)(c, sel_registerName(s));
+			break;
+		}
+	if (!mgr) {
+		id app = ((id (*)(id, SEL))objc_msgSend)(objc_getClass("SpringBoard"), sel_registerName("sharedApplication"));
+		id objs[] = { app, app ? ((id (*)(id, SEL))objc_msgSend)(app, sel_registerName("delegate")) : nil };
+		for (id o : objs) {
+			unsigned ni = 0;
+			Ivar *iv = o ? class_copyIvarList(object_getClass(o), &ni) : NULL;
+			for (unsigned i = 0; i < ni && !mgr; i++) {
+				const char *t = ivar_getTypeEncoding(iv[i]);
+				if (t && strstr(t, "SBDeviceOrientationUpdateManager"))
+					mgr = object_getIvar(o, iv[i]);
+			}
+			free(iv);
+		}
+	}
+	sm2_log("orient: B manager %p", mgr);
+	if (!mgr)
+		return;
+	SEL e = sel_registerName("_enqueueOrientationUpdateToDeviceOrientation:");
+	SEL l = sel_registerName("_legacy_enqueueOrientationUpdateToDeviceOrientation:source:");
+	if ([mgr respondsToSelector:e]) {
+		((void (*)(id, SEL, long))objc_msgSend)(mgr, e, n);
+		sm2_log("orient: B enqueue %ld", n);
+	} else if ([mgr respondsToSelector:l]) {
+		((void (*)(id, SEL, long, long))objc_msgSend)(mgr, l, n, 0);
+		sm2_log("orient: B legacy enqueue %ld", n);
+	} else
+		sm2_log("orient: B no enqueue selector");
+}
+
+static void sm2_orient_a(long n)
+{
+	Class c = objc_getClass("AXBackBoardServer");
+	SEL s = sel_registerName("setDeviceOrientation:");
+	Method m = c ? class_getInstanceMethod(c, s) : NULL;
+	if (!m) {
+		sm2_log("orient: AXBackBoardServer%s missing", c ? " -setDeviceOrientation:" : "");
+		return;
+	}
+	id srv = ((id (*)(id, SEL))objc_msgSend)(c, sel_registerName("server"));
+	sm2_log("orient: AX setDeviceOrientation %ld (types %s, server %p)", n, method_getTypeEncoding(m), srv);
+	((void (*)(id, SEL, long))objc_msgSend)(srv, s, n);
+}
+
+__attribute__((constructor)) static void sm2_orient_init(void)
+{
+	if (strcmp(getprogname(), "SpringBoard") != 0 || access("/var/local/sweet-orient", F_OK) != 0)
+		return;
+	if (!dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
+		sm2_log("orient: AccessibilityUtilities: %s", dlerror());
+	dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+	dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 10);
+	dispatch_source_set_event_handler(t, ^{
+		static struct timespec last;
+		struct stat st;
+		if (stat("/var/local/sweet-orient", &st) != 0 || (st.st_mtimespec.tv_sec == last.tv_sec &&
+		    st.st_mtimespec.tv_nsec == last.tv_nsec))
+			return;
+		last = st.st_mtimespec;
+		char buf[16] = {0};
+		int fd = open("/var/local/sweet-orient", O_RDONLY);
+		if (fd < 0 || read(fd, buf, sizeof(buf) - 1) < 0)
+			buf[0] = 0;
+		if (fd >= 0)
+			close(fd);
+		bool b = buf[0] == 'B';
+		long n = strtol(b ? buf + 1 : buf, NULL, 10);
+		if (n < 1 || n > 4)
+			return;
+		@try {
+			b ? sm2_orient_b(n) : sm2_orient_a(n);
+		} @catch (id ex) {
+			sm2_log("orient: exception %s", [[ex description] UTF8String]);
+		}
+	});
+	dispatch_resume(t);
+}
