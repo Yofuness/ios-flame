@@ -2,9 +2,9 @@
 
 `patches/` is one series on xnu-8796.141.3 (the iOS 16 generation):
 
-- `0001`-`0081`: ios-sweet (Redmi Note 10 Pro). History in [docs/ios-sweet/NOTES.md](../docs/ios-sweet/NOTES.md).
-- `0082`-`0124`: flame (Pixel 4). One line per patch in [NOTES.md](../NOTES.md#flame-patches), the details in
-  [HANDOFF.md](../HANDOFF.md). 0090, 0092-0093 and 0101 have no file of their own: they are inside 0089, 0091 and
+- `0001`-`0081`: ios-sweet (Redmi Note 10 Pro). History in [docs/archive/sweet/NOTES.md](../docs/archive/sweet/NOTES.md).
+- `0082`-`0124`: flame (Pixel 4). One line per patch in [NOTES.md](../docs/archive/flame/NOTES.md#flame-patches), the details in
+  [HANDOFF.md](../docs/archive/flame/HANDOFF.md). 0090, 0092-0093 and 0101 have no file of their own: they are inside 0089, 0091 and
   0100. 0082 is needed with Xcode 16 or newer (iig emits `IORPC.kernelContent`).
 
 The flame series applies with `git apply` in order on top of the ios-sweet baseline and gives the tree that built

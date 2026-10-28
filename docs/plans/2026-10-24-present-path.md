@@ -2,7 +2,7 @@
 Done: step 1A (already how the code works), step 3 (warm-up, not a leak), step 4 (TB4 port fixed charging).
 Failed: step 1B (no preemption support on the GPU ring), step 2 (Turnip 0105: SMMU fault, parked in phone/turnip/failed/).
 Not done: the remaining present ideas.
-Replaced by: docs/sunfish/plan.md (60 Hz plan: video spike, per-frame timeline, backboardd GPU time, ordering).
+Replaced by: docs/plans/2026-10-25-60hz-smoothness.md (60 Hz plan: video spike, per-frame timeline, backboardd GPU time, ordering).
 
 # Next steps: Pixel 4a iOS port, display smoothness and stability (handoff plan)
 
@@ -12,7 +12,7 @@ Replaced by: docs/sunfish/plan.md (60 Hz plan: video spike, per-frame timeline, 
 - **Display now:** vsync-paced at about 21 panel updates/s, with no dropped swaps. The user says it's a bit smoother and more consistent; the target is as close to 60 as possible.
 - **Repo:** `/home/johann/Projects/Claude Code/ios pixel 4a/port`, branch `sunfish`. Push only there, never force-push.
 - **Kernel source:** `port/work/src/xnu`. Patches are exported to `port/xnu/patches/NNNN-*.patch`.
-- **Logs:** `docs/workday.md` has the full log. Read its last three sections first.
+- **Logs:** `docs/workday.md (now docs/features/ logs + docs/journal/)` has the full log. Read its last three sections first.
 
 ## Hard rules (must follow)
 - **Boots:**
@@ -21,7 +21,7 @@ Replaced by: docs/sunfish/plan.md (60 Hz plan: video spike, per-frame timeline, 
   - Writes to userdata are incremental only (single files, with a backup first).
 - **Battery and hangs:**
   - Stop booting below 3600 mV (`fastboot getvar battery-voltage`).
-  - After a hard hang, stop and write it up in docs/workday.md.
+  - After a hard hang, stop and write it up in docs/workday.md (now docs/features/ logs + docs/journal/).
   - GPU test boots use flamereboot=1800 (the default). Use flamereboot=0 only for long file copies.
 - **MDP registers:**
   - Never read or write MDP registers other than the ones `tools/sunfish-dim.sh` already uses.
@@ -84,7 +84,7 @@ Replaced by: docs/sunfish/plan.md (60 Hz plan: video spike, per-frame timeline, 
 - **Left:** the ~1.5 BOs/switch drift is small; only chase it if the pool grows over a long soak (`tools/sunfish-soak.sh`). Use Instagram/Safari with long scrolling as the heavier test.
 
 ## Step 4: Charger (read-only dump done 2026-10-24; findings, not a config bug)
-- **Dump:** xnu 0162 (`SweetBattery.cpp`) logs `SWEET CHARGER:` rows for the PM6150 SMB5 blocks at the third poll and every 20th; data in `docs/sunfish/charger-regs.md`. SID 0 reads 0x1000-0x137f fine; 0x1500 (TYPEC) and 0x1600 (MISC) fail.
+- **Dump:** xnu 0162 (`SweetBattery.cpp`) logs `SWEET CHARGER:` rows for the PM6150 SMB5 blocks at the third poll and every 20th; data in `docs/reference/charger-regs.md`. SID 0 reads 0x1000-0x137f fine; 0x1500 (TYPEC) and 0x1600 (MISC) fail.
 - **Decoded (smb5 register map, my reading):** BATTERY_CHARGER_STATUS_1 (0x1006) = 3 (fast charge); CHARGING_ENABLE_CMD (0x1042) = 1; FAST_CHARGE_CURRENT_CFG (0x1061) = 0x28 = 2.0 A; USBIN_CURRENT_LIMIT_CFG (0x1370) = 0x1e = 1.5 A. So the charger is enabled, in fast charge, with a 1.5 A input limit: nothing to "configure".
 - **Why it still drains under load:** at 5 V a 1.5 A limit is at most 7.5 W, and a USB host port on the PC gives less (SDP/CDP). The phone draws more than that while benching with the screen on and the GPU busy. This is a power-budget limit of the source, not a missing setup.
 - **RESOLVED 2026-10-24 by the cable/port:** on the laptop's free Thunderbolt 4 port with a 240 W USB4 cable, the phone charges at +968 mA idle and +948 mA during a 60 s swipe bench (22-23 panel updates/s), against about 0 to -250 mA on the previous port. The registers read the same (ICL 0x1370 = 0x1e, FCC 0x28), so the source was the limit and no kernel change is needed.
@@ -92,10 +92,10 @@ Replaced by: docs/sunfish/plan.md (60 Hz plan: video spike, per-frame timeline, 
 - Step 4 is done. Charger writes are not needed.
 
 ## Verification (each step)
-- `tools/sunfish-cfgbench.sh` twice per config. Record swaps/s and panel updates/s in a table in docs/workday.md.
+- `tools/sunfish-cfgbench.sh` twice per config. Record swaps/s and panel updates/s in a table in docs/workday.md (now docs/features/ logs + docs/journal/).
 - Webcam frame for any visual change.
 - Commit and push after each measured step.
 
 ## Hand-off notes for a smaller model
 - One change per boot. If a result is worse, turn it off with its boot-arg and move on; don't keep iterating on it.
-- Read `docs/workday.md` sections [00:40] and [08:40] before starting.
+- Read `docs/workday.md (now docs/features/ logs + docs/journal/)` sections [00:40] and [08:40] before starting.

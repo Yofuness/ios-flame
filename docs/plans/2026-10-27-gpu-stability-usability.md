@@ -1,12 +1,12 @@
 # Archived 2026-10-27: GPU stability and usability plan
 
-- **Done:** step 1 GPU hang recovery (xnu 0167-0174, 0177-0182; injected hangs recover in ~26 ms), step 2 hang triggers (silent resets fixed by 0175/0176; stall-on-fault default 0182), step 3 GPU memory (0183 pool warning, no leak: 1 h soaks end at 342-345 MB), step 4 UI watchdog (0179, default `sweetuiwdt=30`), step 5 USB port reset and replug recovery (0184, kernel60), step 6 partly (dropped assetsd, Spotlight jobs, searchd, driverkitd; see `docs/sunfish/broken.md`).
+- **Done:** step 1 GPU hang recovery (xnu 0167-0174, 0177-0182; injected hangs recover in ~26 ms), step 2 hang triggers (silent resets fixed by 0175/0176; stall-on-fault default 0182), step 3 GPU memory (0183 pool warning, no leak: 1 h soaks end at 342-345 MB), step 4 UI watchdog (0179, default `sweetuiwdt=30`), step 5 USB port reset and replug recovery (0184, kernel60), step 6 partly (dropped assetsd, Spotlight jobs, searchd, driverkitd; see `docs/features/apps.md (was docs/sunfish/broken.md)`).
 - **Not done:** the 2 h exit soak; recovery from a real (not injected) GPU hang is unproven; the USB flap right after boot is untested; AegirPoster crash loop; charger config; kernel-log-stall watchdog trigger.
-- **Replaced by:** the usability quick-wins plan in `docs/sunfish/plan.md` (the exit soak moved there as a to-do).
+- **Replaced by:** the usability quick-wins plan in `docs/plan.md` (the exit soak moved there as a to-do).
 
 # Next steps: GPU stability and usability (plan of 2026-10-25)
 
-Old plan: `docs/sunfish/plans/2026-10-25-60hz-smoothness.md`. Rules from it still apply (RAM-only boots, stop below 3600 mV, one change per boot, push only to `sunfish`).
+Old plan: `docs/plans/2026-10-25-60hz-smoothness.md`. Rules from it still apply (RAM-only boots, stop below 3600 mV, one change per boot, push only to `sunfish`).
 
 ## Context
 Speed work (plan.md step 2/3) has stalled: culling, sysmem, half precision, DDR votes all gave nothing; ~21 updates/s is the ceiling for now. Meanwhile the phone still dies in ways that block both daily use and future perf work:
@@ -25,7 +25,7 @@ A stable phone gives reproducible benches (perf later) and lets the user actuall
 3. **GPU memory under control.** [in progress 2026-10-27: per-client cap (sweetgpucap 256 MB), compositor reserve (160 MB) and a 64 MB / 16-slot reuse cache per client already exist; 0183 (kernel59) adds the 80% pool warning + every client drops its reuse cache under pressure (none kept until < 70%). Soaks peak 436-444 MB of 940, so pressure is never reached in normal use. DONE 2026-10-27 pp1 (sweetpoolwarn=40): 5 warnings, backboardd dropped 17-25 MB each, back under 30% in 1-4 s, 0 refusals; 1 h soaks end at 342-345 MB (< 400), so no leak chase.] BO census in the soak (TU_DEBUG=bos + kernel pool lines); hard cap/LRU in the per-client pool reuse (0156) and a kernel warning at 80% pool; chase the drift only if pool > 400 MB after 1 h.
 4. **Watchdog instead of blind auto-reboot.** [built 2026-10-26: xnu 0179 / kernel55, sweetuiwdt=30 (touch + no swap 30 s -> kill backboardd -> stop pets). Resets land in fastboot by design (RAM-only boot). uw1 2026-10-26: no false triggers, rung A (kill frozen backboardd at 30 s) works; rung B untested. DONE 2026-10-27 uw2: rung B (stop pets) at +30 s after rung A, phone reset into fastboot ~49 s later; sweetuiwdt=30 flamereboot=0 is now the sunfish-boot.sh default. Open: a kernel-log-stall trigger (hard hangs with the UI still swapping are not covered).] Replace the 1800 s `flamereboot` timer with a userspace/kernel watchdog: reboot only if backboardd makes no swap for 30 s or the kernel log stalls. Usable demo boots no longer die every 30 min and true hangs still recover.
 5. **USB link robustness.** [2026-10-27: cause was a missing bus-reset path in sweet_usb.c; xnu 0184 (kernel60) re-enumerates: 5/5 PC-side port resets recover in 2 s, control with sweetusbreset=0 0/2. Physical replug 2026-10-27 (k60d): cable out 16 s, 2 contact bounces, link + SSH back within 3 s of the last connect. Open: the post-boot flap.] investigator: why the link flaps after boot / dies on replug (USB gadget re-enumeration in the shim). Fix so the link renegotiates; test: 5 replugs, link back each time.
-6. **Usability quick wins.** [in progress 2026-10-27 dd1: dropped spotlight.IndexAgent, corespotlightservice, assetsd(+nebulad), driverkitd: assetsd crash loop gone (88 -> 0 per 30 min), Photos opens instead of black; Spotlight index extension crashes unchanged (~85 per 30 min). dd2: they are launched by searchd; dropping it leaves 1 crash per 15 min (PhotosFileProvider). Lock screen and Spotlight screen still work. List of disabled jobs and broken things: docs/sunfish/broken.md. Left: AegirPoster (lock screen poster) crash loop; charger config (own step, ask user).] Disable/stub crash-looping daemons and apps (PhotosFileProvider etc.) like vmd/ReportCrash earlier; charger config (later, own step — PMIC writes are risky, ask user first).
+6. **Usability quick wins.** [in progress 2026-10-27 dd1: dropped spotlight.IndexAgent, corespotlightservice, assetsd(+nebulad), driverkitd: assetsd crash loop gone (88 -> 0 per 30 min), Photos opens instead of black; Spotlight index extension crashes unchanged (~85 per 30 min). dd2: they are launched by searchd; dropping it leaves 1 crash per 15 min (PhotosFileProvider). Lock screen and Spotlight screen still work. List of disabled jobs and broken things: docs/features/apps.md (was docs/sunfish/broken.md). Left: AegirPoster (lock screen poster) crash loop; charger config (own step, ask user).] Disable/stub crash-looping daemons and apps (PhotosFileProvider etc.) like vmd/ReportCrash earlier; charger config (later, own step — PMIC writes are risky, ask user first).
 
 Exit criteria: 2 h soak with app switches, 0 reboots, 0 unrecovered GPU hangs, pool flat, battery not draining on TB4. Then return to perf with the soak as the regression gate.
 
@@ -33,7 +33,7 @@ Exit criteria: 2 h soak with app switches, 0 reboots, 0 unrecovered GPU hangs, p
 - `work/src/xnu`: `iokit/Kernel/arm/SweetFramebuffer.cpp`, `sweet_gpu.c`, `sweet_a6xx.c` → new `xnu/patches/NNNN-sunfish-*.patch`
 - `phone/metal2/bridge/patches/` (RT shader fallback), `phone/turnip/patches/`
 - `tools/sunfish-soak.sh` (extend with app-switch mix + pool/hang columns)
-- docs: `docs/sunfish/plan.md`, `status.md`, `experiments.md`, `workday.md`
+- docs: `docs/plan.md`, `status.md`, `experiments.md`, `workday.md` (now `docs/README.md`, `docs/features/`, `docs/journal/`)
 
 ## Verification
 Each step: phone-runner run of the soak or targeted repro; numbers into experiments.md + plan.md in the same commit. Webcam check after every recovery test. Battery ≥3600 mV before each boot.

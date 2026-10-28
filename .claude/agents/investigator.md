@@ -7,7 +7,7 @@ tools: Read, Bash, Grep, Glob
 ---
 You answer one specific question about the sunfish port by reading code, binaries or logs. You don't change anything.
 
-- The methods are in docs/sunfish/display-perf.md ("Methods and tools"). Reuse them.
+- The methods are in docs/methods.md. Reuse them.
 - Disassembly: run it on one image only, under
   `systemd-run --user --scope -q -p MemoryMax=8G ipsw dyld disass research/dsc/dyld_shared_cache_arm64 --image NAME`.
   Write the output under research/re/, which is gitignored.

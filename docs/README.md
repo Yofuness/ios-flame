@@ -37,7 +37,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started.
 - [recovery.md](recovery.md): back to stock Android on the Pixel 4a.
 
 ## Known broken (from the old broken.md, as of 2026-10-28)
-The "where to start" column refers to the plan steps of [plan.md](plan.md).
+"plan.md step N" in the last column means the plan current when the row was written: steps 2 and 4 are in [plans/2026-10-27-gpu-stability-usability.md](plans/2026-10-27-gpu-stability-usability.md), steps 1 and 8 in [plan.md](plan.md).
 
 | Area                                        | State                                                                                                                                                                                                                              | Where to start                                                            |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |

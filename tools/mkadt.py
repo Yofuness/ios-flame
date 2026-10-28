@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot on flame.
 
-Only what the early boot path actually reads (see ios-sweet's NOTES.md); every
+Only what the early boot path actually reads (see docs/archive/sweet/NOTES.md); every
 MMIO address comes from the flame (Pixel 4, SM8150) live FDT. The kernel's
 built-in drivers still match the Redmi names (xiaomi,sweet, qcom,kryo470,
 sweet,display), so those stay next to the flame ones.
@@ -12,7 +12,7 @@ import hashlib, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
-# Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
+# Kernel-managed RAM: above every Qualcomm XPU carve-out (see docs/archive/sweet/NOTES.md)
 PHYS_BASE = 0xb0000000
 MEM_SIZE = 0x4d000000
 # --highmem (phone only): above 4G. The flame live FDT memory node is

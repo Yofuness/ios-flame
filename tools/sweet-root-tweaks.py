@@ -7,7 +7,7 @@ MOUNTED_ROOT is the HFS+ image mounted read-write (Linux: run
 `fsck.hfsplus -fy` on the image, then `mount -t hfsplus -o loop,force`).
 Run as root (it writes root/mobile owned files). Idempotent. This is what
 turned the plain mkiosroot.sh output into the images that reach the home
-screen (image versions v8-v14 in NOTES.md):
+screen (image versions v8-v14 in docs/archive/sweet/NOTES.md):
 
   launchd.plist   _PanicOnCrash -> _PanicOnCrasX (a crashing daemon must not
                   panic the system); CommCenter jobs removed (no baseband: it

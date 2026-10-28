@@ -2,11 +2,11 @@
 
 - **Done:** per-frame timeline (xnu 0163), present-mode study (0164-0166), step-2 dead ends (culling, sysmem, half precision, DDR vote).
 - **Not done:** steps 0 (video), 4 (soak), 5; cheaper blur; RT shaders in the bridge.
-- **Replaced by:** the stability plan in `docs/sunfish/plan.md` (perf stalled at ~21 updates/s).
+- **Replaced by:** the stability plan in `docs/plans/2026-10-27-gpu-stability-usability.md` (perf stalled at ~21 updates/s).
 
 # Next steps: 60 Hz smoothness and stability (plan of 2026-10-24)
 
-Old plan: `docs/sunfish/plans/2026-10-24-present-path.md`. Full reasoning: `~/.claude/plans/pasted-content-id-a57c-plan-distributed-newt.md`.
+Old plan: `docs/plans/2026-10-24-present-path.md`. Full reasoning: `~/.claude/plans/pasted-content-id-a57c-plan-distributed-newt.md`.
 
 ## Measured facts that drive this plan
 - backboardd's own GPU time is 14-20 ms/frame under swipes (not 2.4 ms; that is the blit), GPU 25-37% busy, longest submit ~40 ms. The timeline shows it is bimodal (p50 5.8 ms, p95 40 ms per submit) and that the biggest gap is on the CPU/CA side: GPU end -> swap p50 29 ms; the vsync tick itself delivers only ~52/s. Both rule out 60 Hz.

@@ -1,5 +1,5 @@
 # Archived plan (2026-10-23): GPU stability + smooth display
-Superseded by docs/sunfish/plan.md on 2026-10-24.
+Superseded by docs/sunfish/plan.md on 2026-10-24 (now docs/plans/2026-10-24-present-path.md).
 
 **Done:**
 - Phase 0 measurements.
@@ -14,4 +14,4 @@ Superseded by docs/sunfish/plan.md on 2026-10-24.
 - Interrupt-driven fence waits.
 - DCVS.
 
-The original phase list is in git history: the session plan file, and the early `docs/workday.md` sections.
+The original phase list is in git history: the session plan file, and the early `docs/workday.md` sections (now in docs/archive/features/ and docs/journal/).

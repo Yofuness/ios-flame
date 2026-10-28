@@ -50,15 +50,15 @@ ABL (Google's bootloader, unlocked)
 
 | Path | What |
 | --- | --- |
-| `xnu/patches/` | 0001-0081 from ios-sweet, 0082-0124 for flame ([list](NOTES.md#flame-patches), [how to build](xnu/README.md)) |
+| `xnu/patches/` | 0001-0081 from ios-sweet, 0082-0124 for flame ([list](docs/archive/flame/NOTES.md#flame-patches), [how to build](xnu/README.md)) |
 | `shim/` | The bare-metal shim ABL boots (`shim/build.sh`) |
 | `tools/` | Host tools: ADT and payload, boot-and-collect-logs loop, SSH/file/command access to the running phone, GPU and Metal debugging, ios-sweet's root-image scripts |
 | `phone/` | Code that runs in iOS: `wifi/` (wland), `metal2/` + `turnip/` (Metal on Turnip), `metal/` (the older template driver), `gpu/`, `tools/` (psx, pstack, openapp, lsreg, netsvc, oslog, ...) |
-| [NOTES.md](NOTES.md) | Hardware facts, Google ABL boot image rules, test loop, one line per flame patch |
-| [HANDOFF.md](HANDOFF.md) | The engineering log, newest first: every step, what broke and why |
-| [METAL-NEXT.md](METAL-NEXT.md) | The plan for Metal at user quality (metal2vulkan + Turnip) and why |
-| [RECOVERY.md](RECOVERY.md), [DEVICE.md](DEVICE.md) | Back to stock Android; the test phone and host setup |
-| `docs/ios-sweet/` | ios-sweet's README and notes (the history of patches 0001-0081) |
+| [NOTES.md](docs/archive/flame/NOTES.md) | Hardware facts, Google ABL boot image rules, test loop, one line per flame patch |
+| [HANDOFF.md](docs/archive/flame/HANDOFF.md) | The engineering log, newest first: every step, what broke and why |
+| [METAL-NEXT.md](docs/archive/flame/METAL-NEXT.md) | The plan for Metal at user quality (metal2vulkan + Turnip) and why |
+| [RECOVERY.md](docs/archive/flame/RECOVERY.md), [DEVICE.md](docs/archive/flame/DEVICE.md) | Back to stock Android; the test phone and host setup |
+| `docs/archive/sweet/` | ios-sweet's README and notes (the history of patches 0001-0081) |
 
 ## Not in git: what you need to get yourself
 
@@ -66,13 +66,13 @@ Scripts expect these at the paths shown (all gitignored). None of them can be sh
 Google's/Qualcomm's files, or data from your own phone.
 
 - **The phone**: a Pixel 4 (`flame`; the 4 XL `coral` is untested) with the bootloader unlocked, on the final
-  Android 13 build `TP1A.221005.002.B2`. Keep Google's factory image in `images/` ([RECOVERY.md](RECOVERY.md)).
+  Android 13 build `TP1A.221005.002.B2`. Keep Google's factory image in `images/` ([RECOVERY.md](docs/archive/flame/RECOVERY.md)).
   Back up the per-device partitions first (persist, modemst1/2, fsg, fsc, ...) into `backup/`. They hold your
   IMEI and calibration data, so keep them private.
 - **Boot image tools**: AOSP `mkbootimg` in `downloads/mkbootimg/`, `avbtool.py` in `downloads/avb/`, and the
   stock DTB (`python3 tools/unpack_bootv2.py boot.img stock/` on the factory image's boot.img) as `stock/dtb`.
 - **TWRP** 3.7.1_12-0 for flame in `downloads/twrp/`. It writes the root image and reads the logs back. The
-  test loop keeps it in `boot_a` (see NOTES.md).
+  test loop keeps it in `boot_a` (see docs/archive/flame/NOTES.md).
 - **The iOS root**: the iPhone X iOS 16.7.16 (20H392) IPSW. `tools/remotezip.py` fetches single files from
   Apple's CDN. Build the HFS+ image with `tools/mkiosroot.sh` in a Linux VM (apfs-fuse, hfsprogs), then run
   `tools/sweet-root-tweaks.py`. Write it from TWRP with `adb exec-in 'dd of=/dev/block/sda15 bs=4194304' < IMG`,
@@ -82,11 +82,11 @@ Google's/Qualcomm's files, or data from your own phone.
     puts them in the device tree).
   - Wi-Fi: `wlanmdsp.mbn`, `modemuw.jsn` and `bdwlan-flame.bin`, plus the modem's `modem.mdt`/`.bNN` and
     `modemr.jsn`, in `/var/local/fw/modem` on the phone.
-  - Your own modemst1/modemst2/fsg/fsc images go in `/var/local/fw/rmtfs` on the phone (HANDOFF.md, "WiFi, part 1").
+  - Your own modemst1/modemst2/fsg/fsc images go in `/var/local/fw/rmtfs` on the phone (docs/archive/flame/HANDOFF.md, "WiFi, part 1").
 - **Toolchains**: Xcode with the iOS SDK (`work/userland/bin/ios-cc`), Homebrew `llvm`, `lld` and `lz4` for the
   shim, [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build) for the first kernel build,
   Mesa and metal2vulkan checkouts for `tools/build-turnip-ios.sh` and `tools/build-m2v-bridge.sh` (pins in the
-  script headers), and dropbear, toybox and dash built for iOS (HANDOFF.md, "SSH into iOS works").
+  script headers), and dropbear, toybox and dash built for iOS (docs/archive/flame/HANDOFF.md, "SSH into iOS works").
 
 ## Run it
 
@@ -102,7 +102,7 @@ tools/flame-ssh                                              # root shell in iOS
 ```
 
 `tools/flame-run.sh` is the loop underneath. It builds the payload and boot image, runs `fastboot boot`, waits for
-the run to end back in fastboot, boots TWRP, then pulls and decodes the kernel log. NOTES.md and HANDOFF.md
+the run to end back in fastboot, boots TWRP, then pulls and decodes the kernel log. docs/archive/flame/NOTES.md and HANDOFF.md
 ("How to run things", "Tools") cover each step and the boot args.
 
 ## Credits
