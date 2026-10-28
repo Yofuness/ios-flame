@@ -13,8 +13,9 @@ echo "$name: battery $v mV"
 [ "${v:-0}" -lt 3600 ] && { echo "battery low: not booting"; exit 1; }
 echo "=== $name $(basename "$(dirname "$k")") $* $(date +%T)" >> ../logs/usb-live.log
 timeout 150 tools/sunfish-boot.sh "$name" "$k" flamereboot=1800 "$@" >/dev/null 2>&1
-for i in $(seq 40); do timeout 10 tools/sunfish-ssh true 2>/dev/null && break; sleep 5; done
-sleep 50
+# SSH: poll every second (was a 10 s timeout + 5 s sleep); then let post-boot daemon work settle (was 50 s)
+for i in $(seq 180); do timeout 3 tools/sunfish-ssh -o ConnectTimeout=2 true 2>/dev/null && break; sleep 1; done
+sleep ${SETTLE:-30}
 [ -n "$DIM" ] && tools/sunfish-dim.sh "$DIM" >/dev/null
 BENCH_TIGHT=1 tools/sunfish-fpsbench.sh "$name-a" 20
 BENCH_TIGHT=1 tools/sunfish-fpsbench.sh "$name-b" 20
