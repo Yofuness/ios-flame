@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <objc/message.h>
 #include <unistd.h>
 #include <string.h>
 #include "NativeBridgeMetalFrontend.h"
@@ -270,3 +272,78 @@ static bool listed(void)
 	return device;
 }
 @end
+
+/*
+ * Control Center flashlight (switch file /var/local/sweet-flashlight, SpringBoard only): AVFlashlight's methods are
+ * replaced so they drive the kernel's kern.sweet_torch (mA, sweettorch=1) instead of the camera stack (no Fig object).
+ * Level 1.0 = 100 mA, the kernel's cap.
+ */
+static float sm2_torch_level;	/* the stored level, 0 = off */
+static float sm2_torch_last = 1.0f;
+
+static BOOL sm2_torch_set(id self, float level)
+{
+	int ma = (int)(level * 100.0f + 0.5f);
+	if (ma < 0)
+		ma = 0;
+	int err = sysctlbyname("kern.sweet_torch", NULL, NULL, &ma, sizeof(ma));
+	if (err)
+		sm2_log("flashlight: kern.sweet_torch=%d failed (%d)", ma, errno);
+	else if (ma)
+		sm2_log("flashlight: on %d mA", ma);
+	else
+		sm2_log("flashlight: off");
+	[self willChangeValueForKey:@"flashlightLevel"];
+	sm2_torch_level = err ? 0.0f : level;
+	if (!err && level > 0.0f)
+		sm2_torch_last = level;
+	[self didChangeValueForKey:@"flashlightLevel"];
+	return err == 0;
+}
+
+static void sm2_torch_swizzle(void)
+{
+	Class c = objc_getClass("AVFlashlight");
+	if (!c)
+		return;
+	Class m = object_getClass(c);
+	struct { Class cls; const char *sel; id imp; } r[] = {
+		{ m, "hasFlashlight", ^BOOL(id s) { return YES; } },
+		{ c, "init", ^id(id s) {
+			struct objc_super sup = { s, [NSObject class] };
+			return ((id (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, @selector(init));
+		} },
+		{ c, "dealloc", ^void(id s) {
+			struct objc_super sup = { s, [NSObject class] };
+			((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, NSSelectorFromString(@"dealloc"));
+		} },
+		{ c, "isAvailable", ^BOOL(id s) { return YES; } },
+		{ c, "isOverheated", ^BOOL(id s) { return NO; } },
+		{ c, "turnPowerOnWithError:", ^BOOL(id s, NSError **e) { return sm2_torch_set(s, sm2_torch_last); } },
+		{ c, "turnPowerOff", ^void(id s) { sm2_torch_set(s, 0.0f); } },
+		{ c, "setFlashlightLevel:withError:", ^BOOL(id s, float level, NSError **e) {
+			sm2_log("flashlight: level %.2f", level);
+			return sm2_torch_set(s, level);
+		} },
+		{ c, "flashlightLevel", ^float(id s) { return sm2_torch_level; } },
+	};
+	for (auto &x : r) {
+		Method mt = class_getInstanceMethod(x.cls, sel_registerName(x.sel));
+		if (!mt) {
+			sm2_log("flashlight: AVFlashlight %s missing", x.sel);
+			continue;
+		}
+		method_setImplementation(mt, imp_implementationWithBlock(x.imp));
+	}
+	sm2_log("flashlight: AVFlashlight -> kern.sweet_torch");
+}
+
+__attribute__((constructor)) static void sm2_torch_init(void)
+{
+	if (strcmp(getprogname(), "SpringBoard") != 0 || access("/var/local/sweet-flashlight", F_OK) != 0)
+		return;
+	/* SBUIFlashlightController makes its AVFlashlight later; loading the framework now is enough to swizzle first. */
+	if (!dlopen("/System/Library/PrivateFrameworks/AVFCapture.framework/AVFCapture", RTLD_NOW))
+		sm2_log("flashlight: AVFCapture: %s", dlerror());
+	sm2_torch_swizzle();
+}
