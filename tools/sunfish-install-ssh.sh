@@ -49,7 +49,7 @@ p['LaunchDaemons']['/System/Library/LaunchDaemons/org.iosonpixel.dropbear.plist'
     'ProgramArguments': ['/var/local/bin/dropbear', '-F', '-R', '-p', '22'],
     'RunAtLoad': True, 'KeepAlive': True, 'UserName': 'root',
     'EnvironmentVariables': {'PATH': '/var/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'},
-    'StandardErrorPath': '/var/local/dropbear.log',
+    # no StandardErrorPath: opening a file on /var/local made launchd start dropbear ~8 s late (2026-10-28)
 }
 plistlib.dump(p, open(sys.argv[2], 'wb'), fmt=plistlib.FMT_BINARY)
 print('launchd jobs:', len(p['LaunchDaemons']))
