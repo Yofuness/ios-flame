@@ -16,7 +16,7 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 | SSH | ✅ | dropbear + dash + toybox; `port/tools/sunfish-ssh` |
 | Real time | ✅ | PM6150 RTC + `sweetrtcoff` (`port/work/rtc-offset`) |
 | Stock apps | ✅ | 32 staged apps installed in /Applications |
-| Wi-Fi | ✅ | scan + join + DHCP (MSA 2 MB fix); network saved in Settings; Safari works |
+| Wi-Fi | ❌ | scan works; join does not (2026-10-27 ck1 on kernel60: no route, wifid CURRENT_NETWORK error 6). The earlier join + DHCP + Safari result was with wland and /var/local/wlan.conf |
 
 ## Partial / in progress
 - **Smoothness** — next steps are in docs/sunfish/plan.md (present path, the last texture copies).

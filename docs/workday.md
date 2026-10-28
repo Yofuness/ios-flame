@@ -638,3 +638,11 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 
 ### k60d physical replug (2026-10-27 18:46)
 - kernel60 defaults, battery 4457 mV. Cable out 18:46:26-18:46:42, host saw 2 bounces (dev 53, 54), final enumeration 18:46:45; ping 0% loss, SSH ok.
+
+## 2026-10-27 ~19:00-20:07 plan steps 1-4 checks (ck1-ck3, kernel60 defaults)
+- Battery 4456 mV in fastboot before each boot.
+- Step 4 USB: ck1/ck2/ck3, 5 min each, SSH probe every 10 s: 0 failures, one `=== link up` per boot, boot to SSH 29 s (ck2) / 43 s (ck3). Done.
+- Step 1 Wi-Fi: not joined at boot+8 min. nettest: DNS for apple.com fails, https error -1009 "No network route"; no Wi-Fi icon (`logs/ck1-wifi.jpg`). Live log: 1072 wifi lines in 8 min; wifid gets 11 (SCAN_RESULT) answered 341x, gets 103 (CURRENT_NETWORK) error 6 331x, gets 1 (SSID) error 6; configd deleted en0 addresses 192.168.1.238 and 192.0.0.2 once each. The phone has no ifconfig/netstat/ping/ps in toybox. status.md said "✅ Safari works": that was with wland + wlan.conf, not iOS's own join. Corrected.
+- Step 2 battery: 17 samples 19:10-19:40: 4431-4434 mV, 0 mA, chg=0, target/shown 100%; on screen 100% at +15 and +30 min. Earlier today: +120-148 mA with chg=1 at 100%. Nothing learned about discharge.
+- Step 3 AegirPoster: 0 crashes, 0 CRASH lines of any kind in ~50 min idle. Bundle `/System/Library/CoreServices/AegirProxyApp.app/PlugIns/AegirPoster.appex`. Recount during an app soak.
+- Process: the first phone-runner left background loggers, ended its turn waiting on them and never ran ck2/ck3; a fresh foreground-only agent finished. Phone left up on ck3.

@@ -39,13 +39,13 @@ from the backup with plistlib.
 |---|---|---|
 | Charging | battery drains ~0.5 A under load even on the charger; the charger is never configured | `docs/sunfish/charger-regs.md`; PMIC writes are risky, ask the user first |
 | Battery % | IR-compensated estimate (0128) never checked | status.md |
-| USB link | port resets and a physical replug recover since xnu 0184 (kernel60); post-boot flap untested | plan.md step 5 |
+| USB link | port resets, replug and boot all fine since xnu 0184 (kernel60); ck1-ck3: 0 drops in 3x5 min | - |
 | GPU hang recovery | works on injected hangs (5/5, ~26 ms) but never met a real hang since 0181/0182 | plan.md step 2 |
 | UI watchdog | catches a frozen UI only; a kernel hang with swaps still running is not caught | plan.md step 4 |
 | Speed | ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd | display-perf.md |
 | Reduce Transparency | works but slow (~6 swaps/s) | workday.md rtj/rtj2 |
 | Audio, Bluetooth, cellular, camera, sensors | not started | status.md |
-| Wi-Fi | status.md says both "working (join + DHCP)" and "join fails (firmware crash at vdev start)"; check which is current | status.md |
+| Wi-Fi | scan works, iOS never joins the saved network (2026-10-27 ck1: no route, nettest -1009) | plan.md step 1 |
 
 ## Fixed
 (move rows here with the date and the patch or change that fixed them)
