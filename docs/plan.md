@@ -12,7 +12,7 @@ Old plan: `docs/plans/2026-10-27-usability-quick-wins.md`. Rules: RAM-only boots
 5. [ ] **Panel off when the phone sleeps.** DCS 28 (display off) + 10 (sleep in) on the IOMFB display-off power state, 11 + 29 on wake, autorefresh paused around it. Saves battery and burn-in. Test: webcam black, battery mA drops, wake 10/10. ~half a day. Design ready (features/sleep-wake.md 2026-10-28 12:30): first a shell test of 28/10 + 11/29, then ~120 lines in SweetFramebuffer.cpp behind sweetpanelsleep=1.
 
 ## Broken list (cheapest first; [phone] = needs the phone)
-B1. [ ] **`/var/local/mtl2.log` never rotated** (reached 321 MB). Rotate in the frontend at 8 MB (keep one .old). ~1 h, no phone to write, one boot to check.
+B1. [built, not yet on the phone] **`/var/local/mtl2.log` never rotated** (reached 321 MB). SweetMetal2.mm sm2_open_log(): clients run as mobile and cannot rename in /var/local, so the file (mode 666) is truncated in place once past 8 MB, with a `log truncated at N bytes` line. Built locally (14 s rebuild). Check on the next bundle install.
 B2. [ ] **macOS VM auto-login fails** (sysadminctl error 22), so a VM reboot stops at the login prompt. Write /etc/kcpassword + loginwindow autoLoginUser, or fix the sysadminctl call. ~30 min, VM only.
 B3. [ ] **Block driver direct I/O EFAULT**: copyfile's fcopyfile data path fails on /dev/ufsroot* files (vcopy has its own loop). Fix sweet_ufs.c's strategy for user-space buffers. ~2-3 h + [phone] test.
 B4. [ ] **Silent resets in app soaks** (sk70 337.8 s, two on 10-25). Diagnostic xnu 0197 (PON reason) is priority 2; then **Silent resets vs kernel.** Only if sk71 resets too: 1 h soak on kernel68 (sk68 was clean for 2 h) vs kernel74, same bundle, PON line after each reset. ~2.5 h. [phone]

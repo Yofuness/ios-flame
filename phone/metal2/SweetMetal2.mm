@@ -20,6 +20,19 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 
+/*
+ * /var/local/mtl2.log, opened for appending. Clients run as mobile and cannot create or rename files in
+ * /var/local, so the log is kept small by truncating it in place (it is mode 666) once it passes 8 MB.
+ */
+static int sm2_open_log(void)
+{
+	int fd = open("/var/local/mtl2.log", O_WRONLY | O_APPEND);
+	struct stat st;
+	if (fd >= 0 && fstat(fd, &st) == 0 && st.st_size > (8 << 20) && ftruncate(fd, 0) == 0)
+		dprintf(fd, "MTL2[%d %s]: log truncated at %lld bytes\n", getpid(), getprogname(), (long long)st.st_size);
+	return fd;
+}
+
 extern "C" void sm2_logs(const char *s)
 {
 	char buf[700];
@@ -30,7 +43,7 @@ extern "C" void sm2_logs(const char *s)
 	if (console == -2)
 		console = open("/dev/console", O_WRONLY | O_NOCTTY);
 	if (file == -2)
-		file = open("/var/local/mtl2.log", O_WRONLY | O_APPEND);
+		file = sm2_open_log();
 	if (console >= 0)
 		write(console, buf, (size_t)n);
 	if (file >= 0)
@@ -246,7 +259,7 @@ static bool listed(void)
 						continue;
 					static char text[8192];
 					native_bridge_metal_telemetry(text, sizeof(text));
-					int fd = open("/var/local/mtl2.log", O_WRONLY | O_APPEND);
+					int fd = sm2_open_log();
 					if (fd >= 0) {
 						dprintf(fd, "MTL2[%d %s]: telemetry\n%s", getpid(), getprogname(), text);
 						close(fd);

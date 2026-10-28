@@ -20,6 +20,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 13:20 mtl2.log size cap
+- sm2_open_log(): truncate /var/local/mtl2.log in place past 8 MB (clients are mobile and cannot rename in /var/local), log `log truncated at N bytes`. Used by sm2_logs and the backboardd telemetry writer. Built, not yet installed.
+
 ### 2026-10-28 08:00-08:25 Metal bundle built on Linux
 - tools/build-metal2-linux.sh (e2057b6): full build 5 min 11 s, no-change rebuild 14 s, on this PC with the theos iPhoneOS16.5 SDK. Matches CI run 40676463855 in size, dylibs, exports and install names (one weak-defined libc++ export fewer; a few extra weak libc++ imports).
 - bl2: installed with sunfish-metal2-install.sh, UI drawn (lock and home screen), 0 dyld errors, a 15-min app soak ran on it.
