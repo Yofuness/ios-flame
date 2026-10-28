@@ -45,7 +45,7 @@
   - judges results
   - updates the docs and plan
 - **Hand the rest to the agents in `.claude/agents/`:**
-  - `phone-runner` (haiku): boots, benches, webcam, log slicing. It is the only agent that touches the phone.
+  - `phone-runner` (sonnet, low effort): boots, benches, webcam, log slicing; checks itself and Reads a webcam frame after every boot and visible change. It is the only agent that touches the phone.
   - `ci-builder` (haiku): commit/export patches, push, CI, download, install.
   - `implementer` (opus, low effort): writes one patch from a spec.
   - `investigator` (opus, low effort): read-only source, binary and log analysis.
