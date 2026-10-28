@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:50 k93a (kernel93, sweetse9=2 sweetampreset=1): both CS35L41 amps answer
+- xnu 0217: PM6150L GPIO 8 (0xc700) and 11 (0xca00) are TYPE 0x10 SUBTYPE 0x11 (MV); before MODE 0x00 OUT_SRC 0x00 (input), after MODE 0x01 OUT_SRC 0x80 EN 0x80 (output high) at 30.67 s.
+- `apr_tone --probe --amp both`: "2 amp(s) answer"; each: devid 0x35a40, revid 0xb2, pwr_ctrl1 0, pwr_ctrl2 0x3321, amp_dig_vol 0x8000, amp_gain_ctrl 0x273, irq1_status1 0. The resets were the blocker.
+- Next: M0 ADSP boot (tools/sunfish-install-adsp.sh, adspboot, aprtest).
+
 ### 2026-10-28 17:30 k92b (kernel92, sweetse9=2): SE9 pins muxed; amps don't answer
 - gpio46/47 cfg 0x4 (func 1 = qup13), io 1; S3 CBCR 0x4220; fw 0x303.
 - `apr_tone --probe --amp both`: gi2c_init OK (gcc vote 0x433c1bc0, s3 cbcr 0x4220, fw 0x303, status 0); `cs35l41 0x40: read 00000000: err 6` -> no ACK on either amp. Likely held in reset (PM6150L GPIO 8 / 11, never driven). Next: xnu 0217 `sweetampreset=1` (PM6150L GPIO 8/11 output high), then probe again.
