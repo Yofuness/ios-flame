@@ -1,0 +1,65 @@
+From 2f1f9104a3d8e96f1ad99d23de037d7ff975099d Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 12:45:03 -0400
+Subject: [PATCH] sunfish: log PM6150 PON reason registers once at boot (0197)
+
+---
+ bsd/dev/sweet_spmi.c              |  1 +
+ iokit/Kernel/arm/SweetBattery.cpp | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 7727d4c..78013a9 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -100,6 +100,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	bool ok = sid == 0 && (peripheral == 0x10 || peripheral == 0x11 ||
+ 	    peripheral == 0x12 || peripheral == 0x13 || peripheral == 0x48 || peripheral == 0x60);
+ 	ok = ok || (sid == 5 && peripheral == 0xd3); /* 0190: PM6150L flash LED */
++	ok = ok || (sid == 0 && peripheral == 0x08); /* 0197: PM6150 PON reasons, read only */
+ 	if (!sp_ready || !out || addr > 0xffffu || !ok) {
+ 		return -1;
+ 	}
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 6996f4f..51febe4 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -332,6 +332,35 @@ SweetBattery::start(IOService *provider)
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
+ 	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
++	/* 0197: log the PM6150 PON reason registers once (read only); sweetpon=0 skips. */
++	int pon = 1;
++	(void)PE_parse_boot_argn("sweetpon", &pon, sizeof(pon));
++	if (fReal && pon) {
++		uint8_t r[0x14];
++		bool ok = true;
++		for (unsigned i = 0; i < sizeof(r) && ok; ++i) {
++			ok = !sweet_spmi_read(0, 0x800 + i, &r[i]);
++		}
++		if (!ok) {
++			printf("SWEET PON: read failed\n");
++		} else {
++			static const char *const why[8] = { "hard_reset", "smpl", "rtc",
++				                            "dc_chg", "usb_chg", "pon1", "cblpwr", "kpdpwr" };
++			char dec[96] = "";
++			for (unsigned b = 0; b < 8; ++b) {
++				if (r[8] & (1u << b)) {
++					strlcat(dec, why[b], sizeof(dec));
++					strlcat(dec, "|", sizeof(dec));
++				}
++			}
++			printf("SWEET PON: type %02x/%02x rev %02x %02x %02x %02x | 08:%02x 09:%02x "
++			    "0a:%02x 0b:%02x 0c:%02x 0d:%02x 0e:%02x 0f:%02x 10:%02x 11:%02x 12:%02x "
++			    "13:%02x | reason %s warm %#x poff/fault %#x/%#x\n",
++			    r[4], r[5], r[0], r[1], r[2], r[3], r[8], r[9], r[10], r[11], r[12],
++			    r[13], r[14], r[15], r[16], r[17], r[18], r[19], dec[0] ? dec : "none",
++			    r[10], r[12], r[13]);
++		}
++	}
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+ 	if (fReal) {
+-- 
+2.56.0
+
