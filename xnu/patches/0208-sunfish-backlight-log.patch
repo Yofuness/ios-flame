@@ -1,0 +1,191 @@
+From 698f1fa0c72e05cb167695fc91fb4833517a9a8f Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 15:32:25 -0400
+Subject: [PATCH] sunfish: SweetBacklight, a log-only backlight-control service
+ (sweetbl=1)
+
+---
+ iokit/Kernel/arm/SweetBacklight.cpp | 141 ++++++++++++++++++++++++++++
+ iokit/KernelConfigTables.cpp        |   5 +
+ iokit/conf/files.arm64              |   1 +
+ 3 files changed, 147 insertions(+)
+ create mode 100644 iokit/Kernel/arm/SweetBacklight.cpp
+
+diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
+new file mode 100644
+index 0000000..b4c0b53
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetBacklight.cpp
+@@ -0,0 +1,141 @@
++/*
++ * 0208: log-only backlight service for the Control Center slider.
++ * backboardd/SpringBoard match IOPropertyMatch { backlight-control = true }
++ * and found nothing. This publishes one (boot-arg sweetbl=1, default off)
++ * and logs every setProperties / open / newUserClient. No panel writes.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <IOKit/IOLib.h>
++#include <IOKit/IOService.h>
++#include <libkern/c++/OSCollectionIterator.h>
++#include <libkern/c++/OSSerialize.h>
++#include <pexpert/pexpert.h>
++
++class SweetBacklight : public IOService {
++	OSDeclareDefaultStructors(SweetBacklight);
++public:
++	IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
++	IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
++	    IOUserClient **handler) APPLE_KEXT_OVERRIDE;
++	bool handleOpen(IOService *forClient, IOOptionBits options, void *arg) APPLE_KEXT_OVERRIDE;
++private:
++	void putNumber(OSDictionary *d, const char *key, UInt32 value);
++	static void logValue(const char *key, OSObject *value);
++};
++OSDefineMetaClassAndStructors(SweetBacklight, IOService);
++
++IOService *
++SweetBacklight::probe(IOService *provider, SInt32 *score)
++{
++	uint32_t on = 0;
++	(void)PE_parse_boot_argn("sweetbl", &on, sizeof(on));
++	if (!on) {
++		return NULL;
++	}
++	return IOService::probe(provider, score);
++}
++
++void
++SweetBacklight::putNumber(OSDictionary *d, const char *key, UInt32 value)
++{
++	OSNumber *n = OSNumber::withNumber(value, 32);
++	if (n) {
++		if (d) {
++			d->setObject(key, n);
++		} else {
++			setProperty(key, n);
++		}
++		n->release();
++	}
++}
++
++bool
++SweetBacklight::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setName("backlight");
++	setProperty("IOName", "backlight");
++	setProperty("name", "backlight");
++	setProperty("compatible", "backlight,sweet");
++	setProperty("backlight-control", kOSBooleanTrue);
++
++	OSDictionary *params = OSDictionary::withCapacity(1);
++	OSDictionary *bright = OSDictionary::withCapacity(3);
++	if (params && bright) {
++		putNumber(bright, "min", 0);
++		putNumber(bright, "max", 65536);
++		putNumber(bright, "value", 32768);
++		params->setObject("brightness", bright);
++		setProperty("IODisplayParameters", params);
++	}
++	OSSafeReleaseNULL(bright);
++	OSSafeReleaseNULL(params);
++	putNumber(NULL, "brightness-nits", 0x00c80000);		/* 200.0, 16.16 */
++	putNumber(NULL, "brightness-nits-cap", 0x01f40000);	/* 500.0, 16.16 */
++
++	registerService();
++	IOLog("SWEET BL: published\n");
++	return true;
++}
++
++void
++SweetBacklight::logValue(const char *key, OSObject *value)
++{
++	char buf[201];
++	buf[0] = '\0';
++	OSSerialize *s = OSSerialize::withCapacity(256);
++	if (s && value && value->serialize(s)) {
++		strlcpy(buf, s->text(), sizeof(buf));
++	} else {
++		strlcpy(buf, value ? "(unserializable)" : "(null)", sizeof(buf));
++	}
++	OSSafeReleaseNULL(s);
++	IOLog("SWEET BL: setProperties key %s = %s\n", key, buf);
++}
++
++IOReturn
++SweetBacklight::setProperties(OSObject *properties)
++{
++	OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
++	if (!dict) {
++		logValue("(not a dictionary)", properties);
++		return kIOReturnSuccess;
++	}
++	OSCollectionIterator *it = OSCollectionIterator::withCollection(dict);
++	if (!it) {
++		return kIOReturnSuccess;
++	}
++	OSSymbol *key;
++	while ((key = OSDynamicCast(OSSymbol, it->getNextObject()))) {
++		OSObject *value = dict->getObject(key);
++		logValue(key->getCStringNoCopy(), value);
++		/* Store it so a read-back sees the new value. */
++		if (value) {
++			setProperty(key, value);
++		}
++	}
++	it->release();
++	return kIOReturnSuccess;
++}
++
++IOReturn
++SweetBacklight::newUserClient(task_t owningTask, void *securityID, UInt32 type,
++    IOUserClient **handler)
++{
++	(void)owningTask; (void)securityID; (void)handler;
++	IOLog("SWEET BL: newUserClient type %u\n", (unsigned)type);
++	return kIOReturnUnsupported;
++}
++
++bool
++SweetBacklight::handleOpen(IOService *forClient, IOOptionBits options, void *arg)
++{
++	IOLog("SWEET BL: open by %s\n",
++	    forClient ? forClient->getMetaClass()->getClassName() : "(null)");
++	return IOService::handleOpen(forClient, options, arg);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index d5e16fe..9ce185a 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -88,6 +88,11 @@ const char * gIOKernelConfigTables =
+     "     'IOMatchCategory' = SweetAccelerator;"
+     "   },"
+     "   {"
++    "     'IOClass'         = SweetBacklight;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetBacklight;"
++    "   },"
++    "   {"
+     "     'IOClass'         = AppleMobileFileIntegrity;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = AppleMobileFileIntegrity;"
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index 898752d..bfc0d4c 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -16,6 +16,7 @@ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitc
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
+ iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
++iokit/Kernel/arm/SweetBacklight.cpp                              optional iokitcpp
+ iokit/Kernel/arm/SweetAccelerator.cpp                            optional iokitcpp
+ iokit/Kernel/arm/SweetAMFI.cpp                                   optional iokitcpp
+ iokit/Kernel/arm/RedwoodWLAN.cpp                                 optional iokitcpp
+-- 
+2.56.0
+
