@@ -13,6 +13,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:30 PON baseline: the same after a clean reboot (lead withdrawn)
+- After a deliberate `flame-cmd.py reboot` (PSCI SYSTEM_RESET), k78b reads the identical line: `08:03 ... 11:01 13:01 | reason hard_reset|smpl| warm 0 poff/fault 0/0`. PON_REASON1 is sticky from the original cold power-on (warm resets don't rewrite it; WARM_RESET_REASON 0x0a stays 0 even after PSCI reset, so maybe a different offset on this GEN2 block), so the "smpl" after k77s says nothing about the silent reset. Next idea: `fastboot getvar all` right after a silent reset vs after a clean reboot (ABL's own reboot reason), and the GEN2 PON offsets from a real source.
+
 ### 2026-10-28 14:20 k78: PON reason after the k77s silent reset: hard_reset|smpl
 - `sctl kern.sweet_pon` (xnu 0197/0201): `type 01/04 rev 01 01 11 00 | 08:03 09:00 0a:00 0b:00 0c:00 0d:00 0e:00 0f:00 10:00 11:01 12:00 13:01 | reason hard_reset|smpl| warm 0 poff/fault 0/0`. PON_REASON1 = 0x03: bit0 hard reset, bit1 SMPL (sudden momentary power loss: the PMIC saw VBAT/VPH dip and restarted). If confirmed (baseline after a clean reboot pending), the silent resets are power brownouts, which ties them to the never-configured charger (the battery carries every load spike).
 - The "(repeat)" line from 0201 is not in usb-live.log (it uses IOLog; the console capture seems to miss it); the sysctl works. First battery line at 370.7 s.
