@@ -94,6 +94,9 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:20 dim 10% vs 50% on one boot (k81r): no difference
+- d10a 22.4 / 14.6, d50a 19.3 / 13.9, d10b 22.2 / 14.0, d50b 20.8 / 13.9 (swaps/s / panel updates/s). The LM_0 alpha is not the cause. Next: kernel68 vs kernel81 fresh boots.
+
 ### 2026-10-28 14:50 CI vs local bundle, fresh boots on kernel79: no difference
 | tag | bundle | swaps/s | panel/s |
 |---|---|---|---|
