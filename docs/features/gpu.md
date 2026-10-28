@@ -22,6 +22,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:30 k82: the breadcrumbs pin the silent reset: SQE start during recovery
+- kernel82 (0206), app soak k82s, 10 opens, then the phone reset at ~285 s (no fastboot for a moment: the soak said "no fastboot either", then fastboot came). Rescue (logs/k82-rescue.txt, total 445822, n 258048): `present: GPU hang or fault (fence 4158 done 4133)` (rbbm status1 13010301 status2 100 status3 f00001) -> crumbs `present: hang detected, recovery start`, `recover2 enter`, gx off/on, `smmu/gbif reset: sctlr e7 fsr 400 tlbstatus 1`, `cp_init enter (resume 0)`, `cp_init: init table done`, `cp_init: sqe written`, then nothing. The missing next crumb `cp_init: sqe_cntl=1` follows the CP_SQE_INSTR_BASE / CP_RB_BASE / CP_RB_CNTL writes and CP_SQE_CNTL=1.
+- Every recovery logs `tlbstatus 1` (CB TLB sync still active). Strong suspect: starting the SQE (it fetches microcode through the SMMU) while the TLB sync is pending wedges the bus -> SoC reset. xnu 0207 (sweettlbwait): poll TLBSTATUS until clear, and never start the SQE with a sync pending (fail the recovery instead).
+
 ### 2026-10-28 15:10 the recover2 window looks safe; suspect lost log lines + zap_load
 - Every access between `smmu/gbif reset` and `pre-me_init` (sweet_a6xx.c ~1489-1786: SMMU CB reads, GBIF_HALT writes, ~45 GX init-table writes, perfctr, SQE write to DRAM, CP_SQE/RB base, SQE_CNTL=1, the pre-me_init reads) also ran in 12 surviving recoveries from the identical state; there are no SMC calls in it. "rbbm halt ack deafbead" = RBBM_GBIF_HALT_ACK (0x17), harmless and unimplemented on A618. So the RAM log probably lost its last lines and the reset came later: zap_load (TZ PAS on an already-loaded image; Linux loads zap once per boot and then resumes) ~55%, SQE_CNTL=1 with TLB sync busy ~25%. Next: xnu 0206 with flushed breadcrumbs (a cache-clean after each crumb, in case the console ring is cacheable).
 
