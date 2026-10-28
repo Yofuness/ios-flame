@@ -45,7 +45,16 @@ from the backup with plistlib.
 | Speed | ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd | display-perf.md |
 | Reduce Transparency | works but slow (~6 swaps/s) | workday.md rtj/rtj2 |
 | Audio, Bluetooth, cellular, camera, sensors | not started | status.md |
-| Wi-Fi | scan works, iOS never joins the saved network (2026-10-27 ck1: no route, nettest -1009) | plan.md step 1 |
+| Wi-Fi | scan works, iOS never joins: it has no known network (no com.apple.wifi.known-networks.plist); 0193 answers COUNTRY_CODE and set 383, still 0 ASSOCIATE; get 103 CURRENT_NETWORK unanswered, get 423 not built | plan.md step 1; the user joins once in Settings |
+| GPU pool | grows in long app soaks: backboardd small BOs 16 -> 180 MB (first 15 min, then flat), 1-8 MB BOs +50 MB/h (sk68, 2 h: 192 -> 709 peak) | plan.md step 8 |
+| Block driver direct I/O | copyfile's fcopyfile data path gets EFAULT on /dev/ufsroot* files (vcopy uses its own read/write loop) | sweet_ufs.c strategy with user-space buffers |
+| Flashlight | kernel writes land (kernel69, sctl kern.sweet_torch=50) but the light is not confirmed; no Control Center hookup | plan.md step 6 |
 
 ## Fixed
 (move rows here with the date and the patch or change that fixed them)
+| Area | Fixed | How |
+|---|---|---|
+| Clock 3 h behind (timezone US/Pacific) | 2026-10-28 | /var/db/timezone/localtime -> zoneinfo/America/Toronto (toybox ln -sfn); kernel UTC was already right |
+| Storage (16 GB of 128 GB) | 2026-10-27 | /var on the 94 GB ufsroot1 volume, kernel68+ (xnu 0185-0194) |
+| Panel brightness | 2026-10-28 | tools/sunfish-panel-bright.sh VALUE (DCS 0x51); not yet the Control Center slider |
+| AegirPoster crash loop | 2026-10-28 | not seen in 50 min idle nor the 2 h sk68 app soak |

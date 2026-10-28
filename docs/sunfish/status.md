@@ -1,20 +1,21 @@
 # iOS on Pixel 4a (sunfish) — status
 
-Updated 2026-10-24 09:30 (rows below are current; the dated "Update" sections at the end are history). Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
+Updated 2026-10-28 02:10 (rows below are current; the dated "Update" sections at the end are history). Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
 github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 
 ## Working
 | Area | State | Notes |
 |---|---|---|
 | Boot | ✅ | RAM-only `fastboot boot`; iOS 16.7.16 (iPhone X userland) root on userdata |
+| Storage | ✅ | /private/var on /dev/ufsroot1 (94 GB HFSX) via /private/etc/fstab, kernel68+; escape: boot `sweetnofstab=1` |
 | CPUs | ✅ | 8 cores; A55 1804 MHz, A76 2208 MHz (read from OSM registers) |
-| Display | ✅ | 1080x2340, ABL splash buffer 0x9c000000; GPU-composited (Metal → Turnip), vsync-paced ~21 updates/s; brightness: `tools/sunfish-dim.sh N` |
+| Display | ✅ | 1080x2340, ABL splash buffer 0x9c000000; GPU-composited (Metal → Turnip), vsync-paced ~21 updates/s; brightness: panel `tools/sunfish-panel-bright.sh 4-511` (DCS 0x51, 2026-10-28) or blend `tools/sunfish-dim.sh N` |
 | GPU | ✅ | Adreno 618 at 565 MHz, Metal via SweetMetal2 (metal2vulkan + Turnip); see docs/sunfish/display-perf.md |
 | Touch | ✅ | ST FTM5 over SE7 I²C 0x49 (patch 0125, `sweettouch=2`) |
 | Buttons | ✅ | power, vol-down (PON), vol-up (PM6150L GPIO2, patch 0126) |
 | USB | ✅ | Ethernet 192.168.7.2, live kernel log (UDP 5140, full backlog: 0127) |
 | SSH | ✅ | dropbear + dash + toybox; `port/tools/sunfish-ssh` |
-| Real time | ✅ | PM6150 RTC + `sweetrtcoff` (`port/work/rtc-offset`) |
+| Real time | ✅ | PM6150 RTC + `sweetrtcoff` (`port/work/rtc-offset`); timezone America/Toronto since 2026-10-28 |
 | Stock apps | ✅ | 32 staged apps installed in /Applications |
 | Wi-Fi | ❌ | scan works; join does not (2026-10-27 ck1 on kernel60: no route, wifid CURRENT_NETWORK error 6). The earlier join + DHCP + Safari result was with wland and /var/local/wlan.conf |
 
@@ -30,6 +31,8 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
   Suspects: RF/PA rail voltages (L10C/L11C 3304, L9A 640 mV), extra AOP/QMP resource, firmware
   HL.3.2.2 vs flame's HL.3.2.0.
 - **`flamereboot=0`** — used for k10 to disable the auto-reboot; meaning unverified.
+
+- **Flashlight** — kernel69 + `sweettorch=1`: `/var/local/bin/sctl kern.sweet_torch=50` (5 s auto-off); writes land, light not yet seen.
 
 ## Not started
 Audio, Bluetooth, cellular, camera, sensors.
