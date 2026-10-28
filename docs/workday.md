@@ -669,3 +669,10 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - Clock: kernel UTC was right; the phone's timezone was US/Pacific (3 h behind). /var/db/timezone/localtime -> zoneinfo/America/Toronto; lock screen 1:58 Wed Oct 28 = PC time.
 - Wi-Fi (sk68 counts): 0193 answers set 51 (1/1) and set 383 (1277/1277); get 103 asked 7178x, answered 0; get 423 refused; 0 ASSOCIATE. iOS has no known network: needs one join in Settings by the user.
 - Phone left on k69t (kernel69, sweettorch=1), dim 10.
+
+## 2026-10-28 02:05-03:15 overnight run, part 3: the GPU pool leak
+- xnu 0196 (kernel70, CI 40641592758) `sweetbocensus=N`: per-client census of live 1-8 MB BOs older than 60 s.
+- bc1 (35.6 min app soak, census every 300 s): backboardd's own 1024 KB BOs 14 -> 38 -> 48 -> 60 (oldest = process age), the only growing group; 8 MB BOs flat 6-8. 2 real GPU hangs (rbbm 800005, ring pending, no SMMU fault, same signature as the failed sk430 one) recovered first path in 26.5/26.4 ms; backboardd respawned. Real-hang recovery is now proven.
+- bos1 (TU_DEBUG=bos, ~10 min): Turnip's live BOs are mostly command streams (cmd cs 1491, draw cs 1992, draw sub cs 2013, tile store cs 996), 6732 BOs 484 MB; no 1024 KB BO in its table while the kernel counts 46 -> 61. The 1 MB BOs live in the kernel after Turnip let go of them (suspect: the NativeAdreno backend's "retaining native allocation" paths; not in the logs we have).
+- /var/local/mtl2.log is 321 MB (never rotated).
+- Phone left on bc1 (kernel70, sweetbocensus=300), dim 10, mtl2-env empty as before.

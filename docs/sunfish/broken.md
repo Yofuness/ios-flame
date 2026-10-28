@@ -46,7 +46,8 @@ from the backup with plistlib.
 | Reduce Transparency | works but slow (~6 swaps/s) | workday.md rtj/rtj2 |
 | Audio, Bluetooth, cellular, camera, sensors | not started | status.md |
 | Wi-Fi | scan works, iOS never joins: it has no known network (no com.apple.wifi.known-networks.plist); 0193 answers COUNTRY_CODE and set 383, still 0 ASSOCIATE; get 103 CURRENT_NETWORK unanswered, get 423 not built | plan.md step 1; the user joins once in Settings |
-| GPU pool | grows in long app soaks: backboardd small BOs 16 -> 180 MB (first 15 min, then flat), 1-8 MB BOs +50 MB/h (sk68, 2 h: 192 -> 709 peak) | plan.md step 8 |
+| GPU pool | grows in long app soaks: backboardd small BOs = Turnip command streams 16 -> 180 MB (first 15 min, then flat); own 1024 KB kernel BOs never freed, ~1 per 25-30 s while opening apps, not tracked by Turnip (bc1/bos1, 2026-10-28) | plan.md step 8 |
+| /var/local/mtl2.log | 321 MB (2026-10-28), appended at every Metal client start, never rotated | truncate now and then; rotate in the frontend |
 | Block driver direct I/O | copyfile's fcopyfile data path gets EFAULT on /dev/ufsroot* files (vcopy uses its own read/write loop) | sweet_ufs.c strategy with user-space buffers |
 
 ## Fixed
