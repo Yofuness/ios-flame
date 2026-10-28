@@ -13,6 +13,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 15:00 why sleep-in lagged: the CPU fade is slow, not a stalled tick
+- vsyncFired runs the fade inline (SweetFramebuffer.cpp:429): each step is a volatile read-modify-write of all ~2.5M words of the 1080x2340 surface through an uncached kernel mapping, ~0.35-0.7 s per step, 2.4-3.9 s for all 7. No tick (and no vsync notification to backboardd) fires meanwhile: the 5 s stats line slips 2.24-3.86 s per off; DCS 28 came 2.38-2.75 s after display off (k78, k79). "fade 5 at req on" = the fade was still running when the 3 s off ended.
+- Fix (next, 0205): black the screen with the MDP LM_0 blend alpha (as tools/sunfish-dim.sh does: 0x0ae45000 +0x24/+0x3c/+0x54/+0x6c, CTL_0 FLUSH 0x0ae02018 bit 6) instead of the CPU fade; restore the saved alpha on wake.
+
 ### 2026-10-28 14:40 k79 (xnu 0203): wakes 10/10, sleep-in 4/10 (the fade stalls at step 5)
 - 10 cycles (`flame-cmd.py 'key 0'`, 3 s off / 3 s on): every off frame black, every wake frame the picture, no failed lines, 0 GPU hangs. Log: 12 req off (all asleep 0, fade 0), 12 req on: 5 at (1,7) with 11/29, 7 at (0,5) with no DCS. So in 6 cycles the tick's fade stopped at step 5 (picture at 1/32: black on the webcam) and the sleep-in condition (fade > 6) never fired. One wake logged 11 but no 29.
 - Fix in progress: the panel thread finishes the fade itself 150 ms after `req off`.
