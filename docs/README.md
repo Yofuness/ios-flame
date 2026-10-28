@@ -25,7 +25,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Charging](features/charging.md) | 🟡 | charger already configured by XBL/ABL (FAST_CHARGE, FCC 2.0 A, FV 4.45 V, ICL 1.5 A); the drain under load is the USB source budget (TB4 + 240 W cable: +968 mA) | 2026-10-28 |
 | [Apps](features/apps.md) | ✅ | 32 staged apps installed in /Applications; crash-looping launchd jobs dropped | 2026-10-28 |
 | [Sleep and wake](features/sleep-wake.md) | ✅ | power-button sleep/wake; panel off via LM alpha blank + DCS 28/10, on via 11/29 (sweetpanelsleep=1, xnu 0202-0205, 10/10) | 2026-10-28 |
-| [Audio](features/audio.md) | ⬜ | speaker amps answer on I²C (SE9 0215 + resets 0217); the ADSP boots and runs, then dies in its sensor PD (needs a FastRPC file listener) | 2026-10-28 |
+| [Audio](features/audio.md) | 🟡 | speaker amps answer on I²C (SE9 0215 + resets 0217); the ADSP boots and runs, then dies in its sensor PD (needs a FastRPC file listener) | 2026-10-28 |
 | [Camera](features/camera.md) | ⬜ | SE9 I²C up (shared with the camera PMIC slg51000 @0x75); PMIC enable GPIOs behind sweetcampmic (0218), probe pending | 2026-10-28 |
 | [Sensors](features/sensors.md) | ⬜ | survey done: all behind the SSC in the ADSP; waits for the ADSP boot | 2026-10-28 |
 | [Bluetooth](features/bluetooth.md) | ⬜ | survey done: WCN3990 over a QUP UART + QCA firmware, then a Broadcom shim for bluetoothd; later | 2026-10-28 |

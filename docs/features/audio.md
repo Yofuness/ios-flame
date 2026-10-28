@@ -1,5 +1,5 @@
 # Audio
-**State:** ⬜ not started; survey done 2026-10-28. **Updated:** 2026-10-28.
+**State:** 🟡 partial: amps answer on I²C, the ADSP boots and runs, no sound yet (sensor PD needs a FastRPC file listener). **Updated:** 2026-10-28.
 
 ## Facts
 Hardware (../recon/live.dts):
