@@ -19,6 +19,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 08:20-08:40 bl2: the leaking 1 MiB BOs are Turnip 'cmd cs' BOs that are never retired
+- Linux-built bundle (tools/build-metal2-linux.sh, turnip 0106 + per-pid Turnip logs in /var/local/turnip/), kernel70 `sweetbocensus=300`, 4455 mV; app soak bl2 + bl2b: 53 opens, 52 ok (1 Photos open failure, FBSOpenApplicationServiceErrorDomain 5).
+- 0106: every 1 MiB BoAlloc in backboardd is named 'cmd cs'. alloc1m: pid 58 2 (t 122) -> 6 -> 11 -> 19 -> 28 -> 34 (t 576); pid 740 1 (t 30) -> 5 -> 10 -> 18 -> 25 -> 26 (t 442). retired1m 0 and free1m 0 throughout, 0 skip lines, retire ring 0-49/256, never FAILED; live_tu_bos levels off at ~7.5-8.2k. One identical 8-frame backtrace per pid (two variants in pid 740), being symbolized.
+- Kernel census: backboardd 1024 KB n 10 (t 332, oldest 209 s) / 11 (t 918, new pid 740, oldest 272 s). That fits Turnip's count once the census' 60 s age filter is taken into account.
+- So the 1 MiB BOs are command-stream BOs Turnip still holds (never bo_finish'd), not a backend free-path bug.
+
 ### 2026-10-28 07:00-08:00 turnip 0106 leak log, bl1 (no data)
 - turnip 0106 (`SWEET_BOLEAK=1`, CI 40676463855 after 2 runs lost to "job not acquired": GitHub macOS arm64 capacity): logs 1 MiB BoAlloc with backtraces, alloc/retire/free counts and the 256-entry retire ring every 10 s, plus skip reasons. Hooks in tu_knl_darwin.cc darwin_bo_init / bo_finish / reap_locked / queue_submit.
 - bl1 (kernel70 `sweetbocensus=300`, 4456 mV): 0106 live (4 SWEETBOLEAK lines at ~60 s), then a GPU hang at 227 s with failed recovery (see [gpu](gpu.md)); the respawned backboardd reopened /var/local/turnip-backboardd.log and truncated it (0 SWEETBOLEAK lines left; its own Turnip init got VK_ERROR_OUT_OF_DEVICE_MEMORY at BO init). Soak stopped at cycle 2 (7 opens ok, Safari open failed, FBSOpenApplicationServiceErrorDomain 5). Pool before the hang: 389-417 MB in use, peak 525 MB at 220 s; backboardd 257-297 MB (allocs 6204-6500, frees 1631-1652; live <1M 113-115 / 44 MB).

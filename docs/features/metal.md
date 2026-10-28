@@ -20,6 +20,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 08:00-08:25 Metal bundle built on Linux
+- tools/build-metal2-linux.sh (e2057b6): full build 5 min 11 s, no-change rebuild 14 s, on this PC with the theos iPhoneOS16.5 SDK. Matches CI run 40676463855 in size, dylibs, exports and install names (one weak-defined libc++ export fewer; a few extra weak libc++ imports).
+- bl2: installed with sunfish-metal2-install.sh, UI drawn (lock and home screen), 0 dyld errors, a 15-min app soak ran on it.
+- SweetMetal2: per-process Turnip logs in /var/local/turnip/<proc>-<pid>.log while that directory exists (a respawned client used to truncate the shared log).
+
 ### 2026-10-26 ~19:20-19:35 nbproto bridge + Reduce Transparency repro (kernel52, sk52b boot)
 - Installed work/metal2-nbproto bundle (class_addProtocol NBFunction/NBLibrary): "is not a MTLFunction" lines after backboardd restart: 0 (was thousands per boot).
 - RT run 1 (rtj): `EnhancedBackgroundContrastEnabled=1`, cfprefsd killed, backboardd restarted, 90 s on the lock screen only: no hang. pipelines.log 8664 -> 8790; drawlog 40 passes.

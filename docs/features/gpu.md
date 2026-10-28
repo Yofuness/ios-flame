@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 08:30 bl2: real GPU hang recovered
+- kernel70, uptime 615.9 s: fence 11512 done 11420, smmu fsr 0; recovered in 26326 us; backboardd pid 58 killed, pid 740 came up and the soak went on. (bl1's failed recovery had the SMMU stalled; this one did not.)
+
 ### 2026-10-28 07:49 bl1: real GPU hang, recovery failed (new signature)
 - kernel70 + turnip 0106, 2nd app-soak cycle, uptime 227.4 s: fence 2892 done 2858, smmu fsr 0 far 0; rbbm status c30d35, status3 ce00000 (bit24 smmu stalled), cb fsr raw 400, cp_status1 8113471e. recover2 went through cp stop / gbif halt / sw reset / gx off / gx on, then "GPU not recovered" at 231.4 s; the kernel killed backboardd anyway. Swaps came back (99 in the 5 s to 246 s), then the screen idled. Unlike bc1's hangs (rbbm 800005, no SMMU stall), this one has the SMMU stalled. 3 real hangs in ~45 min of kernel70 soaks vs 0 in sk52b-sk68: kernel70 (0196) or turnip 0106 still a suspect.
 
