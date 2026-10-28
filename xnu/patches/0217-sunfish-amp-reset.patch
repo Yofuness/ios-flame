@@ -1,0 +1,178 @@
+From 62b45d9726bd3c13401404943e99c4e5f09612ca Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 17:30:25 -0400
+Subject: [PATCH] sunfish: sweetampreset=1 releases the CS35L41 amp resets
+ (PM6150L GPIO 8/11)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_spmi.c              | 90 +++++++++++++++++++++++++++++--
+ bsd/dev/sweet_spmi.h              |  3 +-
+ iokit/Kernel/arm/SweetBattery.cpp |  2 +
+ 3 files changed, 90 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index c18ea33..773f4be 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -7,6 +7,8 @@
+  * Also the PM8150 RTC (peripheral 0x60) for the time of day (SweetPlatformExpert.cpp).
+  * 0190: one exception, the PM6150L flash LED (SID 5, 0xd300) for the torch:
+  * sweet_spmi_write accepts only its six control registers (sweettorch=1).
++ * 0217: and PM6150L GPIO 8/11 (SID 4, 0xc700/0xca00), the CS35L41 amp resets
++ * (sweetampreset=1): MODE/VIN/PULL/OUT_SRC/OUT_DRV/EN only.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -100,6 +102,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	bool ok = sid == 0 && (peripheral == 0x10 || peripheral == 0x11 ||
+ 	    peripheral == 0x12 || peripheral == 0x13 || peripheral == 0x48 || peripheral == 0x60);
+ 	ok = ok || (sid == 5 && peripheral == 0xd3); /* 0190: PM6150L flash LED */
++	ok = ok || (sid == 4 && (peripheral == 0xc7 || peripheral == 0xca)); /* 0217: amp reset GPIOs */
+ 	ok = ok || (sid == 0 && peripheral == 0x08); /* 0197: PM6150 PON reasons, read only */
+ 	if (!sp_ready || !out || addr > 0xffffu || !ok) {
+ 		return -1;
+@@ -147,9 +150,13 @@ int
+ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ {
+ 	unsigned reg = addr & 0xffu;
+-	if (sid != 5 || addr > 0xffffu || (addr & 0xff00u) != 0xd300u ||
+-	    (reg != 0x40 && reg != 0x43 && reg != 0x46 && reg != 0x47 &&
+-	    reg != 0x49 && reg != 0x4c)) {
++	bool torch = sid == 5 && (addr & 0xff00u) == 0xd300u &&
++	    (reg == 0x40 || reg == 0x43 || reg == 0x46 || reg == 0x47 ||
++	    reg == 0x49 || reg == 0x4c);
++	/* 0217: PM6150L GPIO 8 and 11 (amp resets), MODE..EN_CTL minus 0x43 */
++	bool ampgpio = sid == 4 && ((addr & 0xff00u) == 0xc700u || (addr & 0xff00u) == 0xca00u) &&
++	    reg >= 0x40 && reg <= 0x46 && reg != 0x43;
++	if (addr > 0xffffu || !(torch || ampgpio)) {
+ 		printf("SWEET TORCH: refused write sid %u %#x <- %#x\n", sid, addr, val);
+ 		return EPERM;
+ 	}
+@@ -191,7 +198,7 @@ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ 				printf("SWEET TORCH: write %#x status %#x\n", addr, status);
+ 				return EIO;
+ 			}
+-			printf("SWEET TORCH: sid 5 %#x <- %#x\n", addr, val);
++			printf("SWEET TORCH: sid %u %#x <- %#x\n", sid, addr, val);
+ 			return 0;
+ 		}
+ 		delay(1);
+@@ -337,4 +344,79 @@ sweet_torch_register(void)
+ 	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
+ 	thread_call_enter_delayed(reg, deadline);
+ }
++/*
++ * 0217: sweetampreset=1 releases the CS35L41 resets (DT: reset-gpios = <&pm6150l_gpios
++ * 8/11 GPIO_ACTIVE_HIGH>, so released = output HIGH). Register meanings from Linux
++ * pinctrl-spmi-gpio.c. LV/MV subtypes (0x10-0x13): MODE_CTL [1:0] = 1 output,
++ * DIG_OUT_SOURCE_CTL bit7 = level, [3:0] = 0 constant (high confidence). Older subtypes:
++ * MODE_CTL [6:4] = 1 output, [3:1] = 0 normal, bit0 = level (medium confidence).
++ */
++static void
++ampreset_dump(const char *tag, unsigned base)
++{
++	static const uint8_t regs[6] = { 0x40, 0x41, 0x42, 0x44, 0x45, 0x46 };
++	uint8_t v[6];
++	for (unsigned i = 0; i < 6; i++) {
++		v[i] = 0xee;
++		(void)sweet_spmi_read(4, base + regs[i], &v[i]);
++	}
++	printf("SWEET AMPRESET: %s %#x 40 %02x 41 %02x 42 %02x 44 %02x 45 %02x 46 %02x\n",
++	    tag, base, v[0], v[1], v[2], v[3], v[4], v[5]);
++}
++
++static void
++ampreset_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	static const unsigned bases[2] = { 0xc700u, 0xca00u }; /* GPIO 8 (amp 0x40), 11 (0x41) */
++	if (sweet_spmi_init() != 0) {
++		printf("SWEET AMPRESET: no SPMI\n");
++		return;
++	}
++	for (unsigned g = 0; g < 2; g++) {
++		unsigned b = bases[g];
++		uint8_t type = 0, subtype = 0;
++		if (sweet_spmi_read(4, b + 0x04, &type) != 0 ||
++		    sweet_spmi_read(4, b + 0x05, &subtype) != 0 || type != 0x10) {
++			printf("SWEET AMPRESET: %#x TYPE %#x SUBTYPE %#x: not a GPIO, no writes\n",
++			    b, type, subtype);
++			continue;
++		}
++		printf("SWEET AMPRESET: %#x TYPE %#x SUBTYPE %#x\n", b, type, subtype);
++		ampreset_dump("before", b);
++		bool lvmv = subtype >= 0x10 && subtype <= 0x13;
++		int err;
++		if (lvmv) {
++			if ((err = sweet_spmi_write(4, b + 0x40, 0x01)) == 0 &&
++			    (err = sweet_spmi_write(4, b + 0x44, 0x80)) == 0) {
++				err = sweet_spmi_write(4, b + 0x46, 0x80);
++			}
++		} else {
++			if ((err = sweet_spmi_write(4, b + 0x40, 0x11)) == 0) {
++				err = sweet_spmi_write(4, b + 0x46, 0x80);
++			}
++		}
++		if (err) {
++			printf("SWEET AMPRESET: %#x write failed %d\n", b, err);
++		}
++		ampreset_dump("after", b);
++	}
++}
++
++/* Called from SweetBattery::start; no-op without sweetampreset=1. */
++void
++sweet_ampreset_register(void)
++{
++	int on = 0;
++	(void)PE_parse_boot_argn("sweetampreset", &on, sizeof(on));
++	if (on != 1) {
++		return;
++	}
++	thread_call_t c = thread_call_allocate(ampreset_late, NULL);
++	if (!c) {
++		return;
++	}
++	uint64_t deadline;
++	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(c, deadline);
++}
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_spmi.h b/bsd/dev/sweet_spmi.h
+index 00b98a9..72520d7 100644
+--- a/bsd/dev/sweet_spmi.h
++++ b/bsd/dev/sweet_spmi.h
+@@ -8,8 +8,9 @@ extern "C" {
+ int sweet_spmi_init(void);
+ /* Thread context only; 0 success, -1 failure; *out unchanged on failure. */
+ int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+-/* 0190: flash LED control registers only (SID 5, 0xd3xx); 0 or errno. */
++/* 0190: flash LED control registers only (SID 5, 0xd3xx); 0217: + SID 4 GPIO 8/11; 0 or errno. */
+ int sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val);
++void sweet_ampreset_register(void); /* 0217 */
+ void sweet_torch_register(void);
+ #ifdef __cplusplus
+ }
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 4290200..d2574ec 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -18,6 +18,7 @@
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ extern "C" void sweet_torch_register(void); /* 0190 */
++extern "C" void sweet_ampreset_register(void); /* 0217 */
+ extern "C" void sweet_camprobe_register(void); /* 0211, bsd/dev/sweet_camprobe.c */
+ 
+ /* 0198: the PON line again later (the live log starts at ~41 s) and as kern.sweet_pon;
+@@ -353,6 +354,7 @@ SweetBattery::start(IOService *provider)
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
+ 	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
++	sweet_ampreset_register(); /* 0217: no-op without sweetampreset=1 */
+ 	sweet_camprobe_register(); /* 0211: no-op without sweetcamprobe=1 */
+ 	/* 0197: log the PM6150 PON reason registers once (read only); sweetpon=0 skips. */
+ 	int pon = 1;
+-- 
+2.56.0
+
