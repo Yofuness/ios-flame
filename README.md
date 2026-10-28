@@ -49,7 +49,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Camera](docs/features/camera.md) | ⬜ | not started; plan: sensor ID over CCI (~1 week), then raw frames via RDI |
 | [Bluetooth](docs/features/not-started.md) | ⬜ | not started |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
-| [Sensors](docs/features/not-started.md) | ⬜ | accelerometer, gyro, proximity, ambient light: not started |
+| [Sensors](docs/features/sensors.md) | ⬜ | not started; all sensors sit behind the audio DSP, so they wait for it |
 
 ## Quick start
 

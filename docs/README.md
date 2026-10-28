@@ -27,6 +27,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Sleep and wake](features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel is not switched off | 2026-10-23 |
 | [Audio](features/audio.md) | ⬜ | not started; survey done: boot the ADSP (pas-id 1), APR to Q6AFE, CS35L41 amps on SE9 | 2026-10-28 |
 | [Camera](features/camera.md) | ⬜ | not started; survey done: rear IMX363 via CCI + CSIPHY0 -> RDI raw frames first | 2026-10-28 |
+| [Sensors](features/sensors.md) | ⬜ | survey done: all behind the SSC in the ADSP; waits for the ADSP boot | 2026-10-28 |
 | [Not started](features/not-started.md) | ⬜ | Bluetooth, cellular, sensors (audio and camera have their own files now) | 2026-10-23 |
 
 States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started.

@@ -23,13 +23,14 @@ B8. [diagnosed 2026-10-28, fix deferred: low impact] **PhotosFileProvider crashe
 B9. [ ] **Panel-rate ceiling** (~21 updates/s at best; present blit waits behind backboardd; features/smoothness.md). After priority 3. Days, uncertain.
 B10. [analysed 2026-10-28; needs a phone test] **Reduce Transparency slow**: the "is not a MTLFunction" lines were Apple's Metal warning (NBFunction lacked the protocol) and are fixed since a1f539e (nbproto, 0 lines after). No special function types (no constantValues in QuartzCore); RT runs CA's normal blur/downsample shaders in new pipeline mixes. Slow only in app opens/dock (5.8-12 swaps/s; home swipes 22-28.8), 17-25 ms GPU per submit vs 13, longest 70 / 311 ms, GPU 11-44% busy. Next [phone]: RT off vs on benches + one MESA_GPU_TRACES capture during an app open with RT on (newest kernel, undo ready: delete the pref, kill cfprefsd, restart backboardd).
 B11. [ ] **UI watchdog only catches a frozen UI**, not a kernel hang with swaps running. Extend it once B4 says what the resets are.
-B12. [ ] **Sensors** (accelerometer, gyro, proximity, ambient light): survey first (DT, the SSC/sensors DSP vs direct I²C). Unknown size.
+B12. [surveyed 2026-10-28; waits for the ADSP] **Sensors**: none is on an AP bus; all sit behind the SSC in the ADSP (features/sensors.md). Path: ADSP boot (audio M0) -> QRTR + QMI SNS client -> accelerometer -> a HID service for auto-rotation (weeks). Cheap fallback: a sysctl that injects rotation events (1-2 days).
 B13. [ ] **Battery % while discharging** unchecked (set aside by the user; needs the phone off the charger 30 min).
 B14. [ ] **Charging** (~0.5 A drain under load on the charger): PMIC charger writes; ask the user before any write (docs/reference/charger-regs.md).
 B15. [ ] **Bluetooth**: survey first (WCN3990 BT over the same SoC path as Wi-Fi?). Weeks.
 B16. [ ] **Audio** (dream): **Audio M0: boot the ADSP** (features/audio.md): reuse wland's PAS loader with pas-id 1 + adsp.mdt; the glink "lpass" edge must come up. Then M1 a speaker beep (APR + CS35L41, -20 dB, ≤3 s). M0 tool adspboot is built, not run (features/audio.md).
 B17. [ ] **Camera** (dream): **Camera M1: read the rear sensor's chip ID** (features/camera.md): first read CAMCC/GDSC registers read-only and find the camx sensor bins in the vendor image; then slg51000 + camcc + CCI drivers. (features/camera.md)
 B18. [ ] Cellular: not planned.
+B19. [ ] **locationd respawn loop** (exec'd 223x in the live log) and **lskdd re-exec every ~1 s** (seen in app soaks): find the exit reason in the log; drop or fix if not needed. ~1 h, logs first, then [phone].
 
 ## Done today (2026-10-28)
 Wi-Fi join at boot, GPU memory leak (bridge 0105), local builds (userland, metal2, kernel in a macOS VM with hibernate), per-feature docs, work on main.
