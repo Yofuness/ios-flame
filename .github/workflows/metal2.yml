@@ -7,7 +7,7 @@ name: metal2
 on:
   workflow_dispatch:
   push:
-    branches: [sunfish]
+    branches: [main]
     paths: [.github/workflows/metal2.yml, "phone/metal2/**", "phone/turnip/**"]
 
 env:
