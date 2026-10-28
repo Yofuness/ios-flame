@@ -19,6 +19,14 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 10:35-11:01 bl4: bridge 0105 (spare command pool cap 8) stops the growth
+- kernel70 `sweetbocensus=300`, 4455 mV, Linux-built bundle 7053013 (bridge 0105, turnip 0107 off by default), SWEET_BOLEAK=1 + mtl2 telemetry on.
+- 20 min app soak: 72 opens, 0 failures, 0 GPU hangs/faults/device-lost, 0 reboots.
+- Pool: first 198 MB, peak 324, last 245 MB (sk68 2 h: 192 -> 709). Census backboardd: live 1461 / 1591 / 1214 / 1541 BOs, 235 / 205 / 206 / 234 MB at t 333 / 634 / 937 / 1240 s: flat. No 1024 KB class.
+- 0106: alloc1m 157, free1m 152 at t 1377 (gap 2-8 all the time): the 1 MiB cmd cs BOs are freed now, through the pool destroy. live_tu_bos 1400-1800, flat.
+- Pools: made 485, kept <= 8, capped 477 over the soak (~0.4 pools/s destroyed).
+- Bench bl4p: 21.2 / 22.1 swaps/s, 16.0 / 16.2 panel updates/s (with logging + telemetry on). A/B on one boot (cap 0/8/32) running to separate the cap's cost from the logging.
+
 ### 2026-10-28 08:45-09:31 bl3: turnip 0107 (trim cs BOs > 256 KiB on reset) stops the 1 MiB leak but costs speed
 - kernel70 `sweetbocensus=300`, 4456 mV, Linux-built bundle with 0107. Bench bl3p: 19.7 / 20.3 swaps/s but 13.6 / 13.6 panel updates/s (baseline ~20-22).
 - 20 min app soak (72 opens, 0 fail, 0 GPU hangs, 0 reboots): alloc1m 0 throughout, trims 308 -> 3619; the census has no 1024 KB class any more.
