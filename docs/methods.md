@@ -16,8 +16,10 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
 ## Building
 - Kernel: edit `work/src/xnu`, commit there, save the diff as `xnu/patches/NNNN-sunfish-*.patch`. CI: `gh workflow run xnu.yml --ref main`, `gh run watch ID`, `gh run download ID -n xnu-kernel -D work/kernelNN`.
 - Incremental xnu CI skips new files (b5cb57f); `git add -A` in work/src/xnu once committed the whole untracked tree into a patch (2026-10-24): add paths only.
-- Metal bundle: pushing `phone/turnip/patches` or `phone/metal2` to main starts the metal2 CI; `gh run download ID -D DIR`, then `tools/sunfish-metal2-install.sh <dir containing SweetMetal2.bundle> --no-restart`.
-- Phone tools: pushing `phone/tools` to main starts the userland CI; `gh run download ID -n ios-userland -D DIR`, then `python3 -I tools/flame-files.py put DIR/NAME /var/local/bin/NAME 755`.
+- Local builds on this Linux PC (since 2026-10-28; no runner queue). They need the iOS SDK in research/sdk/theos-sdks/iPhoneOS16.5.sdk (theos/sdks, gitignored), clang + ld64.lld, ldid, and per-user Rust 1.98.0 with aarch64-apple-ios in ~/.cargo/bin. tools/linux-ios-cc is the clang wrapper and tools/linux-ios-sign the signer (ldid; codesign on macOS).
+  - Metal bundle: `tools/build-metal2-linux.sh` (full 5 min 11 s, no-change 14 s) -> work/metal2-linux/out/phone/metal2/out; then `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out --no-restart`. Matches CI run 40676463855 in size, dylibs, exports and install names (SDK version 16.5 vs CI 17.5; a few extra weak libc++ imports).
+  - Phone tools: `tools/build-userland-linux.sh` (35 s, 18 binaries) -> work/userland-linux/out; then `python3 -I tools/flame-files.py put work/userland-linux/out/NAME /var/local/bin/NAME 755`.
+- CI is the fallback and still builds on push: phone/turnip/patches or phone/metal2 -> metal2 CI (`gh run download ID -D DIR`); phone/** -> userland CI (`gh run download ID -n ios-userland -D DIR`). macOS arm64 runners often fail with "job not acquired" (3 of 4 metal2 runs on 2026-10-28).
 
 ## RAM-log rescue (the previous boot's kernel log)
 - The shim rescues the previous kernel's RAM log on every boot into the last 1153 blocks of userdata (rescue block 28728186). Read it before rebooting, or it is lost.

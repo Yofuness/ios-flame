@@ -15,7 +15,11 @@ Kernel:
 5. Run `gh run watch ID --exit-status`, then `gh run download ID -n xnu-kernel -D work/kernelNN`, using the next
    free NN.
 
-metal2 and userland start on push. Find the run with `gh run list -L 3`.
+metal2 and userland: build locally first (no runner queue):
+- `tools/build-metal2-linux.sh` (about 5 min full, seconds when little changed) -> work/metal2-linux/out/phone/metal2/out
+- `tools/build-userland-linux.sh` (about 35 s) -> work/userland-linux/out
+On failure return the first 20 error lines of the script's output. The CI is the fallback: it starts on push;
+find the run with `gh run list -L 3`. Pushing still triggers it, which is fine.
 
 Rules:
 - Never force-push. Never push any branch other than `main` (the `sunfish` branch is frozen).

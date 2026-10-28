@@ -28,13 +28,14 @@
   - Add new findings or next steps as you find them.
 - **New plan:** move the old one to `docs/plans/YYYY-MM-DD-<topic>.md`. Put a short header on it saying
   what was done, what was not, and what replaced it, then write the new `plan.md`.
-- **Metal bundle (Turnip and bridge patches):** pushing `phone/turnip/patches` or `phone/metal2` to `main` starts the
-  metal2 CI.
-  1. `gh run download ID -D DIR`
-  2. `tools/sunfish-metal2-install.sh <dir containing SweetMetal2.bundle> --no-restart`
-- **Phone tools:** pushing `phone/tools` to `main` starts the userland CI.
-  1. `gh run download ID -n ios-userland -D DIR`
-  2. `python3 -I tools/flame-files.py put DIR/NAME /var/local/bin/NAME 755`
+- **Metal bundle (Turnip and bridge patches):** build locally, CI only as a fallback.
+  1. `tools/build-metal2-linux.sh`
+  2. `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out --no-restart`
+- **Phone tools:** build locally, CI only as a fallback.
+  1. `tools/build-userland-linux.sh`
+  2. `python3 -I tools/flame-files.py put work/userland-linux/out/NAME /var/local/bin/NAME 755`
+- **CI fallback:** pushing `phone/turnip/patches` or `phone/metal2` to `main` starts the metal2 CI, and `phone/**` starts
+  the userland CI (details in `docs/methods.md`). The kernel still builds only in CI.
 - **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
   provides the USB network link.
 
