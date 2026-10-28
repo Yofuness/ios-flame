@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 18:35 adsp3/adsp4 (kernel93): early glink up, QRTR services seen, same sensor fatal
+- adsp3: PAS shutdown (SCM PIL 6) on a never-started ADSP blocked in the SMC forever (process unkillable; reboot cleared it). d70ac33: shutdown only when SMP2P shows an earlier run.
+- adsp4 (fresh boot, a184a48 + d70ac33): PAS as before (all 0/0). glink lpass edge at once: version 1 features 7; the ADSP opens 6 channels: glink_ssr, fastrpcglink-apps-dsp, LOOPBACK_CTL_LPASS, apr_audio_svc, apr_apps2, IPCRTR (all OPEN_ACKed; IPCRTR asks for 52-byte intents x3).
+- QRTR: HELLO from node 5 (answered), then 11 NEW_SERVER from node 5 (svc/inst/port): 769/1/f, 66/18945/3, 43/5122/2, 366/1/10, 15/8193/1, 15/8449/9, 15/8705/a, 400/1/e, 51/1281/6, 51/3073/d, 24/257/8. No NEW_LOOKUP, no data on any other channel (FastRPC silent).
+- Still no ready; ~10 s in: `sensor_process ... rcinit_worker:0xf7:sar.cc:27:chre_utils fatal`. So it isn't waiting on a QRTR lookup. Leading guess (~50%): the SEE registry reads its files through FastRPC reverse calls (apps_std via adsprpcd on the AP), which nobody serves, and CHRE's SEE helper gives up. A FastRPC listener is a large job (SMMU-mapped buffers): parked as a dream item; next is read-only analysis of what the fastrpc channel would carry.
+- Note: the webcam showed the screen off at the end: iOS auto-lock on the idle lock screen (sweetpanelsleep=1), not a fault.
+
 ### 2026-10-28 17:55 adsp1/adsp2 (kernel93, booted k93a): the ADSP authenticates and runs, then err-fatal in the sensor PD
 - adsp1: `pas supported(1) -> 0/0` stopped the tool; 1cf0cf5 only logs it now (wland never asks).
 - adsp2: votes lcx/lmx 384 -> 0/0; mdt 28 phdrs, linked 0x93c00000-0x95e00000, relocated to 0x96b00000; pas init (8860 B metadata) 0/0; mem setup 0x96b00000+0x2200000 0/0; 26 segments 15963961 bytes; smp2p out 443; QMP `load_state adsp on` acked; auth-and-reset 0/0. Then no ready in 10 s; glink items 478/480 present, 479 none; crash reason (SMEM 423): `err_qdi.c:1040:EF:sensor_process:0x1:rcinit_worker:0xf9:sar.cc:27:chre_utils fatal`. The phone stayed up, no SMMU/XPU lines.
