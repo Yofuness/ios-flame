@@ -30,7 +30,7 @@ B15. [ ] **Bluetooth**: survey first (WCN3990 BT over the same SoC path as Wi-Fi
 B16. [ ] **Audio** (dream): **Audio M0: boot the ADSP** (features/audio.md): reuse wland's PAS loader with pas-id 1 + adsp.mdt; the glink "lpass" edge must come up. Then M1 a speaker beep (APR + CS35L41, -20 dB, ≤3 s). M0 tool adspboot is built, not run (features/audio.md).
 B17. [ ] **Camera** (dream): **Camera M1: read the rear sensor's chip ID** (features/camera.md): first read CAMCC/GDSC registers read-only and find the camx sensor bins in the vendor image; then slg51000 + camcc + CCI drivers. (features/camera.md)
 B18. [ ] Cellular: not planned.
-B19. [ ] **locationd respawn loop** (exec'd 223x in the live log) and **lskdd re-exec every ~1 s** (seen in app soaks): find the exit reason in the log; drop or fix if not needed. ~1 h, logs first, then [phone].
+B19. [ ] **Respawn loops**: in the sk71 soak lskdd is exec'd every ~1.03 s (5726 times by uptime 6357 s), bluetoothd / wifip2pd / fairplayd.H2 every ~10 s; locationd 0 (its 223 execs were earlier boots). The kernel log shows no exit reason. Next [phone]: `oslog` / launchctl for lskdd's exit reason; drop it with tools/sunfish-launchd-drop.sh only if nothing needs it (it may be keybag-related: check first). ~1 h.
 
 ## Done today (2026-10-28)
 Wi-Fi join at boot, GPU memory leak (bridge 0105), local builds (userland, metal2, kernel in a macOS VM with hibernate), per-feature docs, work on main.
