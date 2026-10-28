@@ -68,9 +68,10 @@ echo "== wland + phone tools"
 sh phone/wifi/build.sh
 cp phone/wifi/out/wland phone/wifi/out/adspboot "$OUT/"
 bash phone/tools/build.sh || echo "WARNING: some phone tools failed"
-for t in psx pstack netsvc nettest oslog prefs openapp lsreg memwarn pmem a2s vtdecode vcopy sctl; do
-	[ -f phone/tools/out/$t ] && cp phone/tools/out/$t "$OUT/" || true
-done )
+# every Mach-O phone/tools/build.sh made (a fixed list missed new tools such as fcopy)
+for f in phone/tools/out/*; do
+	[ -f "$f" ] && [ -x "$f" ] && file -b "$f" | grep -q Mach-O && cp "$f" "$OUT/"
+done; true )
 
 echo "== check and sign"
 cd "$OUT"
