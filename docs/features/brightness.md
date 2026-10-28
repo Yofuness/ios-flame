@@ -18,6 +18,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:20 k92a (kernel92 = 0214+0216, sweetbl=2, DIM=100): Control Center slider works
+- Boot: screen visible; DCS 51 = 227 at 37.38 s (from the slider's stored `brightness`), ack 0.
+- Slider to the bottom: DCS 222, 188, 156, 118, 80, 46, 32, panel visibly dimmer; back to ~40%: 36 ... 230, panel brighter (webcam frames sl_bottom / sl_half). No value above 230; no errors.
+- Open: the ~40% slider fill gave 230 (CoreBrightness's curve is not linear in the fill).
+
 ### 2026-10-28 17:10 k90a (kernel90, sweetbl=2 sweettorch=1): slider keys found; 0216 (kernel92)
 - 0214 worked as written: nits 0 at 34.978 s, no DCS 51 sent. The screen was still near-black on the webcam at dim 10 until `sunfish-panel-bright.sh 128` (no SWEET PANEL line before that, so the dark start is not from our DCS; cause open).
 - The Control Center slider works in the UI and sends `brightness` and `backlight-level` (same value, 0..0x10000: 0x79de, 0x7685 ... 0x2e93 while dragging), each with FadePeriod 0. It never sends brightness-nits.

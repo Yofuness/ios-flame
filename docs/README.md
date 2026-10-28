@@ -12,7 +12,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [SSH](features/ssh.md) | ✅ | dropbear + dash + toybox; `port/tools/sunfish-ssh` | 2026-10-28 |
 | [Display](features/display.md) | ✅ | 1080x2340, ABL splash buffer 0x9c000000; GPU-composited (Metal → Turnip), vsync-paced | 2026-10-24 |
 | [Smoothness](features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd | 2026-10-27 |
-| [Brightness](features/brightness.md) | 🟡 | panel brightness via DCS 0x51 works from a tool; no Control Center slider yet | 2026-10-28 |
+| [Brightness](features/brightness.md) | ✅ | Control Center slider drives the panel (DCS 0x51 32..511, sweetbl=2, xnu 0208-0216) | 2026-10-28 |
 | [GPU](features/gpu.md) | ✅ | Adreno 618 at 565 MHz; full recovery from injected and real hangs (~26 ms) | 2026-10-28 |
 | [GPU memory](features/gpu-memory.md) | ✅ | leak fixed by bridge 0105 (spare command pools capped at 8): pool flat over a 20 min app soak (198 / 324 peak / 245 MB), no speed cost | 2026-10-28 |
 | [Metal](features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) on the A618 | 2026-10-26 |

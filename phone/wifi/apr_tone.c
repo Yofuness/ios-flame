@@ -5,6 +5,7 @@
  *   apr_tone [--dry-run] [--amp L|R|both] [--secs S] [--vol-db N] [--boost] [--no-amp] [--rt-port P]
  *            [--hwvote] [--lpi-pins] [-r]
  *
+ *   --probe     amp IDs over I2C only (read-only), then exit; no ADSP needed
  *   --dry-run   print the planned APR packets and CS35L41 writes; no /dev/pmem, no glink, no I2C
  *   --amp       which CS35L41 (0x40 = L, 0x41 = R; default L). --no-amp: AFE only, amps untouched
  *   --secs      tone length, default 2, capped so the amp is on at most 3 s
@@ -72,7 +73,7 @@
 #define LPI_PA		0x62b40000u
 
 static volatile sig_atomic_t stop;
-static int dry, n_amp, hw_handle = -1;
+static int dry, n_amp, hw_handle = -1, probe_only;
 static struct cs_amp amps[2];
 static uint16_t rt_port = 0x2001;
 static uint32_t map_handle;
@@ -254,6 +255,7 @@ int main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
 		if (!strcmp(a, "--dry-run")) dry = 1;
+		else if (!strcmp(a, "--probe")) probe_only = 1;
 		else if (!strcmp(a, "--amp") && v) which = argv[++i];
 		else if (!strcmp(a, "--secs") && v) secs = atof(argv[++i]);
 		else if (!strcmp(a, "--vol-db") && v) vol = atoi(argv[++i]);
@@ -264,7 +266,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(a, "--lpi-pins")) want_vote = want_lpi = 1;
 		else if (!strcmp(a, "-r")) reset = 1;
 		else {
-			fprintf(stderr, "usage: apr_tone [--dry-run] [--amp L|R|both] [--secs S] [--vol-db N] [--boost]"
+			fprintf(stderr, "usage: apr_tone [--probe] [--dry-run] [--amp L|R|both] [--secs S] [--vol-db N] [--boost]"
 				" [--no-amp] [--rt-port P] [--hwvote] [--lpi-pins] [-r]\n");
 			return 2;
 		}
@@ -293,6 +295,10 @@ int main(int argc, char **argv)
 		for (int i = 0; i < n_amp; i++)
 			if (cs_probe(&amps[i]))
 				return 1;
+	}
+	if (probe_only) {
+		printf("apr_tone: probe done, %d amp(s) answer\n", n_amp);
+		return 0;
 	}
 
 	/* 2. PCM: 1 kHz sine, -20 dBFS, both channels; 48 samples per period */

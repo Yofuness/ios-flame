@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:20 k92a: SE9 clocks on (xnu 0215, sweetse9=1); apr_tone --probe
+- The boot lines were not in the captured log (printed too early), so read back with pmem: GCC vote 0x15200c = 0x43bc1bc0 (bit 25 set), S3 CBCR 0x1183a4 = 0x4220 (on), RCG DFS on (0x1183bc = 0x21, left alone), SE9 fw 0xa8c068 = 0x303 (protocol 3 = I2C, like SE7), 0x48 = 0x11, CLK_SEL 0.
+- TLMM: gpio46/47 on the north tile 0x3900000 read cfg 0 (GPIO mode), io 1 (lines high: idle I2C with pull-ups); the 0x3500000 / 0x3d00000 offsets read 0 for every pin. So north is the right tile; sweetse9=2 muxes them.
+- apr_tone --probe: amp IDs over I2C, read-only, no ADSP needed. Next: k92b sweetse9=2 + `apr_tone --probe --amp both`.
+
 ### 2026-10-28 17:30 M1b tool apr_tone (8f5e166, built, dry-run checked on the PC, not run on the phone)
 - No ASM stream: a 1 kHz -20 dBFS PCM buffer (pm_alloc, mapped to the DSP with SHARED_MEM_MAP_REGIONS) written in 10 ms chunks to an AFE RT proxy port (0x2001) looped back to SECONDARY_MI2S_RX (0x1002); clock set SEC_MI2S_IBIT 1.536 MHz, I2S config 48k/16; amp CS35L41 over SE9 I²C from userland via pmem (geni_i2c.c); amp limits enforced in cs35l41.c: digital volume >= 20 dB down, boost peak only lowered to <= 3700 mA, AMP_GAIN never written, IRQ1 error bits polled every 100 ms, amp on <= 3 s, tone <= 2.5 s, power-down on any error/signal. Opcodes 35-85% (from memory), amp registers 30-85%.
 - Possible blockers: the amp reset pins (PM6150L GPIO 8/11) may be held low (no userland SPMI write); the DSP may not reach a plain physical buffer (no LPASS SMMU map); the LPI pins need a hw vote first (--hwvote --lpi-pins, off by default).

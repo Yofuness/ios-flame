@@ -32,7 +32,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [SSH](docs/features/ssh.md) | ✅ | dropbear + dash + toybox |
 | [Display](docs/features/display.md) | ✅ | 1080x2340, GPU-composited (Metal → Turnip), vsync-paced |
 | [Smoothness](docs/features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping |
-| [Brightness](docs/features/brightness.md) | 🟡 | panel brightness (DCS 0x51) from a tool; no Control Center slider |
+| [Brightness](docs/features/brightness.md) | ✅ | Control Center slider drives the panel brightness (DCS 0x51, `sweetbl=2`) |
 | [GPU](docs/features/gpu.md) | ✅ | Adreno 618 at 565 MHz; recovers from GPU hangs (~26 ms) |
 | [GPU memory](docs/features/gpu-memory.md) | ✅ | leak fixed (spare command pools capped): pool flat over a 20 min app soak |
 | [Metal](docs/features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) |
