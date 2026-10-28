@@ -15,6 +15,11 @@ Old plan: `docs/plans/2026-10-27-usability-quick-wins.md`. Rules: RAM-only boots
 
 Done 2026-10-28: the 2 h soak ran 122 min without a reset (sk71); reset reason via `sctl kern.sweet_pon` works (xnu 0197/0201) but PON_REASON is sticky (no cause info); iOS Wi-Fi status (0199, k76); panel off on sleep (0202-0205, k81); disk direct I/O (0198, B3).
 
+## Dev speed (optimizations that speed up development: before the Broken list's long items; the user, 2026-10-28)
+D1. [ ] **One-command test loop:** tools/sunfish-test.sh KERNEL_NN TAG [bootargs] [-- test cmd]: battery check, reboot, boot, wait for SSH, dim 10, optional bundle install, then the test, with markers and the babysitter's checks. Replaces 4-6 hand steps per test.
+D2. [ ] **Boot time:** boot to SSH is 30-45 s and nearly every test pays it (often several times). Break it down from the logs (fastboot upload, shim, XNU early boot, launchd, dropbear, USB link) and cut what can be cut.
+D3. [ ] VM kernel build cold cycle 134 s: most of it is the incremental make (~100 s for one changed file?); check what make rebuilds.
+
 ## Broken list (cheapest first; [phone] = needs the phone)
 B1. [built, not yet on the phone] **`/var/local/mtl2.log` never rotated** (reached 321 MB). SweetMetal2.mm sm2_open_log(): clients run as mobile and cannot rename in /var/local, so the file (mode 666) is truncated in place once past 8 MB, with a `log truncated at N bytes` line. Built locally (14 s rebuild). Check on the next bundle install.
 B2. [DONE 2026-10-28 13:25] **macOS VM auto-login**: /etc/kcpassword (the password XORed with the loginwindow key, written over vssh from credentials, never printed; 600 root:wheel) + `defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser builder` (FileVault off). Full shutdown + boot: `builder` on console, the desktop up without input.
@@ -44,7 +49,7 @@ O3. [ ] Reduce Transparency speed in app opens / dock (B10 analysis; a GPU trace
 O4. [ ] lskdd 1 s respawn (~2-5% of a core; B19).
 O5. [ ] The display-off CPU fade (2.4-3.9 s of uncached pixel writes, no vsync meanwhile) when sweetpanelsleep is off: use the LM alpha blank there too.
 O6. [ ] GPU hang recovery takes 3.9-12.8 s when it fails (recover2 + GBIF-halt + recover3 timeouts): fail faster once a path is known dead.
-O7. [ ] Boot to SSH ~30-45 s; VM resume 5-15 s with a 2.5-4 GB state file.
+O7. [moved to Dev speed D2/D3] Boot to SSH ~30-45 s; VM resume 5-15 s.
 
 ## Done today (2026-10-28)
 Wi-Fi join at boot, GPU memory leak (bridge 0105), local builds (userland, metal2, kernel in a macOS VM with hibernate), per-feature docs, work on main.
