@@ -31,6 +31,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 18:52 serial console A/B (kernel94, plan D2): no effect
+- NOSERIAL=1 (tools/sunfish-boot.sh drops `serial=3 -enable_kprintf_spam`): ns1a/ns1b boot to SSH 37 / 41 s; with them sr1a/sr1b 24 / 40 s. Within the noise (24-41 s); the serial console is not the slow part. NOSERIAL stays as a switch; the variance is later (launchd / dropbear order).
+
 ### 2026-10-28 18:45 boot-arg line full
 - tools/mkpayload.py refused `cmdline too long` (limit 608 - 16 bytes for the ramlog VAs) with sweetse9=2 sweetampreset=1 sweetcampmic=2 on top of the defaults. Dropped `sweetgpudelay=0` (the kernel default) from tools/sunfish-boot.sh; 562 bytes with sweetse9 + sweetcampmic. Next time: fold rarely changed sweet* args into kernel defaults.
 

@@ -21,6 +21,10 @@ base="$base sweetwifiev=1 sweetpanelsleep=1"
 base="$base sweetpresentwait=1"
 # on by default since 2026-10-28: Control Center brightness slider (xnu 0208-0216) and flashlight (0190/0209; tile needs /var/local/sweet-flashlight)
 base="$base sweetbl=2 sweettorch=1"
+# NOSERIAL=1: no serial console (boot-time A/B, plan D2)
+if [ "${NOSERIAL:-0}" = 1 ]; then
+	base=$(printf '%s\n' $base | grep -v -x -e 'serial=3' -e '-enable_kprintf_spam' | tr '\n' ' ')
+fi
 # Real time: PM6150 RTC + offset (tools/flame-rtc.py LOG calibrates it once).
 [ -f work/rtc-offset ] && base="$base sweetrtcoff=$(cat work/rtc-offset)"
 # Extra args replace defaults with the same key (XNU would take the first).
