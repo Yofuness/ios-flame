@@ -42,6 +42,7 @@ while true; do
 		*"GPU hang or fault"*) hangs=$((hangs + 1)) ;;
 		*"recover2: FAILED"*|*"GPU not recovered"*|*"recover3"*FAILED*) say "ALERT GPU hang not recovered: ${l:0:160}" ;;
 		*"recover2: done after"*|*"recover3: done"*|*"recover: "*"-> 0"*) recovered=$((recovered + 1)); say "NOTE GPU hang recovered: ${l:0:120}" ;;
+		*"exec DumpPanic"*|*"exec OTACrashCopier"*|*"UIWDT: armed"*|*"BOOTWDT: armed"*|*"WDT: armed"*) ;;	# boot-time noise
 		*panic*|*Panic*) say "ALERT panic line: ${l:0:160}" ;;
 		*"SWEET UIWDT"*|*"SWEET BOOTWDT"*|*"FLAME WDT"*) say "ALERT watchdog: ${l:0:160}" ;;
 		*"=== "*STOP*) say "ALERT test script stopped: ${l:0:160}" ;;
