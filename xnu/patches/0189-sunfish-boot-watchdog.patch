@@ -1,0 +1,69 @@
+From 0c1de0f692f0ffd7fc42ce5e6972a79583dd2368 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:52:41 -0400
+Subject: [PATCH] sunfish: boot watchdog, reset if the UI never swaps after
+ boot
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp    |  2 ++
+ iokit/Kernel/arm/SweetPlatformExpert.cpp | 16 ++++++++++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index b0bf515..578ff39 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -55,6 +55,7 @@ void sweet_tl_flush(void);
+ extern uint64_t sweet_last_touch_abs;
+ void sweet_gpu_kill_backboardd(void);
+ extern volatile int flame_wdt_stop;
++extern volatile int sweet_fb_swapped;	/* 0189: boot watchdog (SweetPlatformExpert.cpp) */
+ extern int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ }
+ #define SWEET_FB_GPU_ROWBYTES           4352    /* the 2D engine writes 64-byte multiples */
+@@ -528,6 +529,7 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	}
+ 	IOLockUnlock(fLock);
+ 	sweet_fb_last_swap_abs = mach_absolute_time();	/* 0179 */
++	sweet_fb_swapped = 1;	/* 0189 */
+ 	if ((++sweet_fb_swap_count % 1000) == 0) {
+ 		IOLog("SWEET FB: %llu swaps\n", sweet_fb_swap_count);
+ 	}
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index e788ba1..393295a 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -41,6 +41,9 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ /* 0179: set by the UI watchdog (SweetFramebuffer.cpp) when backboardd stays frozen: stop petting */
+ extern "C" volatile int flame_wdt_stop;
+ volatile int flame_wdt_stop;
++/* 0189: set by the first IOMFB swap (SweetFramebuffer.cpp), disarms the boot watchdog */
++extern "C" volatile int sweet_fb_swapped;
++volatile int sweet_fb_swapped;
+ 
+ static void
+ flame_wdt_thread(void *arg)
+@@ -48,7 +51,20 @@ flame_wdt_thread(void *arg)
+ 	volatile uint32_t *wdt = (volatile uint32_t *)arg;
+ 	int reboot_s = 0;
+ 	PE_parse_boot_argn("flamereboot", &reboot_s, sizeof(reboot_s));
++	/*
++	 * 0189: boot watchdog, sweetbootwdt=SECS (default 0 = off). No IOMFB swap SECS after this
++	 * thread starts (early IOKit) -> stop petting, so a boot hung in early userspace resets into fastboot.
++	 */
++	int bootwdt_s = 0;
++	PE_parse_boot_argn("sweetbootwdt", &bootwdt_s, sizeof(bootwdt_s));
++	if (bootwdt_s > 0) {
++		IOLog("SWEET BOOTWDT: armed, %d s\n", bootwdt_s);
++	}
+ 	for (int t = 0; reboot_s <= 0 || t < reboot_s; t += FLAME_WDT_PET_S) {
++		if (bootwdt_s > 0 && !sweet_fb_swapped && t >= bootwdt_s) {
++			IOLog("SWEET BOOTWDT: no swap %d s after boot, resetting\n", bootwdt_s);
++			flame_wdt_stop = 1;
++		}
+ 		if (flame_wdt_stop) {
+ 			IOLog("FLAME WDT: UI watchdog stop, no more pets: reset follows\n");
+ 			for (;;) {
+-- 
+2.56.0
+

@@ -1,0 +1,194 @@
+From 1b511f038c7eb1e587b21aeea88a9dc9a820c590 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:50:55 -0400
+Subject: [PATCH] sunfish: apple80211 diagnostics for auto-join (log caps, 60 s
+ summary, scan elements, set 383)
+
+---
+ bsd/dev/redwood_apple80211.c | 105 ++++++++++++++++++++++++++++++-----
+ 1 file changed, 90 insertions(+), 15 deletions(-)
+
+diff --git a/bsd/dev/redwood_apple80211.c b/bsd/dev/redwood_apple80211.c
+index e2674ee..208d537 100644
+--- a/bsd/dev/redwood_apple80211.c
++++ b/bsd/dev/redwood_apple80211.c
+@@ -32,6 +32,7 @@
+  * 1 success, 21 "invalid PMK" (a wrong passphrase), 9 a timeout, 2 anything else.
+  */
+ #include <kern/kalloc.h>
++#include <kern/clock.h>
+ #include <kern/locks.h>
+ #include <libkern/libkern.h>
+ #include <sys/errno.h>
+@@ -242,18 +243,20 @@ give(const struct apple80211req *request, const void *data, size_t length)
+ 
+ /* An access point in the form a scan's result has; the caller has said how much room for elements there is. */
+ static int
+-give_network(const struct apple80211req *request, const struct redwood_sta_bss *bss)
++give_network(const struct apple80211req *request, const struct redwood_sta_bss *bss, bool say)
+ {
++	static unsigned dropped_said;
+ 	struct apple80211_scan_result *result = kalloc_data(sizeof(*result), Z_WAITOK | Z_ZERO);
+-	unsigned room = sizeof(result->elements);
++	unsigned room = sizeof(result->elements), asked_room = ~0u;
+ 	int error;
+ 
+ 	if (result == NULL) {
+ 		return ENOMEM;
+ 	}
+ 	if (request->req_len >= sizeof(*result) && copyin(request->req_data, result, offsetof(struct apple80211_scan_result,
+-	    elements)) == 0 && result->elements_length < room) {
+-		room = result->elements_length;
++	    elements)) == 0) {
++		asked_room = result->elements_length;
++		room = result->elements_length < room ? result->elements_length : room;
+ 	}
+ 	bzero(result, sizeof(*result));
+ 	result->version = 1;
+@@ -267,6 +270,15 @@ give_network(const struct apple80211req *request, const struct redwood_sta_bss *
+ 	result->age_ms = bss->age_ms;
+ 	result->elements_length = (uint16_t)(bss->elements_length <= room ? bss->elements_length : 0);
+ 	memcpy(result->elements, bss->elements, result->elements_length);
++	/* 0188: what the caller had room for and what it got (once a scan; drops up to 10 times a run) */
++	if (say) {
++		printf("SWEET WIFI: scan result elements: caller's length %d (%u bytes asked for), have %u, returned %u\n",
++		    asked_room == ~0u ? -1 : (int)asked_room, request->req_len, bss->elements_length, result->elements_length);
++	}
++	if (bss->elements_length > room && dropped_said < 10) {
++		dropped_said++;
++		printf("SWEET WIFI: scan result elements dropped (room %u, have %u)\n", room, bss->elements_length);
++	}
+ 	/* the rates it says it has (elements 1 and 50: units of 500 kbit/s, the top bit marks the ones everybody must have) */
+ 	for (unsigned at = 0; at + 2 <= bss->elements_length && at + 2 + bss->elements[at + 1] <= bss->elements_length;
+ 	    at += 2 + bss->elements[at + 1]) {
+@@ -381,7 +393,7 @@ get(struct apple80211req *request)
+ 		index = result_next++;
+ 		lck_mtx_unlock(&apple80211_lock);
+ 		there = redwood_sta_heard(index, bss);
+-		error = there ? give_network(request, bss) : EIO;
++		error = there ? give_network(request, bss, index == 0) : EIO;
+ 		kfree_data(bss, sizeof(*bss));
+ 		return error;
+ 	}
+@@ -434,7 +446,7 @@ get(struct apple80211req *request)
+ 		break;
+ 	}
+ 	case 103:                               /* all of it, as a scan's result */
+-		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give_network(request, &state->bss);
++		error = state->phase != REDWOOD_STA_JOINED ? ENXIO : give_network(request, &state->bss, false);
+ 		break;
+ 	case 2: {                               /* how it was joined: open system, then WPA2 with a passphrase */
+ 		struct {
+@@ -589,6 +601,21 @@ set(const struct apple80211req *request, char *said, size_t said_size)
+ 	}
+ 	case 10:
+ 		return set_scan(request, said, said_size);
++	case 383: {                             /* 0188: not built; its first 64 bytes once a run, to learn what it is */
++		static bool shown;
++		uint8_t head[64];
++		unsigned length = request->req_len < sizeof(head) ? request->req_len : sizeof(head);
++
++		if (!shown && request->req_data != USER_ADDR_NULL && copyin(request->req_data, head, length) == 0) {
++			shown = true;
++			printf("SWEET WIFI: set 383: %u bytes:", request->req_len);
++			for (unsigned i = 0; i < length; i++) {
++				printf(" %02x", head[i]);
++			}
++			printf("\n");
++		}
++		return EOPNOTSUPP;
++	}
+ 	default:
+ 		return EOPNOTSUPP;
+ 	}
+@@ -691,6 +718,18 @@ note(const struct apple80211req *request, bool is_set, int error)
+ 	lck_mtx_unlock(&apple80211_lock);
+ }
+ 
++static void
++summary_say(void)
++{
++	for (unsigned i = 0; i < kind_count; i++) {
++		printf("apple80211: in this run: %s %d (%s) %u times, answered %u times%s", kinds[i].set ? "set" : "get", kinds[i].type,
++		    type_name(kinds[i].type), kinds[i].times, kinds[i].answered, kinds[i].last_error == 0 ? "\n" : "");
++		if (kinds[i].last_error != 0) {
++			printf("; the last refusal: %d%s\n", kinds[i].last_error, kinds[i].last_error == EOPNOTSUPP ? " (not built)" : "");
++		}
++	}
++}
++
+ void
+ redwood_apple80211_summary(void)
+ {
+@@ -700,13 +739,48 @@ redwood_apple80211_summary(void)
+ 		return;
+ 	}
+ 	said = true;
+-	for (unsigned i = 0; i < kind_count; i++) {
+-		printf("apple80211: in this run: %s %d (%s) %u times, answered %u times%s", kinds[i].set ? "set" : "get", kinds[i].type,
+-		    type_name(kinds[i].type), kinds[i].times, kinds[i].answered, kinds[i].last_error == 0 ? "\n" : "");
+-		if (kinds[i].last_error != 0) {
+-			printf("; the last refusal: %d%s\n", kinds[i].last_error, kinds[i].last_error == EOPNOTSUPP ? " (not built)" : "");
+-		}
++	summary_say();
++}
++
++/* 0188: the summary every 60 s while requests come, too, so a run that never ends still says it */
++static void
++summary_now_and_then(void)
++{
++	static uint64_t last;
++	uint64_t now = mach_absolute_time(), ns;
++
++	if (last == 0) {
++		last = now;
++		return;
++	}
++	absolutetime_to_nanoseconds(now - last, &ns);
++	if (ns >= 60ull * NSEC_PER_SEC) {
++		last = now;
++		summary_say();
++	}
++}
++
++/* 0188: the first time each (get/set, request, result) comes, so a rare one is not lost behind the cap */
++static bool
++first_time(int32_t type, bool is_set, int error)
++{
++	static struct {
++		int32_t type;
++		bool set;
++		int error;
++	} seen[256];
++	static unsigned seen_count;
++	bool first = true;
++
++	lck_mtx_lock(&apple80211_lock);
++	for (unsigned i = 0; i < seen_count && first; i++) {
++		first = !(seen[i].type == type && seen[i].set == is_set && seen[i].error == error);
++	}
++	if (first && seen_count < sizeof(seen) / sizeof(seen[0])) {
++		seen[seen_count++] = (typeof(seen[0])) { .type = type, .set = is_set, .error = error };
+ 	}
++	lck_mtx_unlock(&apple80211_lock);
++	return first;
+ }
+ 
+ /* An Apple80211 request for the radio's interface, from the process that is running now. */
+@@ -725,9 +799,10 @@ redwood_apple80211_ioctl(u_long command, void *data)
+ 	proc_selfname(who, sizeof(who));
+ 	error = is_set ? set(request, what, sizeof(what)) : get(request);
+ 	note(request, is_set, error);
+-	/* (a request that is repeated for ever is said a few hundred times) */
+-	if (said < 800) {
+-		said++;
++	summary_now_and_then();
++	/* (a request that is repeated for ever is said a few thousand times; 0188: each kind's first always) */
++	if (first_time(request->req_type, is_set, error) || said < 4000) {
++		said += said < 4000;
+ 		printf("apple80211: %s %s %d (%s), value %d, %u bytes%s: %s", who, is_set ? "sets" : "gets", request->req_type,
+ 		    type_name(request->req_type), request->req_val, request->req_len, what, error == 0 ? "answered\n" : error ==
+ 		    EOPNOTSUPP ? "REFUSED\n" : "");
+-- 
+2.56.0
+
