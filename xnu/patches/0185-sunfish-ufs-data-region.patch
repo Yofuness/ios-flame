@@ -1,0 +1,270 @@
+From b64bd5bf7236aa3e34a5d38f841bd756d0de08ea Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 20:55:44 -0400
+Subject: [PATCH] sunfish: ufsroot1 data region after the 16 GiB root
+
+---
+ bsd/dev/sweet_ufs.c | 117 +++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 94 insertions(+), 23 deletions(-)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 5da3323..0db9a4c 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -110,7 +110,7 @@ static struct {
+ 	uint8_t lun;
+ 	uint8_t tag;
+ 	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
+-	uint32_t secsize;                       /* logical sector size for the BSD layer */
++	uint32_t secsize[2];                    /* logical sector size for the BSD layer, per minor (0185) */
+ 	bool writable;                          /* boot-arg ufsrw=1 */
+ 	bool cache;                             /* boot-arg ufscache=1 */
+ 	bool wait;                              /* boot-arg ufswait=1 */
+@@ -318,6 +318,39 @@ ufs_sync_cache(void)
+ /* 0175: 1025 XNU log + 64 scratch + 64 rescue blocks at the end (shim/ufs.h). */
+ #define UFS_RESCUE_TAIL         1153u
+ 
++/*
++ * 0185: minor 1 is the free space after the 16 GiB HFS+ root, minus a guard before the log areas. Minor 0 still
++ * covers the whole partition (the root and the internal log writers rely on it).
++ */
++#define UFS_DATA_BASE           4194304u        /* 16 GiB of 4 KiB blocks */
++#define UFS_DATA_GUARD          256u
++#define UFS_DATA_MIN            262144u         /* 1 GiB, else minor 1 is not made */
++static uint64_t ufs_data_count;                 /* 0: no minor 1 */
++
++/* 0185: each minor has its own sector size, so an HFS mount on one never changes the other's block numbers. */
++#define UFS_SECSIZE(dev)        su.secsize[minor(dev) == 1]
++
++/* Block range of a minor, relative to the partition. False for minors that do not exist. */
++static bool
++ufs_minor_range(dev_t dev, uint64_t *base, uint64_t *count)
++{
++	switch (minor(dev)) {
++	case 0:
++		*base = 0;
++		*count = su.nblocks;
++		return true;
++	case 1:
++		if (!ufs_data_count) {
++			return false;
++		}
++		*base = UFS_DATA_BASE;
++		*count = ufs_data_count;
++		return true;
++	default:
++		return false;
++	}
++}
++
+ static void
+ ufs_log_geometry(void)
+ {
+@@ -414,9 +447,10 @@ ufs_take_over_host(void)
+ }
+ 
+ static int
+-sweet_ufs_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
++sweet_ufs_open(dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
+ {
+-	if (!su.ready) {
++	uint64_t base, nblk;
++	if (!su.ready || !ufs_minor_range(dev, &base, &nblk)) {
+ 		return ENXIO;
+ 	}
+ 	return ((flags & FWRITE) && !su.writable) ? EROFS : 0;
+@@ -433,13 +467,19 @@ sweet_ufs_strategy(buf_t bp)
+ {
+ 	int error = 0;
+ 	caddr_t vaddr = NULL;
+-	uint64_t off = (uint64_t)buf_blkno(bp) * su.secsize;
+ 	uint32_t count = buf_count(bp);
+-	uint64_t part_bytes = su.nblocks * UFS_BLOCK;
++	uint64_t base = 0, nblk = 0;
++	bool known = ufs_minor_range(buf_device(bp), &base, &nblk);
++	uint64_t off = (uint64_t)buf_blkno(bp) * UFS_SECSIZE(buf_device(bp));
++	uint64_t part_bytes = nblk * UFS_BLOCK;
+ 
+ 	bool rd = buf_flags(bp) & B_READ;
+ 
+ 	buf_setresid(bp, count);
++	if (!known) {
++		error = ENXIO;
++		goto done;
++	}
+ 	if (!rd && !su.writable) {
+ 		error = EROFS;
+ 		goto done;
+@@ -459,7 +499,7 @@ sweet_ufs_strategy(buf_t bp)
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	for (uint32_t done = 0; done < count;) {
+ 		uint64_t pos = off + done;
+-		uint64_t lba = pos / UFS_BLOCK;
++		uint64_t lba = base + pos / UFS_BLOCK;     /* 0185: relative to the partition */
+ 		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
+ 		uint32_t want = MIN(count - done, BOUNCE_SIZE - skip);
+ 		uint32_t blocks = (skip + want + UFS_BLOCK - 1) / UFS_BLOCK;
+@@ -510,15 +550,20 @@ done:
+ }
+ 
+ static int
+-sweet_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
++sweet_ufs_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+     __unused struct proc *p, int is_char)
+ {
+ 	uint32_t *f = (uint32_t *)data;
+ 	uint64_t *o = (uint64_t *)data;
++	uint64_t base, nblk;
++
++	if (!ufs_minor_range(dev, &base, &nblk)) {
++		return ENXIO;
++	}
+ 
+ 	switch (cmd) {
+ 	case DKIOCGETBLOCKSIZE:
+-		*f = su.secsize;
++		*f = UFS_SECSIZE(dev);
+ 		return 0;
+ 	case DKIOCSETBLOCKSIZE:
+ 		if (is_char) {
+@@ -527,13 +572,16 @@ sweet_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 		if (*f < DEV_BSIZE || *f > UFS_BLOCK || (*f & (*f - 1))) {
+ 			return EINVAL;
+ 		}
+-		su.secsize = *f;
++		if (*f != UFS_SECSIZE(dev)) {
++			printf("SWEET UFS: minor %d sector size %u -> %u\n", minor(dev), UFS_SECSIZE(dev), *f);
++		}
++		UFS_SECSIZE(dev) = *f;
+ 		return 0;
+ 	case DKIOCGETPHYSICALBLOCKSIZE:
+ 		*f = UFS_BLOCK;
+ 		return 0;
+ 	case DKIOCGETBLOCKCOUNT:
+-		*o = su.nblocks * UFS_BLOCK / su.secsize;
++		*o = nblk * UFS_BLOCK / UFS_SECSIZE(dev);
+ 		return 0;
+ 	case DKIOCISWRITABLE:
+ 		*f = su.writable;
+@@ -549,10 +597,10 @@ sweet_ufs_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 		return error;
+ 	}
+ 	case DKIOCGETMAXBLOCKCOUNTREAD:
+-		*o = BOUNCE_SIZE / su.secsize;
++		*o = BOUNCE_SIZE / UFS_SECSIZE(dev);
+ 		return 0;
+ 	case DKIOCGETMAXBLOCKCOUNTWRITE:
+-		*o = su.writable ? BOUNCE_SIZE / su.secsize : 0;
++		*o = su.writable ? BOUNCE_SIZE / UFS_SECSIZE(dev) : 0;
+ 		return 0;
+ 	case DKIOCGETMAXSEGMENTCOUNTREAD:
+ 	case DKIOCGETMAXSEGMENTCOUNTWRITE:
+@@ -576,9 +624,13 @@ sweet_ufs_cioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
+ }
+ 
+ static int
+-sweet_ufs_psize(__unused dev_t dev)
++sweet_ufs_psize(dev_t dev)
+ {
+-	return su.ready ? (int)MIN(su.nblocks * UFS_BLOCK / su.secsize, INT_MAX) : -1;
++	uint64_t base, nblk;
++	if (!su.ready || !ufs_minor_range(dev, &base, &nblk)) {
++		return -1;
++	}
++	return (int)MIN(nblk * UFS_BLOCK / UFS_SECSIZE(dev), INT_MAX);
+ }
+ 
+ /*
+@@ -587,9 +639,13 @@ sweet_ufs_psize(__unused dev_t dev)
+  * through the bounce buffer one UFS block at a time instead.
+  */
+ static int
+-sweet_ufs_read_unaligned(struct uio *uio)
++sweet_ufs_read_unaligned(dev_t dev, struct uio *uio)
+ {
+-	uint64_t part_bytes = su.nblocks * UFS_BLOCK;
++	uint64_t base, nblk;
++	if (!ufs_minor_range(dev, &base, &nblk)) {
++		return ENXIO;
++	}
++	uint64_t part_bytes = nblk * UFS_BLOCK;
+ 	int error = 0;
+ 
+ 	while (uio_resid(uio) > 0) {
+@@ -600,7 +656,7 @@ sweet_ufs_read_unaligned(struct uio *uio)
+ 		uint32_t skip = (uint32_t)(pos % UFS_BLOCK);
+ 		uint32_t n = (uint32_t)MIN((uint64_t)uio_resid(uio), MIN((uint64_t)(UFS_BLOCK - skip), part_bytes - pos));
+ 		lck_mtx_lock(&sweet_ufs_lock);
+-		error = ufs_read_blocks(su.first_block + pos / UFS_BLOCK, 1);
++		error = ufs_read_blocks(su.first_block + base + pos / UFS_BLOCK, 1);
+ 		if (!error) {
+ 			error = uiomove((const char *)(su.dma + DMA_BOUNCE) + skip, (int)n, uio);
+ 		}
+@@ -615,10 +671,10 @@ sweet_ufs_read_unaligned(struct uio *uio)
+ static int
+ sweet_ufs_read(dev_t dev, struct uio *uio, __unused int ioflag)
+ {
+-	if (uio_offset(uio) % su.secsize || uio_resid(uio) % su.secsize) {
+-		return sweet_ufs_read_unaligned(uio);
++	if (uio_offset(uio) % UFS_SECSIZE(dev) || uio_resid(uio) % UFS_SECSIZE(dev)) {
++		return sweet_ufs_read_unaligned(dev, uio);
+ 	}
+-	return physio(sweet_ufs_strategy, NULL, dev, B_READ, minphys, uio, (int)su.secsize);
++	return physio(sweet_ufs_strategy, NULL, dev, B_READ, minphys, uio, (int)UFS_SECSIZE(dev));
+ }
+ 
+ static int
+@@ -627,10 +683,10 @@ sweet_ufs_write(dev_t dev, struct uio *uio, __unused int ioflag)
+ 	if (!su.writable) {
+ 		return EROFS;
+ 	}
+-	if (uio_offset(uio) % su.secsize || uio_resid(uio) % su.secsize) {
++	if (uio_offset(uio) % UFS_SECSIZE(dev) || uio_resid(uio) % UFS_SECSIZE(dev)) {
+ 		return EINVAL;		/* 0176: physio would write at the wrong offset */
+ 	}
+-	return physio(sweet_ufs_strategy, NULL, dev, B_WRITE, minphys, uio, (int)su.secsize);
++	return physio(sweet_ufs_strategy, NULL, dev, B_WRITE, minphys, uio, (int)UFS_SECSIZE(dev));
+ }
+ 
+ static const struct bdevsw sweet_ufs_bdevsw = {
+@@ -678,6 +734,8 @@ sweet_ufs_init(void)
+ 	PE_parse_boot_argn("ufsroot", want, sizeof(want));
+ 	uint32_t rw = 0;
+ 	PE_parse_boot_argn("ufsrw", &rw, sizeof(rw));
++	uint32_t data_on = 1;
++	PE_parse_boot_argn("sweetufsdata", &data_on, sizeof(data_on));
+ 	uint32_t cache = 0, wait = 0;
+ 	PE_parse_boot_argn("ufscache", &cache, sizeof(cache));
+ 	PE_parse_boot_argn("ufswait", &wait, sizeof(wait));
+@@ -696,7 +754,7 @@ sweet_ufs_init(void)
+ 	}
+ 	su.dma_pa = ptoa_64(pn);
+ 	su.lun = 0;
+-	su.secsize = DEV_BSIZE;
++	su.secsize[0] = su.secsize[1] = DEV_BSIZE;
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
+@@ -725,6 +783,19 @@ sweet_ufs_init(void)
+ 	su.bdev = makedev(su.bmajor, 0);
+ 	devfs_make_node(su.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
+ 	devfs_make_node(makedev(su.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot0");
++	/* 0185: the data region after the root; sweetufsdata=0 turns it off. */
++	uint64_t tail = UFS_DATA_BASE + UFS_DATA_GUARD + UFS_RESCUE_TAIL;
++	if (!data_on) {
++		printf("SWEET UFS: data region minor 1 off (sweetufsdata=0)\n");
++	} else if (su.nblocks < tail + UFS_DATA_MIN) {
++		printf("SWEET UFS: data region minor 1 off: only %llu blocks\n", su.nblocks);
++	} else {
++		ufs_data_count = su.nblocks - tail;
++		devfs_make_node(makedev(su.bmajor, 1), DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot1");
++		devfs_make_node(makedev(su.cmajor, 1), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot1");
++		printf("SWEET UFS: data region minor 1: base %u count %llu blocks (%llu GiB)\n",
++		    UFS_DATA_BASE, ufs_data_count, ufs_data_count * UFS_BLOCK >> 30);
++	}
+ 	/* Only now, with the partition bounds known, can writes be allowed. */
+ 	su.writable = (rw != 0);
+ 	su.ready = true;
+-- 
+2.56.0
+
