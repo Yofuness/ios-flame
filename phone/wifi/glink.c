@@ -21,6 +21,14 @@ void glink_select(unsigned host, unsigned ipc_bit)
 	g_ipc = ipc_bit;
 }
 
+/* audio M1a (aprtest): reattach to a live edge without resetting our ends */
+static int g_keep;
+
+void glink_keep_state(int keep)
+{
+	g_keep = keep;
+}
+
 /* descs: [0] tx tail, [1] tx head, [2] rx tail, [3] rx head (ours = tx) */
 #define TX_TAIL	(desc + 0)
 #define TX_HEAD	(desc + 4)
@@ -41,9 +49,11 @@ int glink_init(void)
 		return -1;
 	}
 	(void)sz;
-	/* as Linux qcom_glink_smem_register: our ends of both pipes start over */
-	wr32(RX_TAIL, 0);
-	wr32(TX_HEAD, 0);
+	/* as Linux qcom_glink_smem_register: our ends of both pipes start over (unless reattaching) */
+	if (!g_keep) {
+		wr32(RX_TAIL, 0);
+		wr32(TX_HEAD, 0);
+	}
 	printf("glink: desc %llx tx fifo %llx (%u) rx fifo %llx (%u); tx %u/%u rx %u/%u\n",
 	       (unsigned long long)desc, (unsigned long long)tx_fifo, tx_len, (unsigned long long)rx_fifo, rx_len,
 	       rd32(TX_TAIL), rd32(TX_HEAD), rd32(RX_TAIL), rd32(RX_HEAD));

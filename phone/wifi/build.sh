@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build wland and adspboot for iOS 16 arm64 into phone/wifi/out (signed ad hoc).
+# Build wland, adspboot and aprtest for iOS 16 arm64 into phone/wifi/out (signed ad hoc).
 set -e
 cd "$(dirname "$0")"
 mkdir -p out
@@ -7,4 +7,6 @@ mkdir -p out
 ../../tools/linux-ios-sign out/wland 2>/dev/null
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/adspboot adspboot.c smem.c pmem.c glink.c
 ../../tools/linux-ios-sign out/adspboot 2>/dev/null
-ls -la out/wland out/adspboot
+../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/aprtest aprtest.c smem.c pmem.c glink.c
+../../tools/linux-ios-sign out/aprtest 2>/dev/null
+ls -la out/wland out/adspboot out/aprtest
