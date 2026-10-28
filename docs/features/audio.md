@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 18:45 why the ADSP dies (read-only, strings in adsp.b13/b18/b04 + the .jsn files)
+- The ~10 s is `chre::SeeHelper::findSuidSync` (b13 0xf7615; b18 0x2ac2 "Waited %lu ms for %s (found %zu, required %hhu)") waiting for sensor SUIDs: the SAR module (sar.cc) needs them, gets none, "Failed to initialize ASH SEE helper" -> fatal. svc 400 (SNS client, published) is local, so the QMI side works.
+- No sensor driver registers because the SEE registry reads /vendor/etc/sensors/sns_reg_config, sensors_list.txt and /vendor/etc/sensors/config/*.json from the AP through reverse FastRPC (apps_std via adsp_listener, HAP_rfs_wait; b13 0x13f8e0/0x115b5f/0xf91a3). On Android that is `adsprpcd sensorspd`. Nobody serves it here, which fits "no FastRPC data".
+- Domains (adsps.jsn/adspr.jsn): msm/adsp/sensor_pd and msm/adsp/root_pd, qmi instance 74; pd-mapper (svc 64) is probably not what blocks this (~70%).
+- Next (big, parked as a dream step, ~2-5 days, ~65% that it removes the fatal): an AP-side FastRPC reverse-RPC listener on `fastrpcglink-apps-dsp` serving apps_std fopen/fread/fclose/stat/opendir read-only from a staged copy of vendor.img:/etc/sensors plus an empty persist registry. Needs the FastRPC wire format and SMMU-mapped buffers for the ADSP's context bank.
+- Meanwhile SE9 works, so camera M1 can start: phone/wifi/i2cprobe (read-only I2C reads + ACK scan) for the slg51000 @0x75.
+
 ### 2026-10-28 18:35 adsp3/adsp4 (kernel93): early glink up, QRTR services seen, same sensor fatal
 - adsp3: PAS shutdown (SCM PIL 6) on a never-started ADSP blocked in the SMC forever (process unkillable; reboot cleared it). d70ac33: shutdown only when SMP2P shows an earlier run.
 - adsp4 (fresh boot, a184a48 + d70ac33): PAS as before (all 0/0). glink lpass edge at once: version 1 features 7; the ADSP opens 6 channels: glink_ssr, fastrpcglink-apps-dsp, LOOPBACK_CTL_LPASS, apr_audio_svc, apr_apps2, IPCRTR (all OPEN_ACKed; IPCRTR asks for 52-byte intents x3).
