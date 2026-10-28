@@ -1,0 +1,55 @@
+From f0fa00177abae892daf801ea0f4ee6e0b9170d9f Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 22:29:47 -0400
+Subject: [PATCH] sunfish: clip transfers that cross the device end (short
+ read, like IOMedia)
+
+---
+ bsd/dev/sweet_ufs.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index d721915..4c7bacc 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -468,6 +468,7 @@ sweet_ufs_strategy(buf_t bp)
+ 	int error = 0;
+ 	caddr_t vaddr = NULL;
+ 	uint32_t count = buf_count(bp);
++	uint32_t total = count;          /* 0192: before clipping, for resid */
+ 	uint64_t base = 0, nblk = 0;
+ 	bool known = ufs_minor_range(buf_device(bp), &base, &nblk);
+ 	uint64_t off = (uint64_t)buf_blkno(bp) * UFS_SECSIZE(buf_device(bp));
+@@ -484,10 +485,19 @@ sweet_ufs_strategy(buf_t bp)
+ 		error = EROFS;
+ 		goto done;
+ 	}
+-	if (off > part_bytes || count > part_bytes - off) {
++	if (off > part_bytes) {
+ 		error = EINVAL;
+ 		goto done;
+ 	}
++	/* 0192: like IOMedia, clip a transfer that crosses the end and complete it short (resid = the
++	 * part past the end); fsck_hfs reads the alternate volume header in chunks that cross it. */
++	if (off == part_bytes) {
++		error = rd ? 0 : ENOSPC;
++		goto done;
++	}
++	if (count > part_bytes - off) {
++		count = (uint32_t)(part_bytes - off);
++	}
+ 	if (count == 0) {
+ 		goto done;
+ 	}
+@@ -537,7 +547,7 @@ sweet_ufs_strategy(buf_t bp)
+ 			break;
+ 		}
+ 		done += want;
+-		buf_setresid(bp, count - done);
++		buf_setresid(bp, total - done);
+ 	}
+ 	lck_mtx_unlock(&sweet_ufs_lock);
+ 	buf_unmap(bp);
+-- 
+2.56.0
+
