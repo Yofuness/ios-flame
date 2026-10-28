@@ -28,16 +28,15 @@
   - Add new findings or next steps as you find them.
 - **New plan:** move the old one to `docs/plans/YYYY-MM-DD-<topic>.md`. Put a short header on it saying
   what was done, what was not, and what replaced it, then write the new `plan.md`.
-- **Metal bundle (Turnip and bridge patches):** build locally, CI only as a fallback.
+- **All builds are local** (the user's rule, 2026-10-28). The GitHub workflows have no push trigger; don't run them
+  (`gh workflow run`) unless the user asks.
+- **Metal bundle (Turnip and bridge patches):**
   1. `tools/build-metal2-linux.sh`
   2. `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out --no-restart`
-- **Phone tools:** build locally, CI only as a fallback.
+- **Phone tools:**
   1. `tools/build-userland-linux.sh`
   2. `python3 -I tools/flame-files.py put work/userland-linux/out/NAME /var/local/bin/NAME 755`
-- **CI fallback:** pushing `phone/turnip/patches` or `phone/metal2` to `main` starts the metal2 CI, and `phone/**` starts
-  the userland CI (details in `docs/methods.md`).
-- **Kernel:** `tools/vm-build-xnu.sh NN --stop` builds in the local macOS VM (`~/VMs/macos`; CI `xnu.yml` is the
-  fallback). Never start a second VM instance, and never `pkill -f` a pattern that matches your own shell: the VM
+- **Kernel:** `tools/vm-build-xnu.sh NN --stop` builds in the local macOS VM (`~/VMs/macos`). Never start a second VM instance, and never `pkill -f` a pattern that matches your own shell: the VM
   scripts use `~/VMs/macos/qemu.pid`.
 - **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
   provides the USB network link.

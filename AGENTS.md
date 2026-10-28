@@ -11,8 +11,8 @@
 - Kernel changes: the kernel tree is `work/src/xnu` (a git repo, HEAD = baseline + applied patches). Commit there,
   then save the diff as the next `xnu/patches/NNNN-sunfish-*.patch`. Build it in the local macOS VM:
   `tools/vm-build-xnu.sh NN --stop` (about 1 min incremental, 6 min full) -> `work/kernelNN`. The VM takes 8 GB of
-  the PC's 16 GB, so `--stop` shuts it down afterwards. CI fallback: `gh workflow run xnu.yml --ref main`,
-  `gh run watch ID`, `gh run download ID -n xnu-kernel -D work/kernelNN`.
+  the PC's 16 GB, so `--stop` shuts it down afterwards. All builds are local; the GitHub workflows run only by hand,
+  when the user asks.
 - Git: push only to branch `main` (the `sunfish` branch is frozen), never force-push.
 - Device bring-up uses temporary `fastboot boot` images (`tools/sunfish-boot.sh NAME KERNEL [bootargs]`). Never
   flash ABL, XBL, TZ, modem or other firmware partitions, never relock the bootloader on modified software, never

@@ -18,11 +18,7 @@ on:
       clean:
         description: ignore the incremental build cache (full build)
         default: "false"
-  push:
-    branches: [main]
-    paths:
-      - "xnu/patches/**"
-      - ".github/workflows/xnu.yml"
+  # no push trigger: builds run locally (tools/build-*-linux.sh, tools/vm-build-xnu.sh); run this by hand only
 
 concurrency:
   group: xnu-${{ github.ref }}

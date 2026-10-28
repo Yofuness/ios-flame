@@ -7,9 +7,7 @@ name: userland
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [.github/workflows/userland.yml, "phone/**"]
+  # no push trigger: builds run locally (tools/build-*-linux.sh, tools/vm-build-xnu.sh); run this by hand only
 
 env:
   DROPBEAR_VER: "2022.83"

@@ -6,9 +6,7 @@ name: metal2
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [.github/workflows/metal2.yml, "phone/metal2/**", "phone/turnip/**"]
+  # no push trigger: builds run locally (tools/build-*-linux.sh, tools/vm-build-xnu.sh); run this by hand only
 
 env:
   MESA_COMMIT: 85fda3b36405bcaea8bffc64aa4f2651dc90770d
