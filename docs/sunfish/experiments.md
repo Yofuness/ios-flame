@@ -83,3 +83,8 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-27 k60d (kernel60, defaults): physical cable replug, 16 s out, 2 contact bounces -> link + SSH back. PASS.
 - 2026-10-27 ck1 (kernel60, defaults, 30 min idle on charger): Wi-Fi not joined (nettest DNS fail, -1009 no route; wifid CURRENT_NETWORK error 6 x331/8 min, SCAN_RESULT answered x341); battery 4431-4434 mV, 0 mA, 100% shown and on screen, no jumps (discharge untested); AegirPoster 0 crashes, 0 CRASH lines total.
 - 2026-10-27 ck1-ck3 (kernel60, defaults): USB post-boot flap check, 3 boots x 5 min, 30 SSH probes each: 0 failures, 1 link-up per boot, boot-to-SSH 29/43 s (ck2/ck3). PASS.
+- 2026-10-27 u61 (kernel61, xnu 0185): ufsroot1 data region: offset checks a-e pass (rufsroot1 block 0/1000 == rufsroot0 block 4194304/4195304; last block 4096 B; one past 0 B). newfs_hfs: ENOTTY (missing segment byte-count ioctls).
+- 2026-10-27 g62/g62e (kernel62, 0186+0187): newfs_hfs OK (94 GB HFSX, 8 MB journal); mount + cp + sha256 OK; sweetnofstab=1 hides /etc/fstab, rm fails, toybox unlink works. fsck_hfs -fn: "Volume header needs minor repair" (block-node EINVAL, alternate VHB unreadable).
+- 2026-10-27 g62e: full /var copy to ufsroot1, 84 s, 1977/2000 sha256 equal (3 live sqlite, 20 created later), stable across remount.
+- 2026-10-27 k65 (kernel65, 0191): block-node read works (xxd on /dev/ufsroot1 gives 4858...); fsck still flags the alternate VHB (-60) -> 0192.
+- 2026-10-27 wd20 (kernel65, sweetbootwdt=20): did not fire (counter starts at ~26 s kernel time; UI drew first). wd5 (kernel66, sweetbootwdt=5): fired at 31.3 s, fastboot ~35 s later. PASS.
