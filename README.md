@@ -46,7 +46,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed in /Applications |
 | [Sleep and wake](docs/features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel stays on |
 | [Audio](docs/features/not-started.md) | ⬜ | speaker, earpiece, headphone jack, mic: not started (survey under way) |
-| [Camera](docs/features/not-started.md) | ⬜ | rear and front cameras: not started (survey under way) |
+| [Camera](docs/features/camera.md) | ⬜ | not started; plan: sensor ID over CCI (~1 week), then raw frames via RDI |
 | [Bluetooth](docs/features/not-started.md) | ⬜ | not started |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/not-started.md) | ⬜ | accelerometer, gyro, proximity, ambient light: not started |
