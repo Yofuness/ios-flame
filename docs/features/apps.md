@@ -45,6 +45,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 13:55 PhotosFileProvider sig 6: symbolized
+- Same backtrace in every crash (slides differ): ___pthread_kill, _pthread_kill, abort, demangling_terminate_handler, _objc_terminate, std::__terminate, objc_exception_throw, __CFDictionaryCreateGeneric, PlugInKit func_1aaf39c64+248. An uncaught exception while PlugInKit builds a CFDictionary (a nil value, likely). Impact: 2-4 crashes per 2 h, the extension restarts. Fix deferred.
+
 ### 2026-10-28 02:05-03:15 overnight run, part 3: the GPU pool leak
 - See [gpu-memory](gpu-memory.md) for this entry; it also touches this feature.
 
