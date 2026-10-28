@@ -1,0 +1,281 @@
+From cade1f2134ffc41e69aa0dc32b2572e5cf32a118 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 16:30:37 -0400
+Subject: [PATCH] sunfish: read-only camera probe kern.sweet_camprobe
+ (sweetcamprobe=1)
+
+---
+ bsd/conf/files                    |   1 +
+ bsd/dev/sweet_camprobe.c          | 227 ++++++++++++++++++++++++++++++
+ iokit/Kernel/arm/SweetBattery.cpp |   2 +
+ 3 files changed, 230 insertions(+)
+ create mode 100644 bsd/dev/sweet_camprobe.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 718e6f9..d68d1a1 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -118,6 +118,7 @@ bsd/dev/sweet_a6xx.c			standard
+ bsd/dev/sweet_gpu.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
++bsd/dev/sweet_camprobe.c		standard
+ bsd/dev/sweet_usb.c			standard
+ bsd/dev/redwood_sta.c		standard
+ bsd/dev/redwood_net.c		standard
+diff --git a/bsd/dev/sweet_camprobe.c b/bsd/dev/sweet_camprobe.c
+new file mode 100644
+index 0000000..32f7440
+--- /dev/null
++++ b/bsd/dev/sweet_camprobe.c
+@@ -0,0 +1,227 @@
++/*
++ * 0211: read-only camera state probe (camera plan step 1). sweetcamprobe=1
++ * adds kern.sweet_camprobe; writing 1 logs GCC/CAMCC clock and GDSC state and
++ * the SLG51000 camera PMIC (SE9 I2C 0x75). No clock, GDSC or PMIC writes:
++ * CAMCC is read only when gcc_camera_ahb_clk runs, SE9 only when ABL left its
++ * clocks voted and I2C firmware loaded; then only SE9's own transfer setup
++ * (as in sweet_touch.c) and I2C reads are done.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/sysctl.h>
++#include <sys/errno.h>
++#include <kern/thread_call.h>
++#include <kern/clock.h>
++#include <libkern/OSAtomic.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_camprobe_register(void);
++
++#define CAM_GCC_PA   0x00100000u
++#define CAM_CC_PA    0x0ad00000u
++#define CAM_SE9_PA   0x00a8c000u
++#define CAM_PMIC     0x75u
++
++static vm_offset_t cam_gcc, cam_cc, cam_se;
++static int cam_lock_busy;
++
++static uint32_t
++cam_rd(vm_offset_t b, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(b + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++cam_wr(vm_offset_t b, uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(b + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* Branch offsets: sm8150/sdmmagpie layout, from memory (see the 0211 notes). */
++static const struct { const char *name; uint32_t off; } cam_cc_regs[] = {
++	{"titan_top_gdscr", 0xc1c4}, {"mclk0_cbcr", 0x501c}, {"mclk2_cbcr", 0x505c},
++	{"cci_0_cbcr", 0xc120}, {"csiphy0_cbcr", 0x601c}, {"ife_0_cbcr", 0x9028},
++};
++
++/* One FIFO message on SE9 (the sweet_touch.c sequence); 0 or an errno. */
++static int
++cam_msg(const uint8_t *tx, unsigned nt, uint8_t *rx, unsigned nr)
++{
++	unsigned got = 0;
++	cam_wr(cam_se, 0x618, 0xffffffffu);
++	cam_wr(cam_se, 0x80c, nt ? 1u : 0u);
++	cam_wr(cam_se, nr ? 0x270 : 0x26c, nr ? nr : nt);
++	cam_wr(cam_se, 0x600, ((nr ? 2u : 1u) << 27) | (CAM_PMIC << 9) | (nt ? 4u : 0u));
++	for (unsigned i = 0; i < 20000; i++) {
++		uint32_t irq = cam_rd(cam_se, 0x610);
++		if (irq & (0x3eu | (3u << 9) | (3u << 12) | (3u << 24) | (3u << 28))) {
++			cam_wr(cam_se, 0x604, 2); /* abort */
++			delay(1000);
++			cam_wr(cam_se, 0x618, 0xffffffffu);
++			return (irq & (1u << 10)) ? ENXIO : EIO;
++		}
++		if (nt && (irq & (1u << 30))) {
++			cam_wr(cam_se, 0x700, tx[0] | (uint32_t)tx[1] << 8);
++			cam_wr(cam_se, 0x80c, 0);
++			nt = 0;
++		}
++		for (uint32_t c = cam_rd(cam_se, 0x804) & 0x1ffffffu; c && got < nr; c--) {
++			uint32_t w = cam_rd(cam_se, 0x780);
++			for (unsigned j = 0; j < 4 && got < nr; j++) {
++				rx[got++] = (uint8_t)(w >> (8 * j));
++			}
++		}
++		if ((irq & 1u) && got == nr && !nt) {
++			cam_wr(cam_se, 0x618, irq);
++			return 0;
++		}
++		cam_wr(cam_se, 0x618, irq & ((3u << 26) | (1u << 30)));
++		delay(1);
++	}
++	cam_wr(cam_se, 0x604, 2);
++	return ETIMEDOUT;
++}
++
++static int
++cam_pmic_read(uint16_t reg, uint8_t *v)
++{
++	uint8_t p[2] = {(uint8_t)(reg >> 8), (uint8_t)reg};
++	int err = cam_msg(p, 2, NULL, 0);
++	return err ? err : cam_msg(NULL, 0, v, 1);
++}
++
++static bool
++cam_se9_ready(void)
++{
++	uint32_t vote = cam_rd(cam_gcc, 0x5200c), cbcr = cam_rd(cam_gcc, 0x183a4);
++	printf("SWEET CAM: gcc_vote1 0x15200c = %#x\n", vote);
++	printf("SWEET CAM: gcc_qupv3_wrap1_s3_cbcr 0x1183a4 = %#x\n", cbcr);
++	if ((vote & ((0x0fu << 18) | (1u << 25))) != ((0x0fu << 18) | (1u << 25)) ||
++	    (cbcr & (1u << 31))) {
++		printf("SWEET CAM: se9 skipped (wrapper1/SE9 clocks not on; no GCC writes)\n");
++		return false;
++	}
++	uint32_t fw = cam_rd(cam_se, 0x68), tx = cam_rd(cam_se, 0xe24), rx = cam_rd(cam_se, 0xe28);
++	printf("SWEET CAM: se9_fw 0xa8c068 = %#x status=%#x\n", fw, cam_rd(cam_se, 0x40));
++	if (((fw >> 8) & 0xffu) != 3u || ((tx >> 24) & 0x3fu) != 32u ||
++	    ((rx >> 24) & 0x3fu) != 32u || (cam_rd(cam_se, 0x40) & 0x1001u)) {
++		printf("SWEET CAM: se9 skipped (no ABL I2C firmware, or busy)\n");
++		return false;
++	}
++	/* SE9-local transfer setup, same values as sweet_touch.c touch_se_init. */
++	cam_wr(cam_se, 0xe18, 0); cam_wr(cam_se, 0xe1c, 0); cam_wr(cam_se, 0x644, 0);
++	cam_wr(cam_se, 0x618, 0xffffffffu); cam_wr(cam_se, 0x648, 0xffffffffu);
++	cam_wr(cam_se, 0x258, 0);
++	cam_wr(cam_se, 0x28, cam_rd(cam_se, 0x28) | 0x7fu);
++	cam_wr(cam_se, 0xe30, cam_rd(cam_se, 0xe30) | 0x0fu);
++	cam_wr(cam_se, 0x24, 0x7f); cam_wr(cam_se, 0x20, 1);
++	cam_wr(cam_se, 0x7c, 0); cam_wr(cam_se, 0x48, (7u << 4) | 1u);
++	cam_wr(cam_se, 0x278, (10u << 20) | (11u << 10) | 26u); /* 100 kHz */
++	cam_wr(cam_se, 0x254, 0);
++	cam_wr(cam_se, 0x260, 0x0007f8feu); cam_wr(cam_se, 0x264, 0x000ffefeu);
++	cam_wr(cam_se, 0x284, 0x0007f8feu); cam_wr(cam_se, 0x288, 0x000ffefeu);
++	cam_wr(cam_se, 0x80c, 0); cam_wr(cam_se, 0x810, 0);
++	cam_wr(cam_se, 0x814, ((rx >> 16) & 0x3fu) - 1u);
++	return true;
++}
++
++static void
++cam_probe(void)
++{
++	uint32_t ahb = cam_rd(cam_gcc, 0xb008);
++	printf("SWEET CAM: gcc_camera_ahb_cbcr 0x10b008 = %#x\n", ahb);
++	if (ahb & (1u << 31)) {
++		printf("SWEET CAM: camcc skipped (gcc_camera_ahb_clk off)\n");
++	} else {
++		for (unsigned i = 0; i < sizeof(cam_cc_regs) / sizeof(cam_cc_regs[0]); i++) {
++			printf("SWEET CAM: %s %#x = %#x\n", cam_cc_regs[i].name,
++			    CAM_CC_PA + cam_cc_regs[i].off, cam_rd(cam_cc, cam_cc_regs[i].off));
++		}
++	}
++	if (!cam_se9_ready()) {
++		return;
++	}
++	/* SLG51000 (Linux slg51000-regulator.h, 16-bit register addresses). */
++	static const struct { const char *name; uint16_t reg; } pm[] = {
++		{"patn_id_b0", 0x1105}, {"patn_id_b1", 0x1106}, {"patn_id_b2", 0x1107},
++		{"sys_conf_a", 0x1109}, {"sys_conf_d", 0x110c}, {"matrix_conf_a", 0x1128},
++		{"matrix_conf_b", 0x1129}, {"ldo1_vsel", 0x2000}, {"ldo2_vsel", 0x2200},
++		{"ldo3_vsel", 0x2300}, {"ldo4_vsel", 0x2500}, {"ldo5_vsel", 0x2700},
++		{"ldo6_vsel", 0x2900}, {"ldo7_vsel", 0x3100},
++	};
++	for (unsigned i = 0; i < sizeof(pm) / sizeof(pm[0]); i++) {
++		uint8_t v = 0;
++		int err = cam_pmic_read(pm[i].reg, &v);
++		if (err) {
++			printf("SWEET CAM: slg51000 %s %#x skipped (err %d)\n", pm[i].name, pm[i].reg, err);
++			if (err == ENXIO && i == 0) {
++				return; /* no ACK: PMIC unpowered or absent */
++			}
++			continue;
++		}
++		printf("SWEET CAM: slg51000 %s %#x = %#x\n", pm[i].name, pm[i].reg, v);
++	}
++}
++
++static int
++sysctl_sweet_camprobe SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int v = 0, changed = 0;
++	int err = sysctl_io_number(req, v, sizeof(v), &v, &changed);
++	if (err || !changed || v != 1) {
++		return err;
++	}
++	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&cam_lock_busy)) {
++		return EBUSY;
++	}
++	cam_probe();
++	cam_lock_busy = 0;
++	return 0;
++}
++
++/* Manual OID as in 0195 (sweet_spmi.c): permanent nodes panic after lockdown. */
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_camprobe,
++    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_camprobe, "I", "sunfish camera state probe (0211)");
++
++static void
++cam_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	cam_gcc = ml_io_map(CAM_GCC_PA, 0x60000);
++	cam_cc = ml_io_map(CAM_CC_PA, 0x10000);
++	cam_se = ml_io_map(CAM_SE9_PA, 0x4000);
++	if (!cam_gcc || !cam_cc || !cam_se) {
++		printf("SWEET CAM: MMIO mapping failed\n");
++		return;
++	}
++	sysctl_register_oid(&sysctl__kern_sweet_camprobe);
++	printf("SWEET CAM: kern.sweet_camprobe ready\n");
++}
++
++/* Called from SweetBattery::start; no-op without sweetcamprobe=1. */
++void
++sweet_camprobe_register(void)
++{
++	static thread_call_t reg;
++	int on = 0;
++	(void)PE_parse_boot_argn("sweetcamprobe", &on, sizeof(on));
++	if (on != 1 || reg) {
++		return;
++	}
++	reg = thread_call_allocate(cam_register_late, NULL);
++	if (!reg) {
++		return;
++	}
++	uint64_t deadline;
++	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(reg, deadline);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 54cb6d0..4290200 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -18,6 +18,7 @@
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ extern "C" void sweet_torch_register(void); /* 0190 */
++extern "C" void sweet_camprobe_register(void); /* 0211, bsd/dev/sweet_camprobe.c */
+ 
+ /* 0198: the PON line again later (the live log starts at ~41 s) and as kern.sweet_pon;
+  * manual OID like 0195, registered from poll() long after lockdown. */
+@@ -352,6 +353,7 @@ SweetBattery::start(IOService *provider)
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_spmi_init() == 0;
+ 	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
++	sweet_camprobe_register(); /* 0211: no-op without sweetcamprobe=1 */
+ 	/* 0197: log the PM6150 PON reason registers once (read only); sweetpon=0 skips. */
+ 	int pon = 1;
+ 	(void)PE_parse_boot_argn("sweetpon", &pon, sizeof(pon));
+-- 
+2.56.0
+
