@@ -17,6 +17,8 @@ base="$base flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpu
 base="$base sweetbattery=1"
 # on by default since 2026-10-28: iOS Wi-Fi status (xnu 0199), panel off on sleep (0202-0205)
 base="$base sweetwifiev=1 sweetpanelsleep=1"
+# present waits for its blit (2026-10-28: 20.3 vs 15.3 panel updates/s, 94% vs 70% of swaps; kpw1c vs kpw0c)
+base="$base sweetpresentwait=1"
 # Real time: PM6150 RTC + offset (tools/flame-rtc.py LOG calibrates it once).
 [ -f work/rtc-offset ] && base="$base sweetrtcoff=$(cat work/rtc-offset)"
 # Extra args replace defaults with the same key (XNU would take the first).
