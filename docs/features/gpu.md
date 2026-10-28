@@ -22,6 +22,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 11:40-11:55 sk70: silent reset to fastboot at 337.8 s (2 h soak aborted)
+- kernel70 `sweetbocensus=600`, bundle 7053013 (bridge 0105), 4455 mV. Fresh-boot bench sk70p: 22.7 / 22.1 swaps/s, 16.1 / 15.6 panel updates/s (below the 21-24 of earlier kernels/bundles; not yet explained).
+- App soak cycle 2: the phone fell into fastboot at uptime ~337.8 s. RAM-log rescue (sk70r boot; header total 495807, n 258048, logs/sk70-rescue.txt) ends mid-swipe at `[ 337.776] SWEET CMD: swipe 540,1800 -> 540,1000 in 30 steps`: no panic, watchdog, GPU hang, SError, jetsam or thermal line. GPU pool 160 MB (backboardd), GPU busy 13%. Same pattern as the unexplained 10-25 soak resets (468 s, ~179 s; storage suspect: the UFS I/O error path), the first since 0175/0176. sk68 (2 h, kernel68) had none.
+- Retrying the 2 h soak on the sk70r boot.
+
 ### 2026-10-28 08:30 bl2: real GPU hang recovered
 - kernel70, uptime 615.9 s: fence 11512 done 11420, smmu fsr 0; recovered in 26326 us; backboardd pid 58 killed, pid 740 came up and the soak went on. (bl1's failed recovery had the SMMU stalled; this one did not.)
 
