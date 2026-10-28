@@ -5,7 +5,7 @@
 #   -b  install this Metal bundle (tools/sunfish-metal2-install.sh DIR --no-restart) before CMD
 #   -n  no reboot: run CMD on the current boot
 # CMD runs with TAG exported. Markers go into ../logs/usb-live.log (=== TAG ...).
-# Unreachable during CMD or no SSH: rescue boot (TAG-r) with the same kernel, logs/TAG-rescue.txt, exit 3.
+# Unreachable during CMD or no SSH: rescue boot (TAG-r) with the same kernel, ../logs/TAG-rescue.txt, exit 3.
 # Exit: CMD's rc, 2 = setup failed (battery, args), 3 = phone lost.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -64,7 +64,7 @@ rescue() { # phone lost: boot TAG-r with the same kernel, save the RAM-log rescu
 	mark "rescue start"
 	"$ROOT/tools/sunfish-boot.sh" "$TAG-r" "$kpath" "${bootargs[@]}" >/dev/null 2>&1
 	if ! waitssh; then say "rescue boot: no SSH after 180 s"; summary 3; exit 3; fi
-	local out=$ROOT/logs/$TAG-rescue.txt raw=$ROOT/logs/$TAG-rescue.hex
+	local out=$ROOT/../logs/$TAG-rescue.txt raw=$ROOT/../logs/$TAG-rescue.hex
 	mkdir -p "$ROOT/logs"
 	"$ROOT/tools/sunfish-ssh" '/var/local/bin/toybox xxd -s 117670649856 -l 262144 -p /dev/rufsroot0' </dev/null > "$raw"
 	python3 -I - "$raw" "$out" <<'EOF'
