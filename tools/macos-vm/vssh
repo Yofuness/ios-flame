@@ -1,0 +1,5 @@
+#!/bin/sh
+# ssh into the macOS build VM (start it with mac-vm.sh first)
+# VM data (disk, state, keys, credentials) lives outside git, in $MACOS_VM_DIR
+D=${MACOS_VM_DIR:-$HOME/VMs/macos}
+exec ssh -o UserKnownHostsFile="$D/known_hosts" -o ServerAliveInterval=30 -i "$D/id_ed25519" -p 2222 builder@127.0.0.1 "$@"
