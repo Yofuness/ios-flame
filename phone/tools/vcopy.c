@@ -3,8 +3,12 @@
 //   vcopy [-x EXCL]... SRC DST      recursive copyfile(3) COPYFILE_ALL; EXCL = path prefix of SRC to skip
 //   vcopy -l PATH                   xattr names, st_flags, ACL yes/no of one path
 //   vcopy -c SRC DST [-x EXCL]...   compare trees (type, uid, gid, mode, flags, xattr names, size); read-only
+//   vcopy -m SRC DST [-x EXCL]...   metadata pass only: owner, ACL, flags of entries that exist in DST (no data)
+// SRC DST is contents-to-contents: copyfile alone would nest SRC's basename inside an existing DST, so when DST is an
+// existing directory each entry of SRC is copied to DST/name.
 // Regular-file data is copied with read/write (see copydata). Sockets are skipped. Exit 1 on any error (or any difference with -c).
 #include <copyfile.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <fts.h>
@@ -40,6 +44,32 @@ static void fixowner(const char *src, const char *dst)
 		fprintf(stderr, "vcopy: lchown %s: %s\n", dst, strerror(errno));
 		nerr++;
 	}
+}
+
+// ACL and BSD flags explicitly: copyfile(COPYFILE_METADATA|COPYFILE_STAT) left regular files without their ACL
+// (~450 files in /private/var) and lost flags 0x80 on one. Flags last: immutable flags would block the rest.
+static long nfacl, nfflags;
+static void fixmeta(const char *src, const char *dst)
+{
+	struct stat s, d;
+	if (!dst)
+		return;
+	acl_t a = acl_get_link_np(src, ACL_TYPE_EXTENDED);
+	if (a) {
+		if (acl_set_link_np(dst, ACL_TYPE_EXTENDED, a)) {
+			fprintf(stderr, "vcopy: acl %s: %s\n", dst, strerror(errno));
+			nerr++;
+		} else
+			nfacl++;
+		acl_free(a);
+	}
+	if (lstat(src, &s) || lstat(dst, &d) || s.st_flags == d.st_flags)
+		return;
+	if (lchflags(dst, s.st_flags)) {
+		fprintf(stderr, "vcopy: flags %s: %s\n", dst, strerror(errno));
+		nerr++;
+	} else
+		nfflags++;
 }
 
 // Data with plain read/write: copyfile's data path (fcopyfile) got EFAULT on 5691 files (sqlite *.db, -shm, -wal)
@@ -113,6 +143,7 @@ static void copyreg(const char *src, const char *dst)
 	}
 	nfiles++;
 	fixowner(src, dst);
+	fixmeta(src, dst);
 }
 
 static int cb(int what, int stage, copyfile_state_t st, const char *src, const char *dst, void *ctx)
@@ -152,8 +183,10 @@ static int cb(int what, int stage, copyfile_state_t st, const char *src, const c
 			ndirs++;
 		break;
 	case COPYFILE_RECURSE_DIR_CLEANUP:
-		if (stage == COPYFILE_FINISH)
+		if (stage == COPYFILE_FINISH) {
 			fixowner(src, dst);
+			fixmeta(src, dst);
+		}
 		break;
 	case COPYFILE_RECURSE_ERROR:
 		fprintf(stderr, "vcopy: %s: %s\n", src ? src : "?", strerror(errno));
@@ -264,14 +297,104 @@ static int compare(const char *src, const char *dst)
 	return ndiff > 0;
 }
 
+// -m: repair owner, ACL and flags of an existing copy without copying data.
+static int metapass(const char *src, const char *dst)
+{
+	char *argv[] = {(char *)src, NULL}, dp[4096];
+	size_t sl = strlen(src);
+	FTS *f = fts_open(argv, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+	if (!f) {
+		perror("fts_open");
+		return 1;
+	}
+	FTSENT *e;
+	struct stat d;
+	while ((e = fts_read(f))) {
+		if (e->fts_info == FTS_DP)
+			continue;
+		if (excluded(e->fts_path)) {
+			if (e->fts_info == FTS_D)
+				fts_set(f, e, FTS_SKIP);
+			continue;
+		}
+		if (e->fts_info == FTS_NS || e->fts_info == FTS_ERR || e->fts_info == FTS_DNR)
+			continue;
+		if (S_ISSOCK(e->fts_statp->st_mode))
+			continue;
+		snprintf(dp, sizeof dp, "%s%s", dst, e->fts_path + sl);
+		if (lstat(dp, &d))
+			continue;
+		fixowner(e->fts_path, dp);
+		fixmeta(e->fts_path, dp);
+	}
+	fts_close(f);
+	printf("fixed-acl %ld fixed-flags %ld errors %ld\n", nfacl, nfflags, nerr);
+	return nerr > 0;
+}
+
+// Copy SRC to DST, or SRC's entries into DST when DST is an existing directory (contents-to-contents).
+static void copytree(const char *src, const char *dst)
+{
+	struct stat d, s;
+	copyfile_state_t st = copyfile_state_alloc();
+	copyfile_state_set(st, COPYFILE_STATE_STATUS_CB, (const void *)cb);
+	if (stat(dst, &d) || !S_ISDIR(d.st_mode)) {
+		if (copyfile(src, dst, st, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW) < 0) {
+			fprintf(stderr, "vcopy: copyfile: %s\n", strerror(errno));
+			nerr++;
+		}
+		copyfile_state_free(st);
+		return;
+	}
+	DIR *dir = opendir(src);
+	if (!dir) {
+		fprintf(stderr, "vcopy: %s: %s\n", src, strerror(errno));
+		nerr++;
+		copyfile_state_free(st);
+		return;
+	}
+	struct dirent *de;
+	char sp[4096], dp[4096];
+	while ((de = readdir(dir))) {
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+			continue;
+		snprintf(sp, sizeof sp, "%s/%s", src, de->d_name);
+		snprintf(dp, sizeof dp, "%s/%s", dst, de->d_name);
+		if (excluded(sp) || lstat(sp, &s) || S_ISSOCK(s.st_mode)) {
+			nskip++;
+			continue;
+		}
+		if (S_ISREG(s.st_mode)) {
+			copyreg(sp, dp);
+			continue;
+		}
+		if (S_ISDIR(s.st_mode))
+			ndirs++;
+		else if (S_ISLNK(s.st_mode))
+			nlinks++;
+		if (copyfile(sp, dp, st, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW) < 0) {
+			fprintf(stderr, "vcopy: copyfile %s: %s\n", sp, strerror(errno));
+			nerr++;
+		}
+		fixowner(sp, dp);
+		fixmeta(sp, dp);
+	}
+	closedir(dir);
+	copyfile_state_free(st);
+	fixowner(src, dst);
+	fixmeta(src, dst);
+}
+
 int main(int argc, char **argv)
 {
 	int opt, mode = 0;
-	while ((opt = getopt(argc, argv, "lcx:")) != -1) {
+	while ((opt = getopt(argc, argv, "lcmx:")) != -1) {
 		if (opt == 'l')
 			mode = 'l';
 		else if (opt == 'c')
 			mode = 'c';
+		else if (opt == 'm')
+			mode = 'm';
 		else if (opt == 'x' && nexcl < 64)
 			excl[nexcl++] = optarg;
 		else
@@ -293,17 +416,14 @@ int main(int argc, char **argv)
 		goto usage;
 	if (mode == 'c')
 		return compare(argv[0], argv[1]);
-	copyfile_state_t st = copyfile_state_alloc();
-	copyfile_state_set(st, COPYFILE_STATE_STATUS_CB, (const void *)cb);
-	if (copyfile(argv[0], argv[1], st, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW) < 0) {
-		fprintf(stderr, "vcopy: copyfile: %s\n", strerror(errno));
-		nerr++;
-	}
-	copyfile_state_free(st);
+	if (mode == 'm')
+		return metapass(argv[0], argv[1]);
+	copytree(argv[0], argv[1]);
 	printf("files %ld dirs %ld symlinks %ld skipped %ld errors %ld efault-retries %ld\n", nfiles, ndirs, nlinks, nskip,
 	       nerr, nretry);
 	return nerr > 0;
 usage:
-	fprintf(stderr, "usage: vcopy [-x EXCL]... SRC DST | vcopy -l PATH | vcopy -c SRC DST [-x EXCL]...\n");
+	fprintf(stderr, "usage: vcopy [-x EXCL]... SRC DST | vcopy -l PATH | vcopy -c|-m SRC DST [-x EXCL]...\n"
+	                "  SRC DST is contents-to-contents (an existing DST gets SRC's entries, not SRC's basename)\n");
 	return 2;
 }
