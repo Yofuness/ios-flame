@@ -1,6 +1,6 @@
 # iOS on Pixel 4a (sunfish) — status
 
-Updated 2026-10-28 02:10 (rows below are current; the dated "Update" sections at the end are history). Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
+Updated 2026-10-28 06:45 (rows below are current; the dated "Update" sections at the end are history). Port of ios-flame / ios-sweet. Code: `port/` (branch `sunfish`,
 github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 
 ## Working
@@ -17,7 +17,7 @@ github.com/Yofuness/ios-flame). Night log: [overnight.md](overnight.md).
 | SSH | ✅ | dropbear + dash + toybox; `port/tools/sunfish-ssh` |
 | Real time | ✅ | PM6150 RTC + `sweetrtcoff` (`port/work/rtc-offset`); timezone America/Toronto since 2026-10-28 |
 | Stock apps | ✅ | 32 staged apps installed in /Applications |
-| Wi-Fi | ❌ | scan works; join does not (2026-10-27 ck1 on kernel60: no route, wifid CURRENT_NETWORK error 6). The earlier join + DHCP + Safari result was with wland and /var/local/wlan.conf |
+| Wi-Fi | ✅ | wland joins the home network at boot from /var/local/wlan.conf (kept on the phone since 2026-10-28): DHCP, DNS/TCP/HTTP 200 OK (wj1, kernel69). The iOS join from Settings (wifid) still fails: CURRENT_NETWORK error 6 |
 
 ## Partial / in progress
 - **Smoothness** — next steps are in docs/sunfish/plan.md (present path, the last texture copies).

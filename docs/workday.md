@@ -676,3 +676,9 @@ Bench (tools/sunfish-fpsbench.sh, BENCH_TIGHT=1, Settings swipes, 30 s):
 - bos1 (TU_DEBUG=bos, ~10 min): Turnip's live BOs are mostly command streams (cmd cs 1491, draw cs 1992, draw sub cs 2013, tile store cs 996), 6732 BOs 484 MB; no 1024 KB BO in its table while the kernel counts 46 -> 61. The 1 MB BOs live in the kernel after Turnip let go of them (suspect: the NativeAdreno backend's "retaining native allocation" paths; not in the logs we have).
 - /var/local/mtl2.log is 321 MB (never rotated).
 - Phone left on bc1 (kernel70, sweetbocensus=300), dim 10, mtl2-env empty as before.
+
+## 2026-10-28 06:35-06:45 Wi-Fi join on the home network
+- Lasting setup at the user's request: the network file lives on the phone at /var/local/wlan.conf (mode 600), read by wland at every boot; the PC copy is in a gitignored file under work/.
+- wj1 (kernel69, 4456 mV, SSH after 43 s): joined on the first try (-63 dBm); DHCP address and default route; DNS 46 ms, TCP 96 ms, HTTP 200 in 403 ms.
+- Open: wifid still says CURRENT_NETWORK error 6 (54 in ~2 min), so the status bar probably shows no Wi-Fi icon (webcam frame too dim to tell); Safari not tried by hand.
+- Phone left on wj1 (kernel69), dim 10.
