@@ -38,7 +38,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Metal](docs/features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) |
 | [Touch](docs/features/touch.md) | ✅ | ST FTM5 over I²C |
 | [Buttons](docs/features/buttons.md) | ✅ | power, volume down, volume up |
-| [Flashlight](docs/features/flashlight.md) | 🟡 | LED works from a tool (`sweettorch=1`); no Control Center button |
+| [Flashlight](docs/features/flashlight.md) | ✅ | Control Center button turns the LED on and off |
 | [Clock](docs/features/clock.md) | ✅ | PM6150 RTC |
 | [Wi-Fi](docs/features/wifi.md) | 🟡 | joins at boot from a config file; iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining from Settings untested |
 | [Battery](docs/features/battery.md) | 🟡 | real reading; % shows no jumps at idle, discharge unchecked |

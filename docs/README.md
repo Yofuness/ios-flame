@@ -18,7 +18,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Metal](features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) on the A618 | 2026-10-26 |
 | [Touch](features/touch.md) | ✅ | ST FTM5 over SE7 I²C 0x49 (patch 0125, `sweettouch=2`) | 2026-10-28 |
 | [Buttons](features/buttons.md) | ✅ | power, vol-down (PON), vol-up (PM6150L GPIO2, patch 0126) | 2026-10-23 |
-| [Flashlight](features/flashlight.md) | 🟡 | LED works from a tool (kernel69, `sweettorch=1`); no Control Center button yet | 2026-10-28 |
+| [Flashlight](features/flashlight.md) | ✅ | Control Center button turns the LED on/off (85 mA, 300 s auto-off; sweettorch=1 default, SweetMetal2 AVFlashlight + module-caps hooks) | 2026-10-28 |
 | [Clock](features/clock.md) | ✅ | PM6150 RTC + `sweetrtcoff`; timezone America/Toronto since 2026-10-28 | 2026-10-28 |
 | [Wi-Fi](features/wifi.md) | 🟡 | wland joins at boot; iOS shows the status-bar icon and the network in Settings with sweetwifiev=1 (xnu 0199); the join from Settings is untested | 2026-10-28 |
 | [Battery](features/battery.md) | 🟡 | real reading works; IR-compensated % (0128) shows no jumps at idle, discharge unchecked | 2026-10-28 |

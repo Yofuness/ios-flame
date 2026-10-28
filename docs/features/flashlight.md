@@ -17,6 +17,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:40 k92c (kernel92, sweettorch=1): Control Center flashlight button works
+- With the caps hook (5c3e7ab) mtl2.log shows `CCSModuleMetadata caps hook` and `module caps {( ... )} cleared`; the tile now shows (lower row, right of Focus, above the bell) with its icon.
+- Tap 1: `flashlight: level 0.85`, `on 85 mA`, kernel `SWEET TORCH: on 85 mA (auto-off in 300 s), readback 0x46=0x80 0x4c=0x1`; tile highlighted. Tap 2: `level 0.00`, `off`, kernel writes 0xd349/0xd346 <- 0. The LED itself is on the back (not on the webcam); U1 (the user looks) stays open.
+- sweetbl=2 sweettorch=1 are boot defaults now (tools/sunfish-boot.sh).
+
 ### 2026-10-28 17:30 k92b: the caps hook (5c3e7ab) is in the installed binary but logged nothing
 - mtl2.log after SpringBoard start: `AVFlashlight -> kern.sweet_torch`, `level 0.00`, `off`, `off`; no `CCSModuleMetadata caps hook` / `missing` line. Control Center shows several tiles with noise icons (top two of the right column, one at the bottom right); taps on two guesses gave no torch line. mtl2.log has no timestamps: k92c writes a marker first.
 - Process note: the runner's stray `pmem r 0x0` timed out and the screen went black right after (SSH kept working; dim.sh hung on MDP writes). Runner specs now forbid arbitrary pmem addresses.

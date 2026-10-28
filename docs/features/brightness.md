@@ -18,6 +18,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:40 default on
+- Good on k92a/k92b/k92c (DCS 227-230 at boot, slider follows). `sweetbl=2` is a boot default now (tools/sunfish-boot.sh; `sweetbl=0` turns it off).
+
 ### 2026-10-28 17:20 k92a (kernel92 = 0214+0216, sweetbl=2, DIM=100): Control Center slider works
 - Boot: screen visible; DCS 51 = 227 at 37.38 s (from the slider's stored `brightness`), ack 0.
 - Slider to the bottom: DCS 222, 188, 156, 118, 80, 46, 32, panel visibly dimmer; back to ~40%: 36 ... 230, panel brighter (webcam frames sl_bottom / sl_half). No value above 230; no errors.
