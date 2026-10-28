@@ -1,0 +1,191 @@
+From 2576d62fb111a325ee5dcca76b813b5d5f3cab9e Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 14:03:53 -0400
+Subject: [PATCH] sunfish: panel sleep-in/out (DCS 28/10, 11/29) on display
+ power changes (sweetpanelsleep)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 125 +++++++++++++++++++++++++-
+ 1 file changed, 123 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 578ff39..f54a058 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -160,6 +160,13 @@ public:
+ 	bool fPresentBusy;	/* 0158: the last present was put off (GPU busy): show fPending on the next tick */
+ 	void copyRow(uint32_t x, uint32_t y, const uint32_t *src, uint32_t n);
+ 	static void presentLoop(void *arg);
++	/* 0201: panel sleep (sweetpanelsleep=1): DCS 28/10 once the fade is black, 11/29 at wake, on panelLoop */
++	bool          fPanelSleep;    /* boot-arg on */
++	bool          fPanelAsleep;   /* DCS 10 sent, autorefresh paused: no present */
++	bool          fPanelFailed;   /* a DMA timed out this off period: fade only */
++	bool          fPanelReq;      /* wakes panelLoop */
++	uint32_t      fPanelAR;       /* saved MDP autorefresh */
++	static void panelLoop(void *arg);
+ };
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
+@@ -278,6 +285,12 @@ AppleCLCD::start(IOService *provider)
+ 		fOnSwap = onswap != 0;
+ 	}
+ 
++	uint32_t ps = 0;	/* 0201 */
++	PE_parse_boot_argn("sweetpanelsleep", &ps, sizeof(ps));
++	if (ps != 0 && IOCreateThread(&AppleCLCD::panelLoop, this) != NULL) {
++		fPanelSleep = true;
++	}
++
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+ 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
+@@ -395,6 +408,10 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		if (step <= 6) {
+ 			fb->fFadeStep = step + 1;
+ 		}
++		if (step == 6 && fb->fPanelSleep) {	/* 0201: black now: the panel can sleep */
++			fb->fPanelReq = true;
++			IOLockWakeup(fb->fLock, &fb->fPanelReq, true);
++		}
+ 		IOLockUnlock(fb->fLock);
+ 		if (step <= 6) {
+ 			for (uint32_t y = 0; y < fb->fHeight; y++) {
+@@ -407,7 +424,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 		return;
+ 	}
+ 	sweet_tl(3, 0, 0);
+-	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0 && !fb->fOnSwap;
++	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0 && !fb->fOnSwap && !fb->fPanelAsleep;	/* 0201 */
+ 	uint8_t *rec = NULL;
+ 	if (flush && fb->fPresentThread) {
+ 		fb->fPresentReq = true;
+@@ -453,7 +470,7 @@ AppleCLCD::presentLoop(void *arg)
+ 			IOLockSleep(fb->fLock, &fb->fPresentReq, THREAD_UNINT);
+ 		}
+ 		fb->fPresentReq = false;
+-		bool go = fb->fDirty && !fb->fPowerOff;
++		bool go = fb->fDirty && !fb->fPowerOff && !fb->fPanelAsleep;	/* 0201 */
+ 		if (go) {
+ 			memcpy(fb->fPresentRec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+ 			fb->fDirty = false;
+@@ -475,6 +492,105 @@ AppleCLCD::presentLoop(void *arg)
+ 	}
+ }
+ 
++/*
++ * 0201: DCS short write (no parameter) through the DSI0 command DMA, as tools/sunfish-panel-sleep.sh.
++ * Only 28/10/11/29; never 0x53. Never maps 0x0ae44000 (hangs the bus).
++ */
++#define SWEET_DSI0_PA   0x0ae94000
++#define SWEET_MDP_AR_PA 0x0ae6b000      /* autorefresh at +0xab4 */
++#define SWEET_DCS_BUF   0x9d6ff000      /* splash tail, DMA-reachable */
++extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++static volatile uint32_t *sweet_dsi, *sweet_mdp, *sweet_dcsbuf;
++
++static bool
++sweet_dsi_dcs_short(uint8_t cmd)
++{
++	if (cmd != 0x28 && cmd != 0x10 && cmd != 0x11 && cmd != 0x29) {
++		return false;
++	}
++	if (sweet_dsi[0] != 0x20030000 || (sweet_dsi[0x4 / 4] & 1) == 0) {
++		IOLog("SWEET PANEL: DSI0 version %x ctrl %x: refused\n", sweet_dsi[0], sweet_dsi[0x4 / 4]);
++		return false;
++	}
++	sweet_dcsbuf[0] = 0x80050000 | cmd;     /* LAST | DTYPE 05 | cmd (device memory: uncached) */
++	sweet_dcsbuf[1] = 0xFFFFFFFF;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	sweet_dsi[0x110 / 4] |= 1;
++	sweet_dsi[0x48 / 4] = SWEET_DCS_BUF;
++	sweet_dsi[0x4c / 4] = 4;
++	sweet_dsi[0x90 / 4] = 1;
++	uint32_t t = 0;
++	bool done = false;
++	while (!(done = (sweet_dsi[0x110 / 4] & 1) != 0) && t < 200) {
++		IOSleep(1);
++		t++;
++	}
++	uint32_t ack = sweet_dsi[0x68 / 4];
++	sweet_dsi[0x110 / 4] |= 1;
++	IOLog("SWEET PANEL: dcs %02x done %d t %u ms ack %x\n", cmd, done, t, ack);
++	return done;
++}
++
++/* 0201: own thread; sleeps the panel when off and black, wakes it when on. Re-checks, so the latest request wins. */
++void
++AppleCLCD::panelLoop(void *arg)
++{
++	AppleCLCD *fb = (AppleCLCD *)arg;
++	sweet_dsi = (volatile uint32_t *)ml_io_map(SWEET_DSI0_PA, 0x1000);
++	sweet_mdp = (volatile uint32_t *)ml_io_map(SWEET_MDP_AR_PA, 0x1000);
++	sweet_dcsbuf = (volatile uint32_t *)ml_io_map(SWEET_DCS_BUF, 0x1000);
++	if (sweet_dsi == NULL || sweet_mdp == NULL || sweet_dcsbuf == NULL) {
++		IOLog("SWEET PANEL: map failed, panel sleep off\n");
++		return;	/* no requests are served: fade only */
++	}
++	volatile uint32_t *ar = sweet_mdp + 0xab4 / 4;
++	for (;;) {
++		IOLockLock(fb->fLock);
++		bool sleep;
++		while ((sleep = fb->fPowerOff && fb->fFadeStep > 6 && !fb->fPanelFailed) == fb->fPanelAsleep) {
++			fb->fPanelReq = false;
++			IOLockSleep(fb->fLock, &fb->fPanelReq, THREAD_UNINT);
++		}
++		IOLockUnlock(fb->fLock);
++		bool ok;
++		if (sleep) {
++			uint32_t v = *ar;
++			ok = (v >> 31) != 0;
++			if (ok) {
++				fb->fPanelAR = v;
++				*ar = 0;
++				IOSleep(30);
++				ok = sweet_dsi_dcs_short(0x28);
++				IOSleep(20);
++				ok = ok && sweet_dsi_dcs_short(0x10);
++				IOSleep(120);
++				if (!ok) {
++					*ar = v;
++				}
++			}
++		} else {
++			*ar = 0;
++			ok = sweet_dsi_dcs_short(0x11);
++			IOSleep(120);
++			ok = sweet_dsi_dcs_short(0x29) && ok;
++			IOSleep(20);
++			*ar = (fb->fPanelAR >> 31) ? fb->fPanelAR : 0x80000001;
++		}
++		if (!ok) {
++			IOLog("SWEET PANEL: failed, panel left on\n");
++		}
++		IOLockLock(fb->fLock);
++		fb->fPanelAsleep = sleep && ok;
++		if (!ok) {
++			fb->fPanelFailed = true;        /* fade only until the next power change */
++		}
++		if (!fb->fPanelAsleep) {
++			fb->fDirty = true;
++		}
++		IOLockUnlock(fb->fLock);
++	}
++}
++
+ void
+ AppleCLCD::addClient(IOMobileFramebufferUserClient *client)
+ {
+@@ -931,6 +1047,11 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 				fFB->fPowerOff = off;
+ 				fFB->fFadeStep = 0;
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
++				fFB->fPanelFailed = false;      /* 0201 */
++				if (fFB->fPanelSleep) {
++					fFB->fPanelReq = true;
++					IOLockWakeup(fFB->fLock, &fFB->fPanelReq, true);
++				}
+ 			}
+ 			IOLockUnlock(fFB->fLock);
+ 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+-- 
+2.56.0
+

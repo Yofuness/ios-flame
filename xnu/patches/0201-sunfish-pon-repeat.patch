@@ -1,0 +1,97 @@
+From 6f76ca38f2cf1fbede901721d64aa99454a9f0ef Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 14:03:49 -0400
+Subject: [PATCH] sunfish: repeat the PON reason line with the battery log,
+ kern.sweet_pon
+
+---
+ iokit/Kernel/arm/SweetBattery.cpp | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 51febe4..e849025 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -12,11 +12,20 @@
+ #include <IOKit/pwr_mgt/IOPMPowerSource.h>
+ #include <libkern/c++/OSCollectionIterator.h>
+ #include <pexpert/pexpert.h>
++#include <kern/clock.h>
++#include <sys/sysctl.h>
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ extern "C" void sweet_torch_register(void); /* 0190 */
+ 
++/* 0198: the PON line again later (the live log starts at ~41 s) and as kern.sweet_pon;
++ * manual OID like 0195, registered from poll() long after lockdown. */
++static char gSweetPonLine[256];
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_pon,
++    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    gSweetPonLine, sizeof(gSweetPonLine), sysctl_handle_string, "A", "sunfish PON reason (0197)");
++
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+ public:
+@@ -31,6 +40,7 @@ private:
+ 	int fLastMode;
+ 	int fShown;		/* sunfish: smoothed % shown to iOS, -1 until the first reading */
+ 	unsigned fEmaMv, fPolls;
++	uint64_t fPonNextNs;	/* 0198: next PON repeat, 0 = none */
+ 	void putNumber(const char *key, UInt32 value);
+ 	void putBool(const char *key, bool value);
+ 	void publish(unsigned percent, unsigned mv, int ma, bool external,
+@@ -55,6 +65,7 @@ SweetBattery::init(OSDictionary *dictionary)
+ 	fLoop = NULL;
+ 	fTimer = NULL;
+ 	fTimerAdded = fRunning = fReal = false;
++	fPonNextNs = 0;
+ 	if (dictionary) {
+ 		OSCollectionIterator *it = OSCollectionIterator::withCollection(dictionary);
+ 		if (!it) {
+@@ -307,6 +318,15 @@ SweetBattery::poll(void)
+ 	if ((fPolls++ % 10u) == 0) {
+ 		IOLog("SWEET BATTERY: %umV %dmA ocv %u ema %u -> target %d%% shown %d%% ext=%d chg=%d\n",
+ 		    mv, ma, ocv, fEmaMv, target, fShown, external, charging);
++		uint64_t now;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &now);
++		if (fPonNextNs && now >= fPonNextNs) {
++			if (fPonNextNs == 60 * NSEC_PER_SEC) {
++				sysctl_register_oid(&sysctl__kern_sweet_pon);
++			}
++			IOLog("%s (repeat)\n", gSweetPonLine);
++			fPonNextNs = now + 1800 * NSEC_PER_SEC;
++		}
+ 	}
+ 	publish((unsigned)fShown, mv, ma, external, capable,
+ 	    charging, full, true, currentValid);
+@@ -342,7 +362,7 @@ SweetBattery::start(IOService *provider)
+ 			ok = !sweet_spmi_read(0, 0x800 + i, &r[i]);
+ 		}
+ 		if (!ok) {
+-			printf("SWEET PON: read failed\n");
++			strlcpy(gSweetPonLine, "SWEET PON: read failed", sizeof(gSweetPonLine));
+ 		} else {
+ 			static const char *const why[8] = { "hard_reset", "smpl", "rtc",
+ 				                            "dc_chg", "usb_chg", "pon1", "cblpwr", "kpdpwr" };
+@@ -353,13 +373,15 @@ SweetBattery::start(IOService *provider)
+ 					strlcat(dec, "|", sizeof(dec));
+ 				}
+ 			}
+-			printf("SWEET PON: type %02x/%02x rev %02x %02x %02x %02x | 08:%02x 09:%02x "
++			snprintf(gSweetPonLine, sizeof(gSweetPonLine), "SWEET PON: type %02x/%02x rev %02x %02x %02x %02x | 08:%02x 09:%02x "
+ 			    "0a:%02x 0b:%02x 0c:%02x 0d:%02x 0e:%02x 0f:%02x 10:%02x 11:%02x 12:%02x "
+-			    "13:%02x | reason %s warm %#x poff/fault %#x/%#x\n",
++			    "13:%02x | reason %s warm %#x poff/fault %#x/%#x",
+ 			    r[4], r[5], r[0], r[1], r[2], r[3], r[8], r[9], r[10], r[11], r[12],
+ 			    r[13], r[14], r[15], r[16], r[17], r[18], r[19], dec[0] ? dec : "none",
+ 			    r[10], r[12], r[13]);
+ 		}
++		printf("%s\n", gSweetPonLine);
++		fPonNextNs = 60 * NSEC_PER_SEC;
+ 	}
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+-- 
+2.56.0
+
