@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 17:30 M1b tool apr_tone (8f5e166, built, dry-run checked on the PC, not run on the phone)
+- No ASM stream: a 1 kHz -20 dBFS PCM buffer (pm_alloc, mapped to the DSP with SHARED_MEM_MAP_REGIONS) written in 10 ms chunks to an AFE RT proxy port (0x2001) looped back to SECONDARY_MI2S_RX (0x1002); clock set SEC_MI2S_IBIT 1.536 MHz, I2S config 48k/16; amp CS35L41 over SE9 I²C from userland via pmem (geni_i2c.c); amp limits enforced in cs35l41.c: digital volume >= 20 dB down, boost peak only lowered to <= 3700 mA, AMP_GAIN never written, IRQ1 error bits polled every 100 ms, amp on <= 3 s, tone <= 2.5 s, power-down on any error/signal. Opcodes 35-85% (from memory), amp registers 30-85%.
+- Possible blockers: the amp reset pins (PM6150L GPIO 8/11) may be held low (no userland SPMI write); the DSP may not reach a plain physical buffer (no LPASS SMMU map); the LPI pins need a hw vote first (--hwvote --lpi-pins, off by default).
+- Test order: adspboot -> aprtest -> apr_tone --dry-run -> --no-amp (which AFE commands are accepted) -> apr_tone (L amp, bypass, -20 dB; the user listens) -> only then --boost / --amp both. Don't run kern.sweet_camprobe at the same time (same SE9 bus).
+
 ### 2026-10-28 16:50 M1a tool aprtest (84c9f0f, built, not run) + an adspboot fix (20c8be3)
 - phone/wifi/aprtest.c: reattaches to the lpass glink edge without resetting it (glink_keep_state), opens "apr_audio_svc" (OPEN / OPEN_ACK, intents, TX_DATA with RX_INTENT_REQ when out of intents, TX_DATA_CONT reassembly, RX_DONE), then APR (5-word header, hdr_field 0x0150, APPS 5 -> ADSP 4): AVCS_CMD_ADSP_EVENT_GET_STATE 0x1326C (-> 0x1326D, 1 = ready), AVCS_CMD_GET_FWK_VERSION 0x1292C (-> 0x1292D, services list), fallback AVCS_GET_VERSIONS 0x12905. Exit 0 if ready. Opcode confidence 65-85% (from memory of q6core.c / apr.h).
 - adspboot: a glink INTENT command is sized 8 + 8 * param2 (intent count), not param1 (channel id); the wrong size could have desynced the RX FIFO.

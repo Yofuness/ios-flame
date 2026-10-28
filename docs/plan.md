@@ -11,6 +11,7 @@ When the user says they'll be available, Claude sets up these tests so they can 
 U1. [ ] **Flashlight button (priority 5):** on a boot with `sweettorch=1` and /var/local/sweet-flashlight, open Control Center, tap the flashlight: say whether the LED lights and goes off on the second tap, and try a lower level (long-press). ~2 min.
 U2. [ ] **Wi-Fi join from Settings (priority 4):** in Settings > Wi-Fi, forget nothing, just tap the home network and type its password once; then Claude checks that com.apple.wifi.known-networks.plist appears and survives a reboot. ~2 min.
 U3. [ ] **Battery % while discharging (B13):** unplug the phone for 30 min while Claude logs the on-screen % against SWEET BATTERY mV/mA; plug back in after. ~30 min (mostly waiting).
+U5. [ ] **Speaker beep (audio M1, dream):** after Claude has run adspboot / aprtest / apr_tone --no-amp successfully, listen while Claude plays a 2 s 1 kHz tone at -20 dB from the bottom speaker (apr_tone), and say whether you heard it. ~2 min.
 U4. [ ] **Charging on a strong port (B14, optional):** plug the phone into the TB4 port with the 240 W cable for one boot so Claude can read the charger status registers on both sources. ~1 min.
 
 ## Priority (at most 5; the one being worked is marked ▶)
