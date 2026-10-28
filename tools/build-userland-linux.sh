@@ -66,7 +66,7 @@ cp toybox "$OUT/" ) || echo "WARNING: toybox failed (see $W/build/toybox-$TOYBOX
 echo "== wland + phone tools"
 ( cd "$ROOT"
 sh phone/wifi/build.sh
-cp phone/wifi/out/wland phone/wifi/out/adspboot phone/wifi/out/aprtest "$OUT/"
+cp phone/wifi/out/wland phone/wifi/out/adspboot phone/wifi/out/aprtest phone/wifi/out/apr_tone "$OUT/"
 bash phone/tools/build.sh || echo "WARNING: some phone tools failed"
 # every Mach-O phone/tools/build.sh made (a fixed list missed new tools such as fcopy)
 for f in phone/tools/out/*; do
