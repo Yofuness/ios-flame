@@ -13,6 +13,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:50 k81 (xnu 0205): panel sleep 10/10
+- 10 cycles (`flame-cmd.py 'key 0'`, 3 s off / 3 s on): every cycle req off -> `blank alpha (saved 1a0000)` -> dcs 28, 10 (done 1, ack 0, t 0-1 ms) -> req on -> dcs 11, 29 -> `unblank alpha 1a0000`. Off frames black (mean 6-7), wake frames the picture at the same 10% brightness (23-25 vs 23 before). One dcs 29 line missing in cycle 1 (screen fine: a lost log line). 0 failed lines. Next: make sweetpanelsleep=1 a default boot arg after a longer test.
+
 ### 2026-10-28 15:00 why sleep-in lagged: the CPU fade is slow, not a stalled tick
 - vsyncFired runs the fade inline (SweetFramebuffer.cpp:429): each step is a volatile read-modify-write of all ~2.5M words of the 1080x2340 surface through an uncached kernel mapping, ~0.35-0.7 s per step, 2.4-3.9 s for all 7. No tick (and no vsync notification to backboardd) fires meanwhile: the 5 s stats line slips 2.24-3.86 s per off; DCS 28 came 2.38-2.75 s after display off (k78, k79). "fade 5 at req on" = the fade was still running when the 3 s off ended.
 - Fix (next, 0205): black the screen with the MDP LM_0 blend alpha (as tools/sunfish-dim.sh does: 0x0ae45000 +0x24/+0x3c/+0x54/+0x6c, CTL_0 FLUSH 0x0ae02018 bit 6) instead of the CPU fade; restore the saved alpha on wake.
