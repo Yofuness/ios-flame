@@ -88,3 +88,7 @@ Stop rule: a gain under 1 ms GPU (or inside the ±3 updates/s bench noise) is a 
 - 2026-10-27 g62e: full /var copy to ufsroot1, 84 s, 1977/2000 sha256 equal (3 live sqlite, 20 created later), stable across remount.
 - 2026-10-27 k65 (kernel65, 0191): block-node read works (xxd on /dev/ufsroot1 gives 4858...); fsck still flags the alternate VHB (-60) -> 0192.
 - 2026-10-27 wd20 (kernel65, sweetbootwdt=20): did not fire (counter starts at ~26 s kernel time; UI drew first). wd5 (kernel66, sweetbootwdt=5): fired at 31.3 s, fastboot ~35 s later. PASS.
+- 2026-10-27 k66v (kernel66, /var on ufsroot1 via fstab, toybox copy): reset at 35 s; installcoordinationd Code=13 x3, mobileactivation sig 5. Cause: copy lost ACLs/xattrs.
+- 2026-10-27 vcopy runs on k66e: copyfile data path EFAULT on 5691 files; nesting into DST/var; inherited ACLs on 199 files; final -m pass -> 0 metadata differences.
+- 2026-10-27 k67v (kernel67, vcopy copy): launchd panic at 63.6 s "unexpected exec of non-platform binary: /var/local/bin/wland" (from the RAM-log rescue). Fix 0194.
+- 2026-10-27 k68v (kernel68): /var on ufsroot1 (94 GB) boots to the home screen, SSH, dropbear/wland up, 3 min stable. PASS.
