@@ -19,7 +19,7 @@ iOS root lives in the `userdata` partition.
 > mostly switched off (permissive AMFI and sandbox, stub keystore), and many parts are missing. Do not put
 > anything personal on it.
 
-## What works (2026-10-28)
+## Status (2026-10-28)
 
 States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/README.md](docs/README.md).
 
@@ -34,7 +34,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Smoothness](docs/features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping |
 | [Brightness](docs/features/brightness.md) | 🟡 | panel brightness (DCS 0x51) from a tool; no Control Center slider |
 | [GPU](docs/features/gpu.md) | ✅ | Adreno 618 at 565 MHz; recovers from GPU hangs (~26 ms) |
-| [GPU memory](docs/features/gpu-memory.md) | 🟡 | backboardd leaks 1024 KB kernel BOs; pool not flat over 2 h |
+| [GPU memory](docs/features/gpu-memory.md) | ✅ | leak fixed (spare command pools capped): pool flat over a 20 min app soak |
 | [Metal](docs/features/metal.md) | ✅ | Metal via SweetMetal2 (metal2vulkan + Turnip) |
 | [Touch](docs/features/touch.md) | ✅ | ST FTM5 over I²C |
 | [Buttons](docs/features/buttons.md) | ✅ | power, volume down, volume up |
@@ -45,13 +45,11 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Charging](docs/features/charging.md) | ❌ | drains ~0.5 A under load on the charger; charger not configured |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed in /Applications |
 | [Sleep and wake](docs/features/sleep-wake.md) | 🟡 | power-button sleep/wake stable (11/11); the panel stays on |
-
-## Not working yet
-
-- Audio, Bluetooth, cellular, camera, sensors ([not started](docs/features/not-started.md))
-- Charging
-- Wi-Fi join from Settings
-- Control Center brightness slider and flashlight button
+| [Audio](docs/features/not-started.md) | ⬜ | speaker, earpiece, headphone jack, mic: not started (survey under way) |
+| [Camera](docs/features/not-started.md) | ⬜ | rear and front cameras: not started (survey under way) |
+| [Bluetooth](docs/features/not-started.md) | ⬜ | not started |
+| [Cellular](docs/features/not-started.md) | ⬜ | not planned |
+| [Sensors](docs/features/not-started.md) | ⬜ | accelerometer, gyro, proximity, ambient light: not started |
 
 ## Quick start
 
