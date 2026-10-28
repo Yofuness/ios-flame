@@ -1,0 +1,28 @@
+From 085ef8788d23efe58516b8c93974383df95d5a86 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:58:13 -0400
+Subject: [PATCH] sunfish: d_psize returns the sector size (block-node
+ read/write gave EINVAL)
+
+---
+ bsd/dev/sweet_ufs.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 8689c0d..d721915 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -639,7 +639,9 @@ sweet_ufs_psize(dev_t dev)
+ 	if (!su.ready || !ufs_minor_range(dev, &base, &nblk)) {
+ 		return -1;
+ 	}
+-	return (int)MIN(nblk * UFS_BLOCK / UFS_SECSIZE(dev), INT_MAX);
++	/* 0191: d_psize is the sector size in bytes (specfs set_blocksize), not the size;
++	 * the old block count made every read(2)/write(2) on the block node fail with EINVAL. */
++	return (int)UFS_SECSIZE(dev);
+ }
+ 
+ /*
+-- 
+2.56.0
+
