@@ -13,6 +13,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 14:40 k79 (xnu 0203): wakes 10/10, sleep-in 4/10 (the fade stalls at step 5)
+- 10 cycles (`flame-cmd.py 'key 0'`, 3 s off / 3 s on): every off frame black, every wake frame the picture, no failed lines, 0 GPU hangs. Log: 12 req off (all asleep 0, fade 0), 12 req on: 5 at (1,7) with 11/29, 7 at (0,5) with no DCS. So in 6 cycles the tick's fade stopped at step 5 (picture at 1/32: black on the webcam) and the sleep-in condition (fade > 6) never fired. One wake logged 11 but no 29.
+- Fix in progress: the panel thread finishes the fade itself 150 ms after `req off`.
+- `fastboot getvar all` after a clean reboot saved as logs/getvar-clean.txt (only slot-retry-count matched reboot/reason/pon).
+
 ### 2026-10-28 14:15 k78: kernel panel sleep (xnu 0202, sweetpanelsleep=1), 10 power-button cycles over `flame-cmd.py 'key 0'`
 - Off frames black 10/10; wake frames picture 8/10 (cycles 7 and 8 stayed black, both came back on their own later). Only 3 DCS sequences ran for 10 cycles (28/10/11/29 x3, all done 1 ack 0, t 0-1 ms, 0 failed lines); 9 display off / 11 display on lines. So the panel thread misses requests (the fade-step condition or the wake-up), and black wakes match pairs without DCS lines. A GPU hang (unrecoverable) came 1.0 s after one `display off` (gpu.md).
 
