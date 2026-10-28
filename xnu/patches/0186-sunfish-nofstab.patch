@@ -1,0 +1,91 @@
+From 301cbd7ee46bc5d00d871b731d76140cb51d3fae Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:46:31 -0400
+Subject: [PATCH] sunfish: sweetnofstab=1 hides /etc/fstab (escape hatch)
+
+---
+ bsd/vfs/vfs_lookup.c | 54 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+diff --git a/bsd/vfs/vfs_lookup.c b/bsd/vfs/vfs_lookup.c
+index 94b4383..e97c44a 100644
+--- a/bsd/vfs/vfs_lookup.c
++++ b/bsd/vfs/vfs_lookup.c
+@@ -96,6 +96,7 @@
+ #include <os/atomic_private.h>
+ 
+ #include <sys/paths.h>
++#include <pexpert/pexpert.h>
+ 
+ #if NAMEDRSRCFORK
+ #include <sys/xattr.h>
+@@ -127,6 +128,42 @@ static int              lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *nd
+ 
+ extern lck_rw_t rootvnode_rw_lock;
+ 
++/*
++ * 0186: boot-arg sweetnofstab=1 makes /private/etc/fstab (and /etc/fstab through the symlink) look absent, so a
++ * broken fstab can't stop launchd's mount -P boot task. Matched on the resolved vnode: name "fstab" in a directory
++ * "etc" inside "private" at the root of the root volume. -1 = boot-arg not read yet.
++ */
++static int sweet_nofstab = -1;
++
++static bool
++sweet_nofstab_match(vnode_t vp)
++{
++	vnode_t etc, priv;
++	bool hit = false;
++
++	if (vp == NULLVP || vp->v_type != VREG) {
++		return false;
++	}
++	name_cache_lock_shared();
++	etc = vp->v_parent;
++	priv = etc ? etc->v_parent : NULLVP;
++	if (priv != NULLVP && priv->v_parent == rootvnode &&
++	    vp->v_name && strcmp(vp->v_name, "fstab") == 0 &&
++	    etc->v_name && strcmp(etc->v_name, "etc") == 0 &&
++	    priv->v_name && strcmp(priv->v_name, "private") == 0) {
++		hit = true;
++	}
++	name_cache_unlock();
++	if (hit) {
++		static bool logged;
++		if (!logged) {
++			logged = true;
++			printf("SWEET: sweetnofstab hid /etc/fstab (pid %d comm %s)\n", proc_selfpid(), current_proc()->p_comm);
++		}
++	}
++	return hit;
++}
++
+ /*
+  * Convert a pathname into a pointer to a locked inode.
+  *
+@@ -465,6 +502,23 @@ retry_copy:
+ 			goto error_out;
+ 		}
+ 
++		/* 0186: sweetnofstab=1 hides /etc/fstab from plain lookups (delete/rename/create still see it) */
++		if (__improbable(sweet_nofstab != 0)) {
++			if (sweet_nofstab < 0) {
++				int v = 0;
++				PE_parse_boot_argn("sweetnofstab", &v, sizeof(v));
++				if (v) {
++					printf("SWEET: sweetnofstab=1, /etc/fstab will be hidden\n");
++				}
++				sweet_nofstab = v ? 1 : 0;
++			}
++			if (sweet_nofstab && cnp->cn_nameiop == LOOKUP && (cnp->cn_flags & ISSYMLINK) == 0 &&
++			    sweet_nofstab_match(ndp->ni_vp)) {
++				error = ENOENT;
++				goto out_drop;
++			}
++		}
++
+ 		/*
+ 		 * Check for symbolic link
+ 		 */
+-- 
+2.56.0
+

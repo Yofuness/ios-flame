@@ -1,0 +1,33 @@
+From 4f1d3d39a725ef5140cef7aa758b71013d56fe95 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 21:47:18 -0400
+Subject: [PATCH] sunfish: answer the segment byte-count disk ioctls
+ (newfs_hfs)
+
+---
+ bsd/dev/sweet_ufs.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 0db9a4c..8689c0d 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -606,6 +606,15 @@ sweet_ufs_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
+ 	case DKIOCGETMAXSEGMENTCOUNTWRITE:
+ 		*o = 1;
+ 		return 0;
++	/* 0187: newfs_hfs asks for the byte-count limits; one bounce buffer per transfer. */
++	case DKIOCGETMAXBYTECOUNTREAD:
++	case DKIOCGETMAXSEGMENTBYTECOUNTREAD:
++		*o = BOUNCE_SIZE;
++		return 0;
++	case DKIOCGETMAXBYTECOUNTWRITE:
++	case DKIOCGETMAXSEGMENTBYTECOUNTWRITE:
++		*o = su.writable ? BOUNCE_SIZE : 0;
++		return 0;
+ 	default:
+ 		return ENOTTY;
+ 	}
+-- 
+2.56.0
+
