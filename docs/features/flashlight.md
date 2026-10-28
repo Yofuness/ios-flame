@@ -17,6 +17,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 16:15 Control Center button: call path and plan (read-only; research/re/FlashlightModule.s, SpringBoardUI.s, AVFCapture.s)
+- FlashlightModule.bundle -> `[SBUIFlashlightController isAvailable]` -> `buttonView setEnabled:`; taps -> `turnFlashlightOn/OffForReason:`, the slider -> `setLevel:`. SBUIFlashlightController (SpringBoardUI) owns an AVFlashlight (AVFCapture) and KVO-observes available / overheated / flashlightLevel.
+- AVFlashlight: `+hasFlashlight` = MGGetBoolAnswer("camera-flash") (-init throws if NO); `_setupFlashlight` -> FigFlashlightRemoteCreate (XPC to mediaserverd's CMCapture FigFlashlight, which needs the H10 camera stack: never Available here); `-isAvailable` is a byte set by the Available notification.
+- Plan: swizzle AVFlashlight inside SpringBoard: +hasFlashlight YES, -init without the Fig object, -isAvailable YES, -isOverheated NO, turnPowerOn / setFlashlightLevel -> sysctl kern.sweet_torch (level x 100 mA), turnPowerOff -> 0, KVO flashlightLevel. Host: SweetMetal2.bundle (already loaded into SpringBoard as a Metal client) with a getprogname()=="SpringBoard" check, so no DYLD_INSERT / root launchd.plist edit. Kernel: kern.sweet_torch needs CTLFLAG_ANYBODY (SpringBoard runs as mobile), and a longer / no auto-off for a real flashlight (keep a cap, e.g. 100 mA, and a long safety timeout). Check MG camera-flash first.
+
 ### 2026-10-28 00:00-02:10 overnight run, part 2 (torch part)
 - Torch: k68t (kernel68 + sweettorch=1) panicked at 36.2 s: "Use sysctl_register_oid_early to register permanent nodes" (RAM-log rescue). xnu 0195 (kernel69, CI 40640759295) uses SYSCTL_OID_MANUAL. k69t boots; new tool phone/tools/sctl (CI 40641144876). sctl kern.sweet_torch=50 / =100: all writes land, readback ok, 5 s auto-off; the webcam sees only the front, the user saw the LED turn on and off (confirmed by eye).
 
