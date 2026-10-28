@@ -382,7 +382,8 @@ __attribute__((constructor)) static void sm2_torch_init(void)
  * Orientation from a file (no sensors; /var/local/sweet-orient, SpringBoard only): a 1 s timer reads one
  * UIDeviceOrientation (1 portrait, 2 upside down, 3 landscape left, 4 landscape right). "N" = method A, AX
  * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
- * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock. Delete the file to turn it off.
+ * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock; "D N [S]" = method D, in backboardd:
+ * BKOrientationManager updateDeviceOrientation:N changeSource:S. Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -471,11 +472,41 @@ static void sm2_orient_c(long n)
 	sm2_log("orient: C %ld (lock mgr %p, was locked %d)", n, lm, locked);
 }
 
+/* Method D (backboardd only): BKOrientationManager holds the system orientation and is fed by CoreMotion, which never
+ * reports here. Set it directly ("D N [SOURCE]") and stop CoreMotion updates from resetting it. */
+static void sm2_cm_drop(id self, SEL _cmd, id o) {}
+
+static void sm2_orient_d(long n, long src)
+{
+	Class k = objc_getClass("BKOrientationManager");
+	SEL up = sel_registerName("updateDeviceOrientation:changeSource:"), sh = sel_registerName("sharedInstance");
+	if (!k || ![k respondsToSelector:sh]) {
+		sm2_log("orient: D BKOrientationManager missing");
+		return;
+	}
+	id m = ((id (*)(id, SEL))objc_msgSend)(k, sh);
+	static bool dropped;
+	Method cm = class_getInstanceMethod(k, sel_registerName("_queue_updateDeviceOrientationFromCoreMotion:"));
+	if (cm && !dropped) {
+		dropped = true;
+		method_setImplementation(cm, (IMP)sm2_cm_drop);
+	}
+	if (![m respondsToSelector:up]) {
+		sm2_log("orient: D -updateDeviceOrientation:changeSource: missing");
+		return;
+	}
+	((void (*)(id, SEL, long, long))objc_msgSend)(m, up, n, src);
+	SEL ef = sel_registerName("effectiveDeviceOrientation");
+	long e = [m respondsToSelector:ef] ? ((long (*)(id, SEL))objc_msgSend)(m, ef) : -1;
+	sm2_log("orient: D %ld source %ld -> effective %ld (CoreMotion hook %d)", n, src, e, cm != NULL);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
-	if (strcmp(getprogname(), "SpringBoard") != 0 || access("/var/local/sweet-orient", F_OK) != 0)
+	bool bbd = strcmp(getprogname(), "backboardd") == 0;
+	if ((!bbd && strcmp(getprogname(), "SpringBoard") != 0) || access("/var/local/sweet-orient", F_OK) != 0)
 		return;
-	if (!dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
+	if (!bbd && !dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
 		sm2_log("orient: AccessibilityUtilities: %s", dlerror());
 	/* static: a local source was freed under ARC when the constructor returned (k90a: no orient lines at all). */
 	static dispatch_source_t t;
@@ -495,10 +526,15 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 			buf[0] = 0;
 		if (fd >= 0)
 			close(fd);
-		bool b = buf[0] == 'B', c = buf[0] == 'C';
-		long n = strtol(b || c ? buf + 1 : buf, NULL, 10);
-		if (n < 1 || n > 4)
+		bool b = buf[0] == 'B', c = buf[0] == 'C', d = buf[0] == 'D';
+		char *end = NULL;
+		long n = strtol(b || c || d ? buf + 1 : buf, &end, 10);
+		if (n < 1 || n > 4 || d != bbd)	/* "D" lines are backboardd's, the rest SpringBoard's */
 			return;
+		if (d) {
+			sm2_orient_d(n, strtol(end, NULL, 10));
+			return;
+		}
 		@try {
 			c ? sm2_orient_c(n) : b ? sm2_orient_b(n) : sm2_orient_a(n);
 		} @catch (id ex) {
