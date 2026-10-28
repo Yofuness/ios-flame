@@ -13,4 +13,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 12:30 panel-off design (read-only)
+- Today: sleep = IOMFB sel 12 RequestPowerChange(0/1) (SweetFramebuffer.cpp:926-937). fPowerOff makes the vsync tick fade the frame to black over 6 ticks and skip the present (:386-409); the tick and the type-5 notifications keep running; no DCS is sent, so the panel stays on in normal mode.
+- SOFEF01 sequences (recon/live.dts:12228-12296): off = 05 28 (20 ms), 05 10, then a Samsung F0 5A5A / B0 05 / F4 01 / F0 A5A5 block (120 ms). On = 05 11 (10 ms), 15 35 00 (TE on), F0-unlocked EB/B7/F2 setup, 2A 0000 0437, 2B 0000 0923, 15 53 20, B0 09 / E8 ..., 05 29. lp1/nolp use 53 22 / 53 20 (AOD): avoid.
+- Design (~120 lines, SweetFramebuffer.cpp, boot arg sweetpanelsleep=1): kernel `sweet_dsi_dcs_short(cmd)` (packet 0x80050000|cmd via the 0x9d6ff000 buffer, DMA_BASE +0x48, DMA_LEN +0x4c, TRIG_DMA +0x90, poll INTR_CTRL +0x110, ACK_ERR +0x68); on off: after the fade, save + clear autorefresh 0x0ae6bab4, 28, 20 ms, 10, 120 ms; on wake: 11, 120 ms, 29, restore autorefresh, redraw. Off the user-client thread (IOSleep). On any DMA failure restore autorefresh.
+- First test without a kernel: 28/10 then 11/29 from the shell tool (a short-write variant of sunfish-panel-bright.sh) with the webcam.
+
 Older entries (before 2026-10-25): [archive/features/sleep-wake.md](../archive/features/sleep-wake.md).

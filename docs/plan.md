@@ -9,7 +9,7 @@ Old plan: `docs/plans/2026-10-27-usability-quick-wins.md`. Rules still apply: RA
 4. [ ] **Silent resets vs kernel.** Only if sk71 resets too: 1 h soak on kernel68 (sk68 was clean for 2 h) vs kernel74, same bundle, PON line after each reset. ~2.5 h.
 
 ## B. Features (prep running now, read-only; each is its own build + test)
-5. [ ] **Panel off when the phone sleeps.** DCS 28 (display off) + 10 (sleep in) on the IOMFB display-off power state, 11 + 29 on wake, autorefresh paused around it. Saves battery and burn-in. Test: webcam black, battery mA drops, wake 10/10. ~half a day.
+5. [ ] **Panel off when the phone sleeps.** DCS 28 (display off) + 10 (sleep in) on the IOMFB display-off power state, 11 + 29 on wake, autorefresh paused around it. Saves battery and burn-in. Test: webcam black, battery mA drops, wake 10/10. ~half a day. Design ready (features/sleep-wake.md 2026-10-28 12:30): first a shell test of 28/10 + 11/29, then ~120 lines in SweetFramebuffer.cpp behind sweetpanelsleep=1.
 6. [ ] **Brightness slider in Control Center.** iOS's brightness call reaches SweetFramebuffer -> DCS 0x51 from the kernel (today only the PC tool sends it). Cap at 50% during tests. Test: slider moves on the webcam, the panel follows. ~half a day.
 7. [ ] **Wi-Fi status in iOS.** Answer wifid's get 103 (CURRENT_NETWORK), SSID, BSSID, channel, RSSI from wland's joined state, plus the link event, so the status bar shows Wi-Fi and Settings lists the network. ~half a day.
 8. [ ] **Flashlight button in Control Center.** iOS drives the torch through the camera stack; find the smallest hook (AVCaptureDevice torch -> a kernel call to kern.sweet_torch). Investigate after 5-7.
