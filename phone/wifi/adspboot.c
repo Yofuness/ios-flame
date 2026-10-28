@@ -416,7 +416,7 @@ static int glink_watch(int secs)
 				printf("adsp: channel \"%s\" (rcid %u)\n", name, h[1]);
 				chans++;
 			} else if (h[0] == GLINK_CMD_INTENT) {
-				n = 8 + 8ull * h[1];
+				n = 8 + 8ull * p2;	/* param1 = channel id, param2 = intent count (8 bytes each) */
 				if (glink_rx_avail() < n)
 					break;
 			} else if (h[0] != GLINK_CMD_CLOSE && h[0] != GLINK_CMD_SIGNALS && h[0] != GLINK_CMD_READ_NOTIF) {
