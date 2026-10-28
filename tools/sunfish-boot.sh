@@ -13,7 +13,7 @@ P=$PWD/work/boot
 base="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1"
 base="$base unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1"
 base="$base wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 flamereboot=0 sweetuiwdt=30"
-base="$base flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetgpudelay=0 sweetfb_thread=0 sweetmtl=2 sweetddr=0 sweetgpurecover=2 sweetgpukill=1"
+base="$base flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetfb_thread=0 sweetmtl=2 sweetddr=0 sweetgpurecover=2 sweetgpukill=1"
 base="$base sweetbattery=1"
 # on by default since 2026-10-28: iOS Wi-Fi status (xnu 0199), panel off on sleep (0202-0205)
 base="$base sweetwifiev=1 sweetpanelsleep=1"

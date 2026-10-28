@@ -16,7 +16,7 @@ U4. [ ] **Charging on a strong port (B14, optional):** plug the phone into the T
 
 ## Priority (at most 5; the one being worked is marked ▶)
 **Long tests (the user, 2026-10-28 18:55):** no more 1-2 h soaks by default. Get more things working first. A test that needs an hour or more is only worth it when the problem significantly harms usability or development speed; otherwise a short check (a boot, a few minutes of use) is enough. The GPU hang/pool work moved to the bottom of the Broken list (B21).
-1. ▶ [ ] **Camera M1: camera PMIC + sensor ID** (was B17): SE9 I2C works; `i2cprobe scan` on the current kernel, then kernel94 `sweetcampmic=1` (read the SLG51000 enable/cs GPIOs), then `=2` (lines high) and `i2cprobe 0x75 2 0x1105 3` (PATN_ID). Then the LDO rails and the IMX363 ID over CCI (features/camera.md).
+1. ▶ [ ] **Camera M1: camera PMIC + sensor ID** (was B17) [2026-10-28 cm1: PMIC answers with sweetcampmic=2 (PATN_ID 05 35 a9), no LDO on yet; next: read the 0x50-0x53 EEPROM, then LDO enables + MCLK + reset + CCI]: SE9 I2C works; `i2cprobe scan` on the current kernel, then kernel94 `sweetcampmic=1` (read the SLG51000 enable/cs GPIOs), then `=2` (lines high) and `i2cprobe 0x75 2 0x1105 3` (PATN_ID). Then the LDO rails and the IMX363 ID over CCI (features/camera.md).
 2. [ ] **Screen rotation** (was B20): three SpringBoard-side methods log but don't rotate; next is a backboardd-side hook (RE of backboardd's orientation manager from research/ipsw-x), ~half a day.
 3. [ ] **Boot to SSH** (D2): dropbear `--keepalive-off`, then an A/B without `serial=3 -enable_kprintf_spam` (dev speed).
 4. [ ] **Wi-Fi join from Settings** (was 4) [the user types the password once, U2].

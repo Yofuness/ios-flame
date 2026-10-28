@@ -31,6 +31,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 18:45 boot-arg line full
+- tools/mkpayload.py refused `cmdline too long` (limit 608 - 16 bytes for the ramlog VAs) with sweetse9=2 sweetampreset=1 sweetcampmic=2 on top of the defaults. Dropped `sweetgpudelay=0` (the kernel default) from tools/sunfish-boot.sh; 562 bytes with sweetse9 + sweetcampmic. Next time: fold rarely changed sweet* args into kernel defaults.
+
 ### 2026-10-28 10:20-10:30 build VM hibernates instead of shutting down
 - vm-stop.sh saves the VM (QEMU migrate to a zstd file) and vm-start.sh resumes from it. Hibernate 5.0 s (2.5 GB) / 11.3 s (4.1 GB after a build); resume 5.5 s / 13-15 s to SSH (boot was 26-35 s). Needed `tsc-frequency=2496000000` (invtsc blocked migration) and max-bandwidth 16 GiB/s (the default 128 MiB/s made the save take 33 s).
 - tools/vm-build-xnu.sh 73 --stop from hibernation: 134 s total (159 s with boot + shutdown); kernel73 byte-identical to kernel72. vCPU pinning (8 on E-cores 4-11) and the guest clock are reapplied after resume.
