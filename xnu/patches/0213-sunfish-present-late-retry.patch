@@ -1,0 +1,230 @@
+From aa4cf8bb32b2629dfb237671604caff39e87a5aa Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 16:53:25 -0400
+Subject: [PATCH] sunfish: sweetpresentwait=2, retry a put-off present from a 1
+ ms timer within 10 ms (late/dropped counters)
+
+---
+ bsd/dev/sweet_gpu.c                   |  10 ++-
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 110 ++++++++++++++++++++------
+ 2 files changed, 93 insertions(+), 27 deletions(-)
+
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 7b709ce..5354506 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -840,6 +840,8 @@ present_rearm_locked(void)
+ 	present_next = 0;
+ }
+ static uint32_t stat_busy;	/* 0158: presents put off a tick (slot still queued) */
++/* 0210 (sweetpresentwait=2): counted by SweetFramebuffer.cpp: presented by the late retry, swaps never shown */
++uint32_t sweet_gpu_stat_late, sweet_gpu_stat_dropped;
+ 
+ /* With sweet_gpu_lock: the present from IB slot k has landed (or the GPU was reset). 0, or -1 if reset. */
+ static int
+@@ -1004,12 +1006,12 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 	/*
+ 	 * 0158: never block the vsync tick behind client render jobs. The present of this IB slot (two frames
+ 	 * back) still queued: 1, "busy" — the framebuffer keeps the frame and tries again on the next tick
+-	 * (sweetpresentwait=1: the old blocking wait).
++	 * (sweetpresentwait=1: the old blocking wait; 0210: =2 as 0, the framebuffer retries a few ms later).
+ 	 */
+ 	static int block = -1;
+ 	if (block < 0 && !PE_parse_boot_argn("sweetpresentwait", &block, sizeof(block)))
+ 		block = 0;
+-	if (!block && present_fence[k] && !a6_fence_done(&gpu, present_fence[k])) {
++	if (block != 1 && present_fence[k] && !a6_fence_done(&gpu, present_fence[k])) {
+ 		if (gpu_hung_locked(500)) {
+ 			gpu_recover_locked("present");
+ 			lck_mtx_unlock(&sweet_gpu_lock);
+@@ -1043,8 +1045,8 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 		uint64_t c, g;
+ 		absolutetime_to_nanoseconds(stat_clean_abs, &c);
+ 		absolutetime_to_nanoseconds(stat_gpu_abs, &g);
+-		a6_log("present: %llu frames, avg cache clean %llu us, GPU blit %llu us, put off %u\n", stat_frames,
+-		    c / 1000 / 300, g / 1000 / 300, stat_busy);
++		a6_log("present: %llu frames, avg cache clean %llu us, GPU blit %llu us, put off %u, late %u, dropped %u\n",
++		    stat_frames, c / 1000 / 300, g / 1000 / 300, stat_busy, sweet_gpu_stat_late, sweet_gpu_stat_dropped);
+ 		stat_clean_abs = stat_gpu_abs = 0;
+ 	}
+ 	*out_dx = frame.dx;
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index a03f283..b5717f3 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -49,6 +49,7 @@ int sweet_gpu_present(int slot, uintptr_t kva, uint32_t offset, uint32_t w, uint
+ 	uint32_t fb_pitch, uint32_t corner_radius, uint32_t *out_dx, uint32_t *out_dy,
+ 	uint32_t *out_dw, uint32_t *out_dh);
+ void sweet_gpu_panel_stride(uint32_t stride);
++extern uint32_t sweet_gpu_stat_late, sweet_gpu_stat_dropped;	/* 0210 */
+ void sweet_tl(uint32_t ev, uint32_t a, uint32_t b);
+ void sweet_tl_flush(void);
+ /* 0179: UI watchdog (sweetuiwdt): touch stamp from SweetHID.cpp, backboardd kill in sweet_gpu.c, pet stop in SweetPlatformExpert.cpp */
+@@ -124,6 +125,14 @@ class AppleCLCD : public IOMobileFramebuffer {
+ 	uint64_t            fStatSwaps, fStatPresents, fStatPresentAbs;
+ 
+ 	static void vsyncFired(OSObject *owner, IOTimerEventSource *sender);
++	/* 0210 (sweetpresentwait=2): a put-off present is retried every 1 ms for up to 10 ms after its tick */
++	IOTimerEventSource *fLate;
++	uint32_t            fPresentWait;
++	uint64_t            fLateTick, fLateUntil;
++	bool                fLateReq;       /* the present thread's next present is a late one */
++	static void lateFired(OSObject *owner, IOTimerEventSource *sender);
++	void armLate(void);
++	void tickPresent(bool late);
+ 
+ public:
+ 	uint64_t      fPhys;
+@@ -275,6 +284,13 @@ AppleCLCD::start(IOService *provider)
+ 	PE_parse_boot_argn("sweetvsyncahead", &ahead, sizeof(ahead));
+ 	nanoseconds_to_absolutetime(ahead * 1000ULL, &fVsyncAheadAbs);
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
++	PE_parse_boot_argn("sweetpresentwait", &fPresentWait, sizeof(fPresentWait));	/* 0210 */
++	if (fPresentWait == 2) {
++		fLate = IOTimerEventSource::timerEventSource(this, &AppleCLCD::lateFired);
++		if (fLate == NULL || fWorkLoop->addEventSource(fLate) != kIOReturnSuccess) {
++			fPresentWait = 0;
++		}
++	}
+ 	/*
+ 	 * 0149: panel copies on their own thread. On the vsync tick a GPU present waited ~30 ms behind the render
+ 	 * server's GPU jobs, delaying the next vsync notification and capping the panel at ~18 updates/s.
+@@ -439,41 +455,84 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 	}
+ 	sweet_tl(3, 0, 0);
+ 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0 && !fb->fOnSwap && !fb->fPanelAsleep;	/* 0201 */
+-	uint8_t *rec = NULL;
+ 	if (flush && fb->fPresentThread) {
+ 		fb->fPresentReq = true;
+ 		IOLockWakeup(fb->fLock, &fb->fPresentReq, true);
+ 		flush = false;
+ 	}
+-	if (flush) {
+-		rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
+-		if (rec != NULL) {
+-			memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+-			fb->fDirty = false;
+-		}
+-	}
+ 	IOLockUnlock(fb->fLock);
+-	if (rec != NULL) {
+-		uint64_t t0 = mach_absolute_time();
+-		fb->fPresentBusy = false;
+-		sweet_tl(4, 0, 0);
+-		fb->present(rec);
+-		sweet_tl(5, fb->fPresentBusy, 0);
+-		fb->fStatPresentAbs += mach_absolute_time() - t0;
+-		if (fb->fPresentBusy) {
+-			IOLockLock(fb->fLock);
+-			fb->fDirty = true;	/* not shown: again on the next tick (fPending, maybe newer by then) */
+-			IOLockUnlock(fb->fLock);
+-		} else {
+-			fb->fStatPresents++;
+-		}
+-		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
++	if (flush) {
++		fb->tickPresent(false);	/* 0210: the vsync notify above already went out */
+ 	}
+ 	if ((count % 30) == 0) {
+ 		sweet_tl_flush();
+ 	}
+ }
+ 
++/* Tick path (no present thread): present fPending; put off: fDirty again, maybe a late retry */
++void
++AppleCLCD::tickPresent(bool late)
++{
++	uint8_t *rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
++	if (rec == NULL) {
++		return;
++	}
++	IOLockLock(fLock);
++	memcpy(rec, fPending, SWEET_FB_SWAP_REC_SIZE);
++	fDirty = false;
++	IOLockUnlock(fLock);
++	uint64_t t0 = mach_absolute_time();
++	fPresentBusy = false;
++	sweet_tl(4, late, 0);
++	present(rec);
++	sweet_tl(5, fPresentBusy, 0);
++	fStatPresentAbs += mach_absolute_time() - t0;
++	if (fPresentBusy) {
++		IOLockLock(fLock);
++		fDirty = true;	/* not shown: again on the next tick (fPending, maybe newer by then) */
++		IOLockUnlock(fLock);
++		armLate();
++	} else {
++		fStatPresents++;
++		sweet_gpu_stat_late += late;
++	}
++	IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
++}
++
++/* 0210: once per tick, a put-off present starts 1 ms retries until 10 ms after the tick (never into the next one) */
++void
++AppleCLCD::armLate(void)
++{
++	if (fPresentWait != 2 || fLateTick == fVsyncCount) {
++		return;
++	}
++	fLateTick = fVsyncCount;
++	nanoseconds_to_absolutetime(10000000ULL, &fLateUntil);
++	fLateUntil += mach_absolute_time();
++	fLate->setTimeoutUS(1000);
++}
++
++void
++AppleCLCD::lateFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	AppleCLCD *fb = (AppleCLCD *)owner;
++	IOLockLock(fb->fLock);
++	bool go = fb->fDirty && fb->fLateTick == fb->fVsyncCount && !fb->fPowerOff && !fb->fPanelAsleep;
++	if (go && fb->fPresentThread) {
++		fb->fLateReq = true;
++		fb->fPresentReq = true;
++		IOLockWakeup(fb->fLock, &fb->fPresentReq, true);
++	}
++	IOLockUnlock(fb->fLock);
++	if (go && !fb->fPresentThread) {
++		fb->tickPresent(true);
++	}
++	/* still put off (fDirty again): next try, unless the tick is near */
++	if (fb->fDirty && fb->fLateTick == fb->fVsyncCount && mach_absolute_time() + 1 < fb->fLateUntil) {
++		sender->setTimeoutUS(1000);
++	}
++}
++
+ void
+ AppleCLCD::presentLoop(void *arg)
+ {
+@@ -485,6 +544,8 @@ AppleCLCD::presentLoop(void *arg)
+ 		}
+ 		fb->fPresentReq = false;
+ 		bool go = fb->fDirty && !fb->fPowerOff && !fb->fPanelAsleep;	/* 0201 */
++		bool late = fb->fLateReq;	/* 0210 */
++		fb->fLateReq = false;
+ 		if (go) {
+ 			memcpy(fb->fPresentRec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+ 			fb->fDirty = false;
+@@ -499,8 +560,10 @@ AppleCLCD::presentLoop(void *arg)
+ 				IOLockLock(fb->fLock);
+ 				fb->fDirty = true;
+ 				IOLockUnlock(fb->fLock);
++				fb->armLate();	/* 0210 */
+ 			} else {
+ 				fb->fStatPresents++;
++				sweet_gpu_stat_late += late;
+ 			}
+ 		}
+ 	}
+@@ -805,6 +868,7 @@ void
+ AppleCLCD::swap(const uint8_t *rec)
+ {
+ 	IOLockLock(fLock);
++	sweet_gpu_stat_dropped += fDirty && fPresentWait == 2;	/* 0210: the previous swap was never shown */
+ 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
+ 	fDirty = true;
+ 	sweet_tl(1, (uint32_t)sweet_fb_swap_count, 0);
+-- 
+2.56.0
+
