@@ -1,7 +1,10 @@
 #!/bin/sh
 # clang for iOS 16 arm64 userland on Linux: the Linux twin of work/userland/bin/ios-cc (Xcode clang).
 # SDK: $IOS_SDK, default research/sdk/theos-sdks/iPhoneOS16.5.sdk in the repo. Links with ld64.lld.
+# $IOS_CLANG picks the driver (clang++ for C++). Linker flags only when linking: meson's checks use
+# -Werror=unused-command-line-argument, which a -Wl flag on a -c compile would trip.
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 SDK=${IOS_SDK:-$ROOT/research/sdk/theos-sdks/iPhoneOS16.5.sdk}
-exec "${IOS_CLANG:-clang}" --target=arm64-apple-ios16.0 -isysroot "$SDK" -fuse-ld=lld \
-	-Wl,-platform_version,ios,16.0,16.5 -Wno-unused-command-line-argument "$@"
+link="-fuse-ld=lld -Wl,-platform_version,ios,16.0,16.5"
+for a in "$@"; do case $a in -c|-S|-E|-M|-MM) link=;; esac; done
+exec "${IOS_CLANG:-clang}" --target=arm64-apple-ios16.0 -isysroot "$SDK" $link -Wno-unused-command-line-argument "$@"
