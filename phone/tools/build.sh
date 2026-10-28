@@ -9,6 +9,7 @@
 #   imgtest  does ImageIO decode real pixels (HEIC: no)       membw    CPU memory bandwidth
 #   vtdecode FILE [SEC]: AVAssetReader/VideoToolbox decode fps, hardware or not
 #   vcopy    SRC DST: tree copy keeping xattrs, ACLs, flags; -l PATH, -c SRC DST compare
+#   sctl     NAME[=INT]: read or set a sysctl (no sysctl binary on the phone)
 #   expt, exq, runmigrator: one-off probes of ExtensionFoundation and DataMigration (runmigrator needs
 #   com.apple.migrationpluginwrapper's entitlements, not in git)
 set -euo pipefail
@@ -25,7 +26,7 @@ build() {	# NAME SOURCE [FLAGS...]
 		codesign -f -s - "out/$name"
 	fi
 }
-for c in membw pstack psx vcopy; do build $c $c.c; done
+for c in membw pstack psx vcopy sctl; do build $c $c.c; done
 for m in expt exq nettest openapp oslog prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
 build imgtest imgtest.m -fobjc-arc -framework Foundation -framework ImageIO -framework CoreGraphics
 build lsreg lsreg.m -fobjc-arc -framework Foundation -framework MobileCoreServices
