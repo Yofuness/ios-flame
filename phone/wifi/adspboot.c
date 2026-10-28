@@ -251,8 +251,9 @@ static int boot(void)
 	uint64_t r1 = 0;
 	int64_t rc = scm(7, 1, PAS_ADSP, 0, 0, &r1);
 	printf("adsp: pas supported(%d) -> %lld/%llx\n", PAS_ADSP, (long long)rc, (unsigned long long)r1);
+	/* k93a: TZ answers 0/0 here, and wland boots the modem without asking: only log it; PAS init decides. */
 	if (rc || r1 != 1)
-		return -1;
+		printf("adsp: pas says not supported, trying anyway\n");
 	if (vote_min("lcx.lvl", 385) || vote_min("lmx.lvl", 385))
 		return -1;
 

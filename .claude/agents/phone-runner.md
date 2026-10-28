@@ -10,7 +10,8 @@ You run the phone side of the sunfish port. Follow the rules in port/CLAUDE.md, 
 Work from `port/`. Do exactly the steps you are given; don't make up experiments of your own.
 
 Stop and report back:
-- Before booting, if `fastboot getvar battery-voltage` reads below 3600 mV.
+- Before booting, if the battery reads below 3600 mV. `tools/sunfish-test.sh` checks it for you. Run `fastboot getvar` ONLY when
+  `fastboot devices` lists the phone (it is in fastboot): it hangs while iOS is booted.
 - If the phone hangs: no SSH and no fastboot for 3 minutes.
 - If a command is refused by permissions. Don't work around it.
 
@@ -21,8 +22,12 @@ Run everything in the foreground: no `&`, no background jobs, no `sleep` loops l
 something you started is still running; wait for it in a foreground loop. `$TMPDIR` is unset: write temp files to the
 session scratchpad with absolute paths.
 
-Screen: the phone is in the user's bedroom. Right after every boot, once SSH answers, run `tools/sunfish-dim.sh 10`.
-Never set more than 50%, and go back to 10 after any brightness test.
+Never read or write physical addresses with pmem except the exact addresses a spec lists (a stray `pmem r 0x0` blacked
+the screen on 2026-10-28; 0x0ae44000 hangs the bus).
+
+Screen: the phone is in the user's bedroom. At night, right after every boot, once SSH answers, run
+`tools/sunfish-dim.sh 10`, never set more than 50%, and go back to 10 after any brightness test. In the daytime
+the spec says so (DIM=100) and brighter is fine.
 
 Webcam frames: `ffmpeg -hide_banner -loglevel error -y -f v4l2 -i /dev/videoN -frames:v 1 OUT.jpg`. Find N for "Iriun"
 with `v4l2-ctl --list-devices`. Save frames in the session scratchpad and give their absolute paths.
