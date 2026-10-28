@@ -1,0 +1,226 @@
+From 958bbbdae0546ef3ebeb61a3b3a080a28bc86869 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Wed, 28 Oct 2026 15:03:09 -0400
+Subject: [PATCH] sunfish: flushed GPU recovery breadcrumbs (SWEET CRUMB,
+ direct to the persistent log) + sweet_log_flush
+
+---
+ bsd/dev/sweet_a6xx.c | 39 +++++++++++++++++++++++++++++++++++----
+ bsd/dev/sweet_a6xx.h | 13 +++++++++++++
+ bsd/dev/sweet_gpu.c  |  1 +
+ bsd/dev/sweet_ufs.c  | 19 ++++++++++++++++++-
+ 4 files changed, 67 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 19095c6..f2a94e3 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -1438,7 +1438,9 @@ void a6_unmap_high(struct a6_gpu *g)
+ static int zap_resume(void)
+ {
+ 	uint64_t x[8] = { 0x42000000ull | (1u << 8) | 0x0a, 2, 0 /* resume */, PAS_GPU, 0, 0, 0, 0 };
++	SWEET_CRUMB("zap_resume enter");
+ 	a6_smc(x);
++	SWEET_CRUMB("zap_resume done rc %lld", (long long)x[0]);
+ 	a6_log("zap: resume rc %lld\n", (long long)x[0]);
+ 	return x[0] ? -1 : 0;
+ }
+@@ -1573,6 +1575,7 @@ static void r2_stage(const char *what, int rc)
+ static int a6_recover_full(struct a6_gpu *g)
+ {
+ 	int rc;
++	SWEET_CRUMB("recover2 enter");
+ 	a6_smmu_early_resume(g);		/* 0181 */
+ 	r2_stage("start", 0);
+ 	wr32(GREG(CP_SQE_CNTL), 0);
+@@ -1605,9 +1608,12 @@ static int a6_recover_full(struct a6_gpu *g)
+ 		rc = gpu_cp_init(g, false);
+ 		recover2_active = false;
+ 		r2_stage("cp init + zap", rc);
+-		if (rc == 0)
++		if (rc == 0) {
++			SWEET_CRUMB("recover2 done");
+ 			return 0;
++		}
+ 	}
++	SWEET_CRUMB("recover2 failed rc %d", rc);
+ 	return rc;
+ }
+ #endif
+@@ -1623,6 +1629,7 @@ static int a6_recover_full(struct a6_gpu *g)
+ int a6_recover_cold(struct a6_gpu *g)
+ {
+ 	int rc = 0;
++	SWEET_CRUMB("recover3 enter");
+ 	if (a6_gx_up()) {
+ 		wr32(GREG(CP_SQE_CNTL), 0);
+ 		rc = gbif_halt_bounded();
+@@ -1637,12 +1644,16 @@ int a6_recover_cold(struct a6_gpu *g)
+ 	R3("gmu reset", 0);
+ 	rc = gmu_start(g);
+ 	R3("gmu fw", rc);
+-	if (rc)
++	if (rc) {
++		SWEET_CRUMB("recover3 failed (gmu fw)");
+ 		return -1;
++	}
+ 	rc = gmu_hfi(g);
+ 	R3("hfi + gx on", rc);
+-	if (rc || !a6_gx_up())
++	if (rc || !a6_gx_up()) {
++		SWEET_CRUMB("recover3 failed (gmu/hfi)");
+ 		return -1;
++	}
+ 	rc = gpucc_pll0_restore();
+ 	R3("pll0", rc);
+ 	a6_clk_diag(g, "recover3");
+@@ -1653,6 +1664,7 @@ int a6_recover_cold(struct a6_gpu *g)
+ 	rc = gpu_cp_init(g, false);
+ 	recover2_active = false;
+ 	R3("cp init + zap", rc);
++	SWEET_CRUMB("recover3 %s rc %d", rc ? "failed" : "done", rc);
+ 	a6_hang_diag("recover3 end");
+ 	return rc;
+ }
+@@ -1706,6 +1718,9 @@ int a6_recover(struct a6_gpu *g)
+ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ {
+ 	/* a6xx hw_init for the A640 (a6xx_gpu.c), minus clock gating, CP protection and interrupts */
++	bool cr = resume || recover2_active;	/* 0206: crumbs on recoveries only */
++	if (cr)
++		SWEET_CRUMB("cp_init enter (resume %d)", resume);
+ 	wr32(GREG(0x3c45), 0);			/* GBIF_HALT */
+ 	(void)rd32(GREG(0x3c45));
+ 	wr32(GREG(0x16), 0);			/* RBBM_GBIF_HALT */
+@@ -1757,6 +1772,8 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	};
+ 	for (unsigned i = 0; i < sizeof(init) / sizeof(init[0]); i++)
+ 		wr32(GREG(init[i][0]), init[i][1]);
++	if (cr)
++		SWEET_CRUMB("cp_init: init table done");
+ 	a6_clkprobe_start();			/* 0169: core cycle counter, redone after every GX collapse */
+ 
+ 	uint32_t len;
+@@ -1764,6 +1781,8 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	if (!sqe || len < 8 || len > 0x10000)
+ 		return -1;
+ 	a6_write(a6_pool_pa(g, A6_OFF_SQE), sqe + 4, (len - 4 + 3) & ~3u);	/* minus the first dword */
++	if (cr)
++		SWEET_CRUMB("cp_init: sqe written");
+ 	wr32(GREG(CP_SQE_INSTR_BASE), (uint32_t)a6_pool_va(A6_OFF_SQE));
+ 	wr32(GREG(CP_SQE_INSTR_BASE + 1), 0);
+ 	wr32(GREG(CP_RB_BASE), (uint32_t)a6_pool_va(A6_OFF_RING));
+@@ -1771,11 +1790,14 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 	wr32(GREG(CP_RB_CNTL), 0x0800020c);	/* 32K ring, 32-byte blocks, no rptr update */
+ 	g->wptr = 0;
+ 	wr32(GREG(CP_SQE_CNTL), 1);
++	if (cr)
++		SWEET_CRUMB("cp_init: sqe_cntl=1");
+ 
+ 	if (recover_diag) {
+ 		/* 0177: state right before the first me_init of a recovery */
+ 		uint64_t c = SMMU_CB(g->gpu_cb);
+ 		recover_diag = false;
++		SWEET_CRUMB("cp_init: pre-me_init reads start");
+ 		a6_log("recover2: pre-me_init: cb sctlr %x fsr %x tlbstatus %x, gbif halt %x ack %x, rbbm halt ack %x, "
+ 		    "rb base %x/%x, sqe base %x/%x, gpucc +1534 %x +1554 %x\n",
+ 		    rd32(c + CB_SCTLR), rd32(c + CB_FSR), rd32(c + CB_TLBSTATUS), rd32(GREG(0x3c45)), rd32(GREG(0x3c46)),
+@@ -1786,12 +1808,21 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 		    rd32(GREG(0x211)), rd32(GREG(0x212)), rd32(GREG(0x213)), rd32(c + CB_FSR));
+ 	}
+ 	uint32_t me_init[] = { a6_pkt7(A6_CP_ME_INIT, 8), 0x2f, 3, 0x20000000, 0, 0, 0, 0, 0 };
+-	if (a6_ring(g, me_init, 9, "me_init", 1000))
++	if (cr)
++		SWEET_CRUMB("cp_init: me_init send");
++	if (a6_ring(g, me_init, 9, "me_init", 1000)) {
++		if (cr)
++			SWEET_CRUMB("cp_init: me_init failed");
+ 		return -1;
++	}
++	if (cr)
++		SWEET_CRUMB("cp_init: me_init done");
+ #if A6_GPU_ID == 618
+ 	if (!resume && recover2_active) {
+ 		/* 0167: after a GX power cycle the zap shader may still be in TZ: resume it if the load fails */
++		SWEET_CRUMB("zap_load enter");
+ 		int zr = zap_load(g);
++		SWEET_CRUMB("zap_load done rc %d", zr);
+ 		if (zr) {
+ 			a6_log("recover2: zap_load -> %d, trying zap_resume\n", zr);
+ 			if (zap_resume())
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index deff6df..4002792 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -72,6 +72,19 @@ int a6_read(uint64_t pa, void *buf, size_t len);
+ void a6_delay_ms(unsigned ms);
+ void a6_delay_us(unsigned us);
+ void a6_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
++/*
++ * 0206: printf (live log), plus the same line straight into the persistent log (lock-free, past the console
++ * buffer and lock), then push the log tail to DRAM (bsd/dev/sweet_ufs.c) so a SoC reset right after keeps it.
++ */
++void sweet_log_append(const char *c, int size);
++void sweet_log_flush(void);
++#define SWEET_CRUMB(fmt, ...) do { \
++	char crumb_[160]; \
++	int crumbn_ = snprintf(crumb_, sizeof(crumb_), "SWEET CRUMB: " fmt "\n", ##__VA_ARGS__); \
++	printf("%s", crumb_); \
++	sweet_log_append(crumb_, crumbn_ < (int)sizeof(crumb_) ? crumbn_ : (int)sizeof(crumb_) - 1); \
++	sweet_log_flush(); \
++} while (0)
+ void a6_smc(uint64_t x[8]);				/* x0..x7 in, x0..x3 out */
+ const uint8_t *a6_firmware(const char *name, uint32_t *len);	/* NULL if missing */
+ uint64_t a6_pt_extra(uint32_t n);	/* PA of the nth 4K page table beyond the pool's arena; 0 = none */
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index e908c2d..7b709ce 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -683,6 +683,7 @@ gpu_recover_locked(const char *why)
+ {
+ 	uint64_t rec_t0 = mach_absolute_time();
+ 	uint64_t far;
++	SWEET_CRUMB("%s: hang detected, recovery start", why);	/* 0206: before any GPU register read */
+ 	uint32_t syn, fsr = a6_fault_status(&gpu, &far, &syn), done = a6_fence_read(&gpu);
+ 	a6_log("%s: GPU hang or fault (fence %u, done %u, smmu fsr %x far %llx fsynr0 %x): reset\n",
+ 	    why, gpu.fence, done, fsr, far, syn);
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index a84a1fc..0a2ae8c 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -864,7 +864,7 @@ sweet_ufs_init(void)
+ #define SWEET_LOG_BLOCKS        (1 + SWEET_LOG_SIZE / UFS_BLOCK)
+ #define SWEET_LOG_SECS          10u
+ 
+-static char sweet_log_ring[SWEET_LOG_SIZE];
++static char sweet_log_ring[SWEET_LOG_SIZE] __attribute__((aligned(64)));	/* 0206: dc cvac by line */
+ static uint64_t _Atomic sweet_log_total;
+ static int sweet_log_chan;
+ static uint32_t sweet_log_secs = SWEET_LOG_SECS;
+@@ -972,6 +972,23 @@ sweet_log_append(const char *c, int size)
+ 	}
+ }
+ 
++/*
++ * 0206: push the last <= 4 KiB of the log to DRAM before something that may reset the SoC. The cached ring is
++ * cleaned to the PoC (dc cvac) for the fallback rescue; dsb sy drains the write-combining mirror's buffers.
++ */
++void sweet_log_flush(void);
++
++void
++sweet_log_flush(void)
++{
++	uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
++	uint64_t from = total > 4096 ? total - 4096 : 0;
++	for (uint64_t n = from & ~63ull; n < total; n += 64) {
++		__asm__ volatile ("dc cvac, %0" :: "r"(&sweet_log_ring[n % SWEET_LOG_SIZE]) : "memory");
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
+ /*
+  * Copy console bytes [*pos, total) (at most max) for live log streaming
+  * (sweet_usb.c). A reader that fell more than the ring behind skips ahead.
+-- 
+2.56.0
+
