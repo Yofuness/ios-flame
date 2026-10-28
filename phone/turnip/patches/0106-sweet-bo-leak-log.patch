@@ -1,0 +1,169 @@
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+index b03c6eea83c..625832673c9 100644
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <errno.h>
++#include <execinfo.h>
+ #include <pthread.h>
+ #include <string.h>
+ #include <sys/mman.h>
+@@ -194,6 +195,33 @@ dw_wait_fence_raw(struct tu_device *dev, uint32_t fence, uint64_t abs_timeout_ns
+ 
+ static VkResult darwin_collect_retired(struct tu_device *dev);
+ 
++/* SweetMetal2 0106: SWEET_BOLEAK=1 logs the life of 1 MiB BOs and the retire ring (backboardd leaks 1 MiB kernel BOs). */
++static struct {
++   int on; /* -1 = env not read yet */
++   uint64_t alloc_1m, free_1m, retired_1m, live, next_ns, t0_ns;
++   uint32_t done; /* newest fence a reap sweep saw signalled */
++   unsigned alloc_logged, skip_logged;
++} sbl = { .on = -1 };
++
++static inline bool
++sbl_on(void)
++{
++   if (likely(sbl.on >= 0))
++      return sbl.on;
++   sbl.on = debug_get_bool_option("SWEET_BOLEAK", false);
++   sbl.t0_ns = os_time_get_nano();
++   return sbl.on;
++}
++
++static void
++sbl_skip(const char *reason, uint64_t size)
++{
++   if (sbl_on() && p_atomic_inc_return(&sbl.skip_logged) <= 32) {
++      mesa_logi("SWEETBOLEAK skip %s size %llu", reason, (unsigned long long)(size >> 10));
++      fflush(NULL);
++   }
++}
++
+ static VkResult
+ dw_wait_fence_locked_free(struct tu_device *dev, uint32_t fence, uint64_t abs_timeout_ns)
+ {
+@@ -280,6 +308,7 @@ darwin_reap_locked(struct tu_device *dev, struct darwin_retire_state *retire)
+             return retire->failure = result;
+          have_completed_fence = true;
+          completed_fence = bo->fence;
++         sbl.done = bo->fence; /* 0106 */
+       }
+       if (bo->token) {
+          if (bo->mapping) {
+@@ -297,10 +326,16 @@ darwin_reap_locked(struct tu_device *dev, struct darwin_retire_state *retire)
+       }
+       NativeAdrenoAbiBoFree release = {.handle = bo->handle};
+       kern_return_t kr = dw_call(NativeAdrenoMethodBoFree, &release, sizeof(release), NULL, 0);
+-      if (kr == kIOReturnBusy)
++      if (kr == kIOReturnBusy) {
++         sbl_skip("bofree-busy", bo->size); /* 0106 */
+          return VK_SUCCESS;
+-      if (kr != KERN_SUCCESS)
++      }
++      if (kr != KERN_SUCCESS) {
++         sbl_skip("bofree-failed", bo->size); /* 0106 */
+          return retire->failure = vk_device_set_lost(&dev->vk, "deferred BoFree failed: 0x%x", kr);
++      }
++      if (sbl_on() && bo->size == (1u << 20)) /* 0106 */
++         p_atomic_inc(&sbl.free_1m);
+       darwin_free_iova(dev, bo->iova, bo->size);
+       *bo = {};
+       retire->head = (retire->head + 1) % DARWIN_RETIRED_BOS;
+@@ -387,6 +422,25 @@ darwin_bo_init(struct tu_device *dev, struct vk_object_base *base,
+    struct tu_bo *bo = tu_device_lookup_bo(dev, gem_handle);
+    assert(bo && bo->gem_handle == 0);
+ 
++   /* 0106: who allocates the 1 MiB BOs */
++   if (sbl_on()) {
++      p_atomic_inc(&sbl.live);
++      if (size == (1u << 20)) {
++         uint64_t n = p_atomic_inc_return(&sbl.alloc_1m);
++         if (n <= 32) {
++            void *bt[9] = {};
++            int got = backtrace(bt, 9); /* frame 0 is this function */
++            char text[9 * 19 + 1] = "";
++            for (int i = 1; i < got; i++)
++               snprintf(text + strlen(text), sizeof(text) - strlen(text), " %llx",
++                        (unsigned long long)(uintptr_t)bt[i]);
++            mesa_logi("SWEETBOLEAK alloc 1M #%llu handle %llu name '%s' bt%s", (unsigned long long)n,
++                      (unsigned long long)reply.handle, name ? name : "", text);
++            fflush(NULL);
++         }
++      }
++   }
++
+    name = tu_debug_bos_add(dev, size, name);
+ 
+    *bo = (struct tu_bo) {
+@@ -456,6 +510,8 @@ darwin_bo_init_host(struct tu_device *dev, struct tu_bo **out_bo, void *pointer,
+    bo->darwin_token = 0;
+    bo->map = pointer;
+    bo->never_unmap = true;
++   if (sbl_on()) /* 0106 */
++      p_atomic_inc(&sbl.live);
+    tu_dump_bo_init(dev, bo);
+    TU_RMV(bo_allocate, dev, bo);
+    *out_bo = bo;
+@@ -562,6 +618,11 @@ darwin_bo_finish(struct tu_device *dev, struct tu_bo *bo)
+ 
+    tu_debug_bos_del(dev, bo);
+    tu_dump_bo_del(dev, bo);
++   if (sbl_on()) { /* 0106 */
++      p_atomic_dec(&sbl.live);
++      if (bo->size == (1u << 20))
++         p_atomic_inc(&sbl.retired_1m);
++   }
+ 
+    if (bo->map && bo->darwin_token)
+       TU_RMV(bo_unmap, dev, bo);
+@@ -570,7 +631,10 @@ darwin_bo_finish(struct tu_device *dev, struct tu_bo *bo)
+    struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
+    pthread_mutex_lock(&retire->lock);
+    darwin_reap_locked(dev, retire);
++   if (retire->failure != VK_SUCCESS)
++      sbl_skip("retire-failed", bo->size); /* 0106: the reaper no longer runs */
+    if (retire->count == DARWIN_RETIRED_BOS && retire->failure == VK_SUCCESS) {
++      sbl_skip("ring-full-wait", bo->size); /* 0106 */
+       ++retire->pressure_waits;
+       pthread_mutex_unlock(&retire->lock);
+       VkResult waited = darwin_wait_idle(dev);
+@@ -590,6 +654,7 @@ darwin_bo_finish(struct tu_device *dev, struct tu_bo *bo)
+       ++retire->enqueued;
+       darwin_reap_locked(dev, retire);
+    } else {
++      sbl_skip("ring-full-retained", bo->size); /* 0106 */
+       /* No reusable range is reported on error. The kernel still owns the handle
+        * and view; connection teardown must drain them, even if this record cannot fit. */
+       retire->failure = vk_device_set_lost(&dev->vk, "deferred BO queue remains full; retaining native allocation");
+@@ -896,6 +961,29 @@ darwin_queue_submit(struct tu_queue *queue, void *_submit,
+       s->state = fence ? DARWIN_SYNC_FENCE : DARWIN_SYNC_SIGNALED;
+    }
+ 
++   /* 0106: retire ring state every 10 s */
++   if (sbl_on()) {
++      uint64_t now = os_time_get_nano();
++      if (now >= sbl.next_ns) {
++         sbl.next_ns = now + 10000000000ull;
++         struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
++         pthread_mutex_lock(&retire->lock);
++         unsigned count = retire->count;
++         uint64_t head_size = count ? retire->entries[retire->head].size : 0;
++         uint32_t head_fence = count ? retire->entries[retire->head].fence : 0;
++         int failed = retire->failure != VK_SUCCESS;
++         pthread_mutex_unlock(&retire->lock);
++         mesa_logi("SWEETBOLEAK t %llu ring %u/%u head size %llu fence %u done %u alloc1m %llu free1m %llu "
++                   "retired1m %llu live_tu_bos %llu last %u%s",
++                   (unsigned long long)((now - sbl.t0_ns) / 1000000000ull), count, (unsigned)DARWIN_RETIRED_BOS,
++                   (unsigned long long)(head_size >> 10), head_fence, sbl.done,
++                   (unsigned long long)sbl.alloc_1m, (unsigned long long)sbl.free_1m,
++                   (unsigned long long)sbl.retired_1m, (unsigned long long)sbl.live, fence,
++                   failed ? " FAILED" : "");
++         fflush(NULL);
++      }
++   }
++
+    if (u_trace_submission_data)
+       u_trace_submission_data->gpu_ts_offset = 0;
+    return VK_SUCCESS;
