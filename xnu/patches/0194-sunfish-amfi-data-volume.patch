@@ -1,0 +1,29 @@
+From 9bf2be6a10f711dc2e474432949b5518e7860f4c Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Tue, 27 Oct 2026 23:26:33 -0400
+Subject: [PATCH] sunfish: binaries on the data volume (ufsroot1) are platform
+ binaries too
+
+---
+ bsd/kern/sweet_amfi.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index ff2c725..5e7a0b4 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -264,7 +264,10 @@ sweet_amfi_vnode_check_signature(struct vnode *vp, __unused struct label *label,
+ {
+ 	mount_t mp = vnode_mount(vp);
+ 	*cs_flags |= CS_SIGNED;
+-	if (mp != NULL && (vfs_flags(mp) & MNT_ROOTFS)) {
++	/* 0194: also the data volume (/dev/ufsroot1 on /private/var, 0185): our tools in /var/local/bin
++	 * are launchd jobs, and launchd panics on a non-platform exec. */
++	if (mp != NULL && ((vfs_flags(mp) & MNT_ROOTFS) ||
++	    strncmp(vfs_statfs(mp)->f_mntfromname, "/dev/ufsroot1", MNAMELEN) == 0)) {
+ 		*cs_flags |= CS_PLATFORM_BINARY;
+ 	}
+ 	if (cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
+-- 
+2.56.0
+
