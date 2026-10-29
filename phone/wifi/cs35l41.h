@@ -24,6 +24,7 @@ struct cs_amp {
 	int probed, configured, verified, up;
 	int out_mute;		/* sp8: AMP_OUT_MUTE set at config, cleared 2 ms after GLOBAL_EN (ios-redfin 0953) */
 	int clk;		/* sp8: SP_RATE_CTRL 0x28 + TST_FS_MON0 16 | 36 << 12 (ios-redfin 0953, Linux set_sysclk) */
+	int slot32;		/* pcm32: --i2s-32: 32-bit ASP slots, BCLK 3.072 MHz (code 0x21) instead of 16 / 1.536 MHz */
 	int nexp;
 	struct cs_exp exp[CS_MAX_EXP];	/* read-back list */
 };

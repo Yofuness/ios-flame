@@ -55,6 +55,8 @@
 #define IRQ_ERRORS	(IRQ_AMP_SHORT | IRQ_TEMP_ERR | IRQ_TEMP_WARN | IRQ_BST_SHORT | IRQ_BST_UVP | IRQ_BST_OVP)
 
 #define BCLK_CODE	0x1b		/* 1.536 MHz (cs35l41.c:66 PLL table) */
+#define BCLK_CODE_32	0x21		/* pcm32: 3.072 MHz, Linux cs35l41-lib.c cs35l41_pll_sysclk { 3072000, 0x21 } */	/* verified: Linux cs35l41.c cs35l41_pll_sysclk { 3072000, 0x21 } (fs_mon: 1536000 -> 52/84, 3072000 -> 28/44) */
+#define BCLK_CODE_OF(a)	((a)->slot32 ? BCLK_CODE_32 : BCLK_CODE)
 #define VOL_CEIL_DB	(-20)		/* sp1: hard ceiling, whatever the caller passes */
 #define VOL_FLOOR_DB	(-102)		/* tlv minimum 0x4cf */
 #define AMP_OK(x)	((x) == 0x40 || (x) == 0x41)	/* ep1: 0x40 = top (earpiece, DT reset_pin_top), 0x41 = bottom loudspeaker */
@@ -332,13 +334,13 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 		err |= upd(a, PWR_CTRL2, 0x30, 1u << 4);
 	if (a->clk) {	/* sp8: SP_RATE_CTRL before the PLL, as Linux cs35l41_component_set_sysclk / ios-redfin 0953 */
 		uint32_t v;
-		err |= upd(a, SP_RATE_CTRL, 0x3f, BCLK_CODE);	/* our 1.536 MHz BCLK code (redfin's 0x28 is 6.144 MHz) */
+		err |= upd(a, SP_RATE_CTRL, 0x3f, BCLK_CODE_OF(a));	/* our 1.536 MHz BCLK code (redfin's 0x28 is 6.144 MHz) */
 		if (!rd(a, SP_RATE_CTRL, &v))
 			printf("cs35l41 %#x: clk: SP_RATE_CTRL read back %08x\n", a->addr, v);
 	}
-	/* PLL from BCLK 1.536 MHz (48 kHz x 16 bit x 2), cs35l41.c:841-856 */
+	/* PLL from BCLK 1.536 MHz (48 kHz x 16 bit x 2; pcm32: 3.072 MHz, 32 bit), cs35l41.c:841-856 */
 	err |= upd(a, PLL_CLK_CTRL, 1u << 11, 1u << 11);		/* open loop */
-	err |= upd(a, PLL_CLK_CTRL, 0x7e0, BCLK_CODE << 5);		/* freq */
+	err |= upd(a, PLL_CLK_CTRL, 0x7e0, BCLK_CODE_OF(a) << 5);	/* freq */
 	err |= upd(a, PLL_CLK_CTRL, 1u << 4, 0);
 	err |= upd(a, PLL_CLK_CTRL, 0x7, 0);				/* ref = BCLK */
 	err |= upd(a, PLL_CLK_CTRL, 1u << 4, 1u << 4);
@@ -353,7 +355,10 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 		err |= lock(a);
 	}
 	/* ASP: I2S slave, 16-bit slots, RX1 from slot 0 (left), 16-bit words, SDOUT hi-z 3 (DT) */
-	err |= upd(a, SP_FORMAT, 0xffff0755, 16u << 24 | 16u << 16 | 2u << 8);
+	{	/* pcm32: --i2s-32 = 32-bit RX/TX slot widths; RX_WL stays 16 (top 16 bits of the MSB-first word) */
+		uint32_t w = a->slot32 ? 32u : 16u;
+		err |= upd(a, SP_FORMAT, 0xffff0755, w << 24 | w << 16 | 2u << 8);
+	}
 	err |= upd(a, SP_RX_SLOT, 0x3f, 0);
 	err |= upd(a, SP_RX_WL, 0x3f, 16);
 	err |= upd(a, SP_HIZ_CTRL, 0x3, 3);

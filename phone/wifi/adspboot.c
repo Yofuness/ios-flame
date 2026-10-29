@@ -968,12 +968,14 @@ static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16
 }
 
 static int amp_invert_clk;	/* sp8: --amp-invert-clk */
+static int i2s_bits = 16;	/* pcm32: --i2s-32: 32-bit I2S slots, BCLK 48000*32*2 */
+static int adm_bits;		/* pcm32: --adm-bits N (0 = 16, or 24 with --i2s-32 as ios-redfin) */
 
 static void afe_clock(uint32_t opcode, int enable)
 {
 	uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_clock_set)] = { 0 };
 	struct afe_param p = { AFE_MODULE_CLOCK_SET, AFE_PARAM_ID_CLOCK_SET, sizeof(struct afe_clock_set), 0 };
-	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000 * 16 * 2,
+	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000u * (uint32_t)i2s_bits * 2,
 				   amp_invert_clk ? 4 /* sp8: INVERT_COUPLE_NO, ios-redfin */ : 1 /* COUPLE_NO */, 0,
 				   (uint32_t)enable };
 	uint32_t size = sizeof(p) + sizeof(c);	/* payload size; address 0/0 and mem_map_handle 0: in band */
@@ -990,7 +992,7 @@ static void pcm_start(void);
 static void afe_i2s_pl(uint8_t *b, uint16_t port, uint16_t lane)
 {
 	struct afe_param p = { AFE_MODULE_AUDIO_DEV_INTERFACE, AFE_PARAM_ID_I2S_CONFIG, sizeof(struct afe_i2s), 0 };
-	struct afe_i2s c = { 1, 16, lane, 1 /* stereo */, 1 /* ws internal */, 48000, 0, 0 };
+	struct afe_i2s c = { 1, (uint16_t)i2s_bits, lane, 1 /* stereo */, 1 /* ws internal */, 48000, 0, 0 };
 	uint16_t size = sizeof(p) + sizeof(c);
 	memset(b, 0, AFE_I2S_PL);
 	memcpy(b, &port, 2);
@@ -1569,7 +1571,7 @@ static void pcm_run(void)
 			/* adm_cmd_device_open_v5: u16 flags, mode (1 playback), endpoint 1, endpoint 2 (0xffff), u32 topology,
 			 * u16 channels, bit width, u32 rate, u8 channel map[8]; sent to the AFE port as the reference does */
 			struct { uint16_t flags, mode, ep1, ep2; uint32_t topo; uint16_t ch, bits; uint32_t rate; uint8_t map[8]; }
-			__attribute__((packed)) o = { 0, 1, AFE_PORT_SEC_MI2S_RX, 0xffff, ADM_TOPOLOGY_NONE, 2, 16, 48000,
+			__attribute__((packed)) o = { 0, 1, AFE_PORT_SEC_MI2S_RX, 0xffff, ADM_TOPOLOGY_NONE, 2, (uint16_t)adm_bits, 48000,
 						      { 1, 2 } /* FL FR */ };
 			pcm_send(APR_SVC_ADM, AFE_PORT_SEC_MI2S_RX, ADM_CMD_DEVICE_OPEN_V5, &o, sizeof(o), ADM_CMDRSP_DEVICE_OPEN_V5);
 			return;
@@ -1774,6 +1776,7 @@ static void pcm_start(void)
 {
 	for (int i = 0; i < 48; i++)
 		pcm_sine[i] = (int16_t)lrint(32767.0 * pow(10, pcm_dbfs / 20.0) * sin(2 * M_PI * i / 48));	/* pcm_dbfs peak */
+	printf("pcm: i2s %d-bit slots, BCLK %u Hz, adm bits %d\n", i2s_bits, 48000u * (uint32_t)i2s_bits * 2, adm_bits);
 	pcm_step = P_MAP;
 	pcm_run();
 }
@@ -2337,6 +2340,10 @@ int main(int argc, char **argv)
 			amp_boost = 1;
 		else if (!strcmp(argv[i], "--amp-invert-clk"))	/* sp8: AFE clock attri INVERT_COUPLE_NO (4) */
 			amp_invert_clk = 1;
+		else if (!strcmp(argv[i], "--i2s-32"))	/* pcm32: 32-bit I2S slots end to end (AFE + amp ASP), implies --adm-bits 24 */
+			i2s_bits = 32;
+		else if (!strcmp(argv[i], "--adm-bits") && i + 1 < argc)	/* pcm32: ADM_CMD_DEVICE_OPEN_V5 bit width */
+			adm_bits = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--amp-addr") && i + 1 < argc)	/* ep1: 0x41 = bottom loudspeaker */
 			amp.addr = (uint8_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
@@ -2377,6 +2384,9 @@ int main(int argc, char **argv)
 		else
 			cmd = argv[i];
 	}
+	if (!adm_bits)	/* pcm32: ios-redfin runs 24-bit ADM on its 32-bit TDM slots */
+		adm_bits = i2s_bits == 32 ? 24 : 16;
+	amp.slot32 = i2s_bits == 32;
 	if (sensors && !root) {	/* step 6: the sensors PD after the root PD needs the root session */
 		fprintf(stderr, "adspboot: --sensors needs --rpc --root\n");
 		return 2;
