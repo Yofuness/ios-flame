@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 13:50 the 10 s fatal decoded (Hexagon disassembly; research/notes/adsp-sarclient.md)
+- llvm-objdump (hexagon) on the reassembled adsp.elf: SarClient init (b13 0xb2164e18) -> SeeHelper::init 0xb20660bc: findSuidSync("resampler"), then findSuidSync("remote_proc_state"), each 40 x 250 ms = 10 s; failure -> "Failed to initialize ASH SEE helper" -> fatal sar.cc.
+- remote_proc_state driver (b13 0xb21d5268): smp2p_register(APPS, "sleepstate"); only on success does it set AVAILABLE. We only write "master-kernel" in our outbound SMP2P item, so it never becomes available.
+- Fix: a "sleepstate" entry (bit 0 = 1 = awake) in our outbound item 429 before the ADSP starts. Implementing.
+
 ### 2026-10-29 13:25 stub modem SAR service: no effect (au13; adspboot ef1590b)
 - `--stub-svc 17` announced (NEW_SERVER svc 17 at 1:20); the ADSP never sent it anything; no NEW_LOOKUP/DEL_CLIENT/BYE at all. Same fatal at 10127 ms. Missing remote service ruled out (as the 2026-10-28 18:45 analysis said: findSuidSync waits for sensor SUIDs). Likely: no physical sensor driver registers (power rails / interrupts / buses for the SSC sensors). Mi 9T firmware (non-Google) has no SarClient. Next: which sensor SarClient needs and what powers it (read-only).
 
