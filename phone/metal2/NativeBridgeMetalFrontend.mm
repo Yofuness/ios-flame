@@ -951,6 +951,14 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  if(_defer){[self rec:^{[self check:nmb_render_set_depth_bias(self.handle,bias,slope,clamp) what:"setDepthBias"];}];return;}   // sweet cull
  [self check:nmb_render_set_depth_bias(self.handle,bias,slope,clamp) what:"setDepthBias"];
 }
+// 0109 (B24): Maps aborts on the missing selector. Clip (0) is Vulkan's default; the runtime has no depth clamp, so
+// Clamp is stored and logged once. Log off: M2V_B24_LOG=0.
+- (void)setDepthClipMode:(MTLDepthClipMode)mode {
+ objc_setAssociatedObject(self,"depthClip",@(mode),OBJC_ASSOCIATION_RETAIN);
+ static BOOL warned=NO;
+ const char *off=getenv("M2V_B24_LOG");
+ if(mode==MTLDepthClipModeClamp&&!warned&&!(off&&!strcmp(off,"0"))){warned=YES;NBLOG(@"native-metal: setDepthClipMode: Clamp not supported, ignored");}
+}
 - (void)setLineWidth:(float)width {
  if(_defer){[self rec:^{[self check:nmb_render_set_line_width(self.handle,width) what:"setLineWidth"];}];return;}   // sweet cull
  [self check:nmb_render_set_line_width(self.handle,width) what:"setLineWidth"];}
