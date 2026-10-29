@@ -985,9 +985,13 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 				if (bbd) {
 					sm2_orient_d(rn, 0);
 				} else {
-					sm2_log("orient: R %ld: E + all app scenes", rn);
+					/* rot7: with E first the app scene was rotated back (re-apply needed) and never redrew in
+					 * landscape; "R N s" skips E (scenes only, as the working S N in rot3) */
+					bool skip_e = strchr(buf + 2, 's') != NULL;
+					sm2_log("orient: R %ld: %sall app scenes", rn, skip_e ? "" : "E + ");
 					sm2_r_orient = rn;
-					sm2_orient_e(rn);
+					if (!skip_e)
+						sm2_orient_e(rn);
 					sm2_orient_r_apply(rn, false);
 				}
 			} @catch (id ex) {
