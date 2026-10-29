@@ -4,6 +4,9 @@ How the work on the Pixel 4a (sunfish) is done: booting, building, measuring, pr
 Results live in the feature logs (`docs/features/`); the plan is `docs/plan.md`. Most of this file came from the old
 `docs/sunfish/display-perf.md` ("Methods and tools", "Per-frame timeline") and `docs/sunfish/status.md` ("How to boot").
 
+## Listening to the phone
+- USB measurement mic EVERSOLO EM-01 on the laptop (set up by the user 2026-10-30, no calibration file): PulseAudio source `alsa_input.usb-EVERSOLO_EM-01_2614211098-01.iec958-stereo`, the default of `tools/sunfish-tone-detect.sh SECONDS [FREQ]` (TONE_SRC= overrides). Recordings stay in /tmp and are deleted.
+
 ## Phone control file (/var/local/sweet-orient, SweetMetal2, read every 1 s)
 `echo "CMD" > /var/local/sweet-orient` over SSH; results in /var/local/mtl2.log.
 - `T X Y` taps, `W X1 Y1 X2 Y2 MS` swipes (X, Y 0..1 in portrait, 0,0 top-left; backboardd injects HID digitizer events).
