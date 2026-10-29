@@ -23,6 +23,12 @@
 ### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
 - Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
 
+### 2026-10-29 10:45 rotation: Calculator does not relayout (rot0, rot1; kernel95)
+- Research (research/notes/rotation-ios16.md, not disassembly-confirmed): on iPhone the app rotates its own pixels (UIWindow landscape bounds + 90 deg layer transform); backboardd/CA do not rotate the display. Calculator turns into the scientific keypad in landscape: a layout change visible on the webcam.
+- rot0 (k95idle boot, Weather location alert on top): D 3 0 + E 3, E 4: 4x5 keypad stays. Confounded.
+- rot1 (fresh boot, Calculator in front, no alert; ssh up 17 s, 4455 mV): `D 3 0` -> SpringBoard probe `notify orientation 3 raw 3 lock 0, UIDevice 3, app interface 3, locked 0` (no backboardd "effective" line); `E 3` logged; keypad stays 4x5 (webcam rot1-c). oslog: no Calculator "Scene will change" line.
+- So SpringBoard believes orientation 3, but the front app's scene does not change orientation (or is counter-rotated). Next: a `P` probe in SpringBoard for the front app's scene settings/clientSettings interfaceOrientation and the scene host view transforms.
+
 ### 2026-10-28 22:20 rotation: where to look next
 - RE opinion (no disassembly confirmed): on iOS 16 iPhones the app rotates its own picture (UIWindow _updateToInterfaceOrientation / _UIWindowRotationAnimationController: landscape bounds + a layer transform); the host and the display stay portrait. Safari logged `_endAnimatedResize` but no `_beginAnimatedResize`, so the window rotation step probably never runs, or the scene settings carry a portrait frame with orientation 3 (~60 / 25 %).
 - An in-app probe (keyWindow bounds/transform, scene orientation/coordinate space) was added to SweetMetal2 for MobileSafari, but apps don't load SweetMetal2 (only SpringBoard, backboardd, com.apple.WebKit.GPU; MobileSafari only once, lazily), so it didn't run. Next: a small dylib injected into one app (DYLD_INSERT_LIBRARIES through its launchd/RunningBoard environment, or a tweak-loader style hook) to log those values, or read the scene settings frame from SpringBoard (FBSScene settings of Safari's scene).
