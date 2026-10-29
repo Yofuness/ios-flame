@@ -20,6 +20,7 @@
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
+ *   [--no-reuse]  ap7: glink rx as before (RX_DONE + a new intent) instead of RX_DONE_W_REUSE (or ADSP_NO_REUSE=1)
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
  *                     CLOSEd at exit only with ADSP_CLOSE=1 (apr3: closing the FastRPC channel crashed the ADSP: fastrpc_port_s.c:176)
@@ -510,17 +511,22 @@ static int boot(void)
 #define QRTR_NODE_AP	1
 #define QRTR_PORT_CTRL	0xfffffffeu
 #define NCHAN		8
-#define NPEND		4
+#define NPEND		64	/* ap7: 64 (was 4): --pcm WRITEs wait here for an intent */
+#define NRINT		512	/* ap7: remote intents per channel (was 64 and dropped the rest: the ADSP still counted them) */
+#define NLOCAL		8	/* ap7: free local rx intents kept queued per channel */
 
 struct chan {
 	char name[32];
 	uint16_t rcid, lcid;
-	uint32_t r_iid[64], r_isz[64];	/* ap5: 64 (was 16): apr intents were dropped, table full */
+	uint32_t *r_iid, *r_isz;	/* ap7: NRINT each, allocated on the first INTENT */
 	int r_n, ndata, up;
+	int l_n;	/* ap7: our rx intents the remote still holds unused */
+	uint32_t nrx, nreq;	/* ap7: packets received, RX_INTENT_REQs sent */
 	uint8_t pend[NPEND][512];	/* (pd-mapper replies are ~150 bytes) */
 	uint32_t pend_len[NPEND];
 	int npend;
 };
+static int no_reuse;	/* ap7: --no-reuse / ADSP_NO_REUSE=1: RX_DONE + a fresh intent per packet (the old way) */
 static struct chan ch[NCHAN];
 static struct chan *apr_chan;
 static int nch, edge_up, ver_seen, our_iid = 100;
@@ -572,6 +578,7 @@ static void give_intents(struct chan *c, int n, uint32_t sz)
 		e[2 * i + 1] = (uint32_t)our_iid++;
 	}
 	glink_send(GLINK_CMD_INTENT, c->lcid, (uint32_t)n, e, 8u * n);
+	c->l_n += n;
 }
 
 /* Send one packet on c using a remote intent; without one, queue it and ask (RX_INTENT_REQ). */
@@ -585,6 +592,9 @@ static void chan_send(struct chan *c, const void *pkt, size_t n)
 			memcpy(c->pend[c->npend], pkt, n);
 			c->pend_len[c->npend++] = (uint32_t)n;
 			glink_send(GLINK_CMD_RX_INTENT_REQ, c->lcid, (uint32_t)n, NULL, 0);
+			if (c->nreq++ < 8)	/* ap7 */
+				printf("adsp: %s: no remote intent for %zu bytes: queued (%d), RX_INTENT_REQ sent\n", c->name,
+				       n, c->npend);
 		} else {
 			printf("adsp: %s: tx %zu bytes dropped (no intent, queue full)\n", c->name, n);
 		}
@@ -1444,7 +1454,13 @@ static int pump_one(void)
 		for (uint32_t i = 0; c && i < p2; i++) {
 			uint32_t e[2];
 			glink_rx_peek(e, 8 + 8 * i, 8);
-			if (c->r_n < 64) {
+			if (!c->r_iid) {	/* ap7 */
+				c->r_iid = calloc(NRINT, sizeof(uint32_t));
+				c->r_isz = calloc(NRINT, sizeof(uint32_t));
+				if (!c->r_iid || !c->r_isz)
+					return -1;
+			}
+			if (c->r_n < NRINT) {
 				c->r_isz[c->r_n] = e[0];
 				c->r_iid[c->r_n++] = e[1];
 			} else {
@@ -1481,6 +1497,8 @@ static int pump_one(void)
 		if (h[0] == GLINK_CMD_TX_DATA) {
 			rx_have = 0;
 			rx_iid = p2;
+			if (c)
+				c->l_n--;	/* ap7: this packet used one of our intents */
 		}
 		if (rx_have + cl[0] <= sizeof(rxbuf)) {
 			glink_rx_peek(rxbuf + rx_have, 16, cl[0]);
@@ -1489,8 +1507,16 @@ static int pump_one(void)
 		if (!cl[1] && !c)
 			printf("adsp: data for unknown cid %u (%zu bytes) dropped\n", h[1], rx_have);
 		if (!cl[1] && c) {
-			glink_send(GLINK_CMD_RX_DONE, c->lcid, rx_iid, NULL, 0);
-			give_intents(c, 1, 4096);
+			c->nrx++;
+			if (no_reuse) {
+				glink_send(GLINK_CMD_RX_DONE, c->lcid, rx_iid, NULL, 0);
+				give_intents(c, 1, 4096);
+			} else {	/* ap7: hand the same intent back, as Linux qcom_glink does for reusable intents */
+				glink_send(GLINK_CMD_RX_DONE_W_REUSE, c->lcid, rx_iid, NULL, 0);
+				c->l_n++;
+			}
+			while (c->l_n < NLOCAL)	/* ap7: keep NLOCAL free intents queued */
+				give_intents(c, NLOCAL - c->l_n > 4 ? 4 : NLOCAL - c->l_n, 4096);
 			if (!strcmp(c->name, "IPCRTR"))
 				qrtr_rx(c, rxbuf, rx_have);
 			else if (rpc_on && c == rpc_chan)
@@ -1578,6 +1604,10 @@ static void heartbeat(void)
 		fastrpc_status(b, sizeof(b));
 	printf("adsp: t=%llus state %x, %s, pending tx %d\n", (unsigned long long)(now_ms() - run_t0) / 1000, v,
 	       rpc_on ? b : "no rpc", np);
+	for (int i = 0; i < nch; i++)	/* ap7: intent accounting per channel */
+		if (ch[i].up)
+			printf("adsp:   %s: remote intents %d, local intents %d, tx queued %d, rx %u, intent reqs %u\n",
+			       ch[i].name, ch[i].r_n, ch[i].l_n, ch[i].npend, ch[i].nrx, ch[i].nreq);
 }
 
 static int edge_loop(int ms, int stop, uint64_t t0)
@@ -1596,7 +1626,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			exit(1);
 		}
 		if (now_ms() >= beat) {
-			beat = now_ms() + 10000;
+			beat = now_ms() + (pcm_running ? 1000 : 10000);	/* ap7: 1 s while --pcm plays */
 			heartbeat();
 		}
 		int r;
@@ -1685,6 +1715,7 @@ int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	run_t0 = now_ms();
+	no_reuse = getenv("ADSP_NO_REUSE") != NULL;	/* ap7 */
 	signal(SIGTERM, on_sig);
 	signal(SIGINT, on_sig);
 	if (smem_init())
@@ -1697,6 +1728,8 @@ int main(int argc, char **argv)
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
 			watch = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--no-reuse"))
+			no_reuse = 1;
 		else if (!strcmp(argv[i], "--no-early"))
 			early = 0;
 		else if (!strcmp(argv[i], "--no-sleepstate"))
