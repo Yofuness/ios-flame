@@ -11,7 +11,6 @@ history in the feature Logs.
 - B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
 - B27 App Store stuck on "LOADING" (network/account; may need iCloud).
-- B1 mtl2.log never rotated: fix built, check on the next install. [phone]
 - B8 PhotosFileProvider crashes (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.

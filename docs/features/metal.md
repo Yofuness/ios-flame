@@ -15,7 +15,7 @@
 ## Open
 - About 3 ms/frame of small A8/RGBA8 buffer textures with 32-byte pitch (Turnip needs 64 for explicit linear).
 - Reduce Transparency works but slow (~6 swaps/s) (broken.md, rtj/rtj2).
-- /var/local/mtl2.log: see [apps](apps.md) (never rotated).
+- /var/local/mtl2.log: each client truncates it in place once it passes 8 MB (SweetMetal2.mm:27-35; clients run as mobile and cannot rename in /var/local, so no rotated files).
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
