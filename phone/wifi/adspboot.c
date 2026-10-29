@@ -33,6 +33,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <signal.h>
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
@@ -487,6 +488,15 @@ struct chan {
 static struct chan ch[NCHAN];
 static int nch, edge_up, ver_seen, our_iid = 100;
 static int rpc_started, ready_seen;
+/* au14: --watch was paid twice with --rpc (the early watch, then glink_watch) and silent; one deadline for the
+ * whole run, a heartbeat every 10 s, and SIGTERM/SIGINT stop the loop so the summary still prints */
+static uint64_t watch_end, run_t0;
+static volatile sig_atomic_t got_sig;
+
+static void on_sig(int sig)
+{
+	got_sig = sig;
+}
 static struct chan *rpc_chan;
 static uint8_t rxbuf[16384];
 static size_t rx_have;
@@ -777,8 +787,12 @@ static int pump_one(void)
 			if (c->r_n < 16) {
 				c->r_isz[c->r_n] = e[0];
 				c->r_iid[c->r_n++] = e[1];
+			} else {
+				printf("adsp: %s: remote intent %u (%u bytes) dropped, table full\n", c->name, e[1], e[0]);
 			}
 		}
+		if (!c)
+			printf("adsp: %u intents for unknown cid %u dropped\n", p2, h[1]);
 		if (c)
 			flush_pend(c);
 		break;
@@ -788,6 +802,10 @@ static int pump_one(void)
 			glink_send(GLINK_CMD_RX_INTENT_REQ_ACK, c->lcid, 1, NULL, 0);
 			give_intents(c, 1);
 		}
+		break;
+	case GLINK_CMD_RX_INTENT_REQ_ACK:
+		if (!p2)
+			printf("adsp: %s: intent request refused (%d queued)\n", c ? c->name : "?", c ? c->npend : 0);
 		break;
 	case GLINK_CMD_TX_DATA:
 	case GLINK_CMD_TX_DATA_CONT: {
@@ -808,6 +826,8 @@ static int pump_one(void)
 			glink_rx_peek(rxbuf + rx_have, 16, cl[0]);
 			rx_have += cl[0];
 		}
+		if (!cl[1] && !c)
+			printf("adsp: data for unknown cid %u (%zu bytes) dropped\n", h[1], rx_have);
 		if (!cl[1] && c) {
 			glink_send(GLINK_CMD_RX_DONE, c->lcid, rx_iid, NULL, 0);
 			give_intents(c, 1);
@@ -828,7 +848,6 @@ static int pump_one(void)
 	case GLINK_CMD_SIGNALS:
 	case GLINK_CMD_READ_NOTIF:
 	case GLINK_CMD_CLOSE_ACK:
-	case GLINK_CMD_RX_INTENT_REQ_ACK:
 		break;
 	default:
 		printf("adsp: glink cmd %u (p1 %u p2 %u): skipped as 8 bytes\n", h[0], h[1], p2);
@@ -880,10 +899,39 @@ static void rpc_poll(void)
 		}
 }
 
+static void heartbeat(void)
+{
+	char b[200] = "";
+	uint32_t v = 0;
+	int np = 0;
+	smp2p_in(&v);
+	for (int i = 0; i < nch; i++)
+		np += ch[i].npend;
+	if (rpc_on)
+		fastrpc_status(b, sizeof(b));
+	printf("adsp: t=%llus state %x, %s, pending tx %d\n", (unsigned long long)(now_ms() - run_t0) / 1000, v,
+	       rpc_on ? b : "no rpc", np);
+}
+
 static int edge_loop(int ms, int stop, uint64_t t0)
 {
-	uint64_t end = now_ms() + (uint64_t)ms, next = 0;
+	uint64_t end = now_ms() + (uint64_t)ms, next = 0, beat = now_ms() + 10000;
+	if (watch_end && end > watch_end)
+		end = watch_end;
 	while (now_ms() < end) {
+		if (got_sig) {
+			printf("adsp: signal %d: stopping\n", (int)got_sig);
+			heartbeat();
+			if (rpc_on) {
+				fastrpc_summary();
+				rpc_faults();
+			}
+			exit(1);
+		}
+		if (now_ms() >= beat) {
+			beat = now_ms() + 10000;
+			heartbeat();
+		}
 		int r;
 		while ((r = pump_one()) > 0)
 			;
@@ -916,7 +964,7 @@ static int glink_watch(int secs)
 {
 	if (edge_open(secs * 1000))
 		return -1;
-	edge_loop(rpc_on ? secs * 1000 : 5000, 0, 0);
+	edge_loop(rpc_on ? secs * 1000 : 5000, 0, 0);	/* --rpc: up to watch_end (au14) */
 	printf("adsp: glink %s, %d channels\n", ver_seen ? "up" : "no version from the ADSP", nch);
 	return ver_seen ? 0 : -1;
 }
@@ -948,6 +996,9 @@ static int status(void)
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
+	run_t0 = now_ms();
+	signal(SIGTERM, on_sig);
+	signal(SIGINT, on_sig);
 	if (smem_init())
 		return 1;
 	printf("adsp: smem ok\n");
@@ -1029,6 +1080,8 @@ int main(int argc, char **argv)
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
 		return 1;
+	if (rpc_on)	/* au14: --watch N is the whole serve, not N per phase; ADSP_WATCH_PER_PHASE=1 for the old way */
+		watch_end = getenv("ADSP_WATCH_PER_PHASE") ? 0 : now_ms() + (uint64_t)watch * 1000;
 
 	uint32_t v;
 	if (smp2p_in(&v) == 0 && (v & 2) && !(v & 1)) {
@@ -1047,7 +1100,8 @@ int main(int argc, char **argv)
 			st = edge_loop(watch * 1000, 1, t0);
 			if (st == 0 && ready_seen)
 				st = 1;
-			printf("adsp: early watch: %s, %d channels\n", st == 1 ? "ready" : st == 2 ? "crash" : "time up",
+			printf("adsp: early watch: %s, %d channels\n", st == 1 && !(watch_end && now_ms() >= watch_end) ? "ready" :
+			       st == 1 ? "ready, watch over" : st == 2 ? "crash" : "time up",
 			       nch);
 			if (st == 2) {
 				if (rpc_on) {

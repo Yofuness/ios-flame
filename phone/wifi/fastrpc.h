@@ -24,6 +24,8 @@ void fastrpc_sensors(int on);
 int fastrpc_start(fastrpc_send_fn send);
 /* One received message (smq_invoke_rsp). */
 void fastrpc_rx(const void *p, size_t n);
+/* au14: one heartbeat line part: per session state, calls served, the ctx in flight. */
+void fastrpc_status(char *buf, size_t n);
 /* Calls per method, files opened, errors. */
 void fastrpc_summary(void);
 

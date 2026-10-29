@@ -989,6 +989,15 @@ int fastrpc_start(fastrpc_send_fn send)
 	return s_root.state == 6 ? -1 : 0;
 }
 
+static const char *st_name[] = { "off", "attach", "remotectl_open", "register", "init2", "serving", "stopped" };
+
+void fastrpc_status(char *buf, size_t n)
+{
+	snprintf(buf, n, "root %s %u calls ctx %llx, sensors %s %u calls ctx %llx, %u invokes", st_name[s_root.state],
+		 s_root.calls, (unsigned long long)s_root.cur_ctx, st_name[s_sns.state], s_sns.calls,
+		 (unsigned long long)s_sns.cur_ctx, seq);
+}
+
 void fastrpc_summary(void)
 {
 	static const char *st[] = { "off", "attach", "remotectl_open", "register", "init2", "serving", "stopped" };
