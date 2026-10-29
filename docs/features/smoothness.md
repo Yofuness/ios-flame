@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 00:40 zc1: no slot surface (kernel101); slot limit raised (kernel102)
+- zc1 (kernel101, sweetfb_zerocopy=1): boot normal, no reset. backboardd creates two 1125x2436 BGRA surfaces at 32.5/32.7 s with bpr 4608, planes 0, size 0xab8000 (> the 0xA90000 slot limit), so no "slot1 surface" line; sweet_zc_scan stayed 0, step 4 not run. SpringBoard also makes one 1125x2436 at 43.9 s.
+- 0223 revised: SWEET_ZC_SLOT_LEN 0xB00000 (slot 0x9cb00000..0x9d600000, inside the 0x1700000 carveout). kernel102 built (53 s).
+
 ### 2026-10-30 00:10 xnu 0223 zero-copy E3a/E3b built (kernel101 = 98 + 0222 + 0223; untested)
 - E3a (boot-arg `sweetfb_zerocopy=1`): backboardd's first 1125x2436 BGRA surface (allocSize ≤ 0xA90000) is backed by the carveout slot PA 0x9cb00000 (withPhysicalAddress, write-combined, bzero_phys); logs "sweet zc: create ..." for every create with width ≥ 1000 (cap 20) and "sweet zc: slot1 surface id ...".
 - E3b: `kern.sweet_zc_scan` 1 = VIG0 scans the slot with the full 1125x2436 -> 1080x2340 downscale (steps 0x215555/0x215015), 0 = ABL values. EPERM without the boot-arg, EBUSY without a slot surface. Registered late (~10 s), skipped with sweetmdpdump=0.

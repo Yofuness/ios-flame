@@ -1,4 +1,4 @@
-From fc9881d4f5a47054812c85630aaee96a7ee868cd Mon Sep 17 00:00:00 2001
+From 711e21e85e8c93801ceb801a0a6f230c7626e75c Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Thu, 29 Oct 2026 14:36:34 -0400
 Subject: [PATCH] sunfish: zero-copy E3a/E3b: carveout slot surface +
@@ -137,7 +137,7 @@ index 935e05c..f559d09 100644
  }
  
 diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
-index e563316..8e2d6d5 100644
+index e563316..b6f8645 100644
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
 @@ -39,6 +39,7 @@
@@ -159,7 +159,7 @@ index e563316..8e2d6d5 100644
 + * can scan it (kern.sweet_zc_scan, sweet_mdpdump.c). Any failure: normal path.
 + */
 +#define SWEET_ZC_SLOT_PA                (0x9c000000ull + 0xB00000ull)
-+#define SWEET_ZC_SLOT_LEN               0xA90000u
++#define SWEET_ZC_SLOT_LEN               0xB00000u	/* zc1: backboardd surfaces are bpr 4608, 0xab8000 */
 +#define SWEET_ZC_FORMAT_BGRA            0x42475241
 +extern "C" void bzero_phys(addr64_t src64, vm_size_t bytes);
 +static int           sweet_zc_on = -1;          /* boot-arg, parsed on first create */
