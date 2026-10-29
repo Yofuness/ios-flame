@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 16:00 APR WORKS in adspboot (apr3; kernel100; adspboot e9610fd)
+- e9610fd `--apr`: apr_audio_svc opened in adspboot's own glink loop (ADSP opened it, we answer OPEN + OPEN_ACK on lcid 5), 8 x 1024 RX intents; core queries. `adspboot boot --rpc --root --sensors --apr --unsafe --watch 40`:
+  `apr: apr_audio_svc up (lcid 5, rcid 5)`; GET_STATE 0x1326c: no reply in 3 s; GET_FWK_VERSION 0x1292c -> `rx svc 3 op 1292d token 2 status 4000102 (len 148)`: 9 services: 0, 3 CORE (api 5), 4 AFE (api 7), 7 ASM (api 2), 8 ADM (api 4), d, 9, a, b.
+- At exit our CLOSE of all channels (new) -> ADSP state 7 `fastrpc_port_s.c:176:Assertion 0 failed`. CLOSE is now off by default (ADSP_CLOSE=1 turns it on). No reset; ssh 17 s; 4438 mV.
+- Next: AFE port start without amps (apr_tone step 2) inside adspboot.
+
 ### 2026-10-29 15:45 aprtest as a second process: ADSP glink assert again (apr2; kernel98; aprtest e89860d)
 - e89860d: aprtest on its own lcid 9, ignores stale OPEN_ACK, 8 x 1024 RX intents, CLOSE at exit. apr2: plain `adspboot boot` (glink up, 6 channels), aprtest: OPEN "apr_audio_svc" lcid 9 sent, no OPEN_ACK in 3 s; ADSP state 7 `glink_channel_migration.c:667:Assertion status == GLINK_STATUS_SUCCESS failed`. No reset.
 - Conclusion: a second process on adspboot's glink edge does not work; APR moves into adspboot (`--apr`, same edge loop as FastRPC).

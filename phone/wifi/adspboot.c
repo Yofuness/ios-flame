@@ -19,7 +19,7 @@
  *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
- *                     CLOSEd at exit while the ADSP is up (ADSP_NO_CLOSE=1 = off)
+ *                     CLOSEd at exit only with ADSP_CLOSE=1 (apr3: closing the FastRPC channel crashed the ADSP: fastrpc_port_s.c:176)
  *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
  *                 [--dump]  + the bank's registers and the table walk for 0x80000000 and 0x380000000
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
@@ -1099,12 +1099,12 @@ static int glink_watch(int secs)
 
 /*
  * ap3: CLOSE every channel we opened when adspboot exits (atexit), so a later run on the same ADSP boot starts
- * clean; only while the ADSP is up and not crashed. ADSP_NO_CLOSE=1 = the old exit without CLOSE.
+ * clean; only while the ADSP is up and not crashed. Off by default since apr3 (fastrpc_port_s.c:176 assert); ADSP_CLOSE=1 turns it on.
  */
 static void close_all(void)
 {
 	uint32_t v;
-	if (!edge_up || !nch || getenv("ADSP_NO_CLOSE") || smp2p_in(&v) || (v & 1) || !(v & 2))
+	if (!edge_up || !nch || !getenv("ADSP_CLOSE") || smp2p_in(&v) || (v & 1) || !(v & 2))
 		return;
 	for (int i = 0; i < nch; i++)
 		glink_send(GLINK_CMD_CLOSE, ch[i].lcid, 0, NULL, 0);
