@@ -41,6 +41,19 @@
 - **Before booting:** start the live-log listener if it isn't running (`pgrep -af sunfish-livelog`). It also
   provides the USB network link.
 
+# How to work (the user's rules, 2026-10-29; keep these across compactions)
+- **Goal:** keep iterating until everything on iOS works (except iCloud). Getting as many systems working as
+  possible comes first.
+- **Broken list:** `docs/plan.md`'s Broken list. Anything newly found broken goes on it; then carry on.
+- **While waiting** (tests, builds, boots): work on other Broken items instead of idling.
+- **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
+  choice made) to the "Questions for you" list in `docs/plan.md`, so they can answer later. Don't wait.
+- **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list and move on.
+- **Dev-speed optimizations:** anything slowing development down becomes priority. Give it at most about an hour;
+  past that it's likely not worth it: note it and move on.
+- **Other optimization:** make systems usable, not fast. Once something works and could be faster, add it to the
+  "Optimize (last)" list and move on.
+
 # Delegation (save tokens: the main session orchestrates, subagents do the bulk)
 - **Main session (Opus):**
   - picks the next step from `docs/plan.md`
