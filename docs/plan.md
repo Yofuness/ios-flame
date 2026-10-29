@@ -15,7 +15,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 2. ▶ **Audio self-check without the user**: does the CS35L41 report what it plays (VMON/IMON or ASP TX feedback), so the
    speaker can be verified from SSH? Read-only research first. (audio.md)
 3. **B35 no Location Services row, B33 home swipe, B34 openapp ignored** (quick checks with fake taps).
-4. **O7 fps: pin backboardd's render thread to the A76 cores** (cheap try, ~1 h). (smoothness.md)
+4. **B31 oslog SIGSEGV** (dev speed: the log reader crashes on some captures; ~1 h).
 
 ## Questions for you (Claude took the recommended path meanwhile)
 - (none open)

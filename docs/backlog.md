@@ -35,7 +35,7 @@ history in the feature Logs.
 ## Optimize (last)
 - O2 zero-copy scanout: works by hand (kernel103 `sctl kern.sweet_zc_scan=2`), no fps gain (zc5), auto mode (kernel104, sweetfb_zerocopy=2) garbled once in two boots; parked 2026-10-30 (smoothness.md).
 - O3 Reduce Transparency speed (with B10).
-- O7 ~21 fps limit = backboardd's GPU 25-30 ms per frame (blur passes) + CPU/GPU never overlap (research/notes/fps-limit.md): try A76 pinning, no-blur bench, then 2 frames in flight (QuartzCore RE).
+- O7 ~21 fps limit = backboardd's GPU 25-30 ms per frame (blur passes) + CPU/GPU never overlap (research/notes/fps-limit.md): A76 bias (0147) and GPU clocks (565/650 MHz) were tried in Oct 23-24 with no gain; left: no-blur bench, 2 frames in flight (QuartzCore RE).
 - O4 [DONE 2026-10-29] lskdd respawn cost: dropped.
 - O5 display-off CPU fade when sweetpanelsleep is off.
 - O6 failed GPU hang recovery takes 3.9-12.8 s: fail faster.
