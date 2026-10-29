@@ -12,6 +12,9 @@
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
  *                     summary at the end. Implies --smmu; the FastRPC streams then go through a translating bank
  *                     (32-bit IOVA 0x80000000 -> a pm_alloc buffer). `adspboot smmu --rpc --dry` shows that plan.
+ *   adspboot boot --rpc --root --unsafe  attach to the root PD only (pd 0, one 4 KB page), print the reply and
+ *                     the SMMU fault state (audio step 5)
+ *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
  *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
@@ -50,11 +53,15 @@
  * (0x1b20/0xf) reads back 0 (the write is dropped), single SIDs stick. */
 static const uint16_t adsp_sids[] = { 0x1b21, 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x1b27, 0x1b28, 0x1b2f };
 
-/* rpc1/rpc2: the sensor PD takes 32-bit FastRPC addresses and XNU has no RAM below 4 GB, so with --rpc the six
+/* rpc1/rpc2: the sensor PD takes 32-bit FastRPC addresses and XNU has no RAM below 4 GB, so with --rpc the
  * FastRPC streams go through a translating bank: RPC_IOVA (32-bit, the start of downstream's compute-cb pool)
  * -> a pm_alloc buffer. 0x1b21 and 0x1b2f stay identity. */
 #define RPC_IOVA	0x80000000ull
-static const uint16_t rpc_sids[] = { 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x1b27, 0x1b28 };
+/* audio step 4 (research/notes/audio-sm7150-reference.md): the DSP emits SID 0x1b20 | addr bits 32-35 and uses the
+ * low 32 bits as the IOVA, so the address it gets carries stream 3 (0x1b23 -> CB7). */
+#define RPC_DSP_ADDR	(RPC_IOVA | 3ull << 32)
+/* audio step 2: only 0x1b23 translates; 0x1b24-0x1b28 stay identity as without --rpc */
+static const uint16_t rpc_sids[] = { 0x1b23 };
 static int rpc_on;
 
 static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
@@ -63,15 +70,15 @@ static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
 		return smmu_identity("ADSP", sid, mask);
 	int bad = 0;
 	for (unsigned i = 0; i < sizeof(adsp_sids) / sizeof(adsp_sids[0]); i++)
-		if (!rpc_on || adsp_sids[i] == 0x1b21 || adsp_sids[i] == 0x1b2f)
+		if (!rpc_on || adsp_sids[i] != rpc_sids[0])
 			bad |= smmu_identity("ADSP", adsp_sids[i], 0);
 	if (rpc_on && !bad) {
 		uint64_t pa = smmu_dry ? 0x100000000ull : pm_alloc(FASTRPC_DMA_SIZE, 0x1000);
 		if (!pa)
 			return 1;
-		bad |= smmu_translate("ADSP rpc", rpc_sids, 6, RPC_IOVA, pa, FASTRPC_DMA_SIZE);
+		bad |= smmu_translate("ADSP rpc", rpc_sids, 1, RPC_IOVA, pa, FASTRPC_DMA_SIZE);
 		if (!bad && !smmu_dry)
-			fastrpc_buffer(pa, RPC_IOVA);
+			fastrpc_buffer(pa, RPC_DSP_ADDR);
 	}
 	return bad;
 }
@@ -805,7 +812,7 @@ int main(int argc, char **argv)
 	printf("adsp: smem ok\n");
 	int watch = 20, early = 1, smmu = 0, unsafe = 0, i;
 	uint32_t sid = 0, mask = 0;
-	int one = 0;
+	int one = 0, sstatus = 0;
 	const char *cmd = "boot";
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
@@ -818,6 +825,10 @@ int main(int argc, char **argv)
 			unsafe = 1;
 		else if (!strcmp(argv[i], "--rpc"))
 			rpc_on = smmu = 1;
+		else if (!strcmp(argv[i], "--status"))
+			sstatus = 1;
+		else if (!strcmp(argv[i], "--root"))
+			fastrpc_root(1);
 		else if (!strcmp(argv[i], "--dry"))
 			smmu_dry = 1;
 		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
@@ -841,10 +852,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "adspboot: --rpc resets the phone (rpc2, rpc3, docs/features/audio.md); add --unsafe\n");
 		return 2;
 	}
+	if (!strcmp(cmd, "smmu") && sstatus) {
+		smmu_status("ADSP rpc", 0x1b23);
+		return 0;
+	}
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--rpc] [--dry] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--rpc [--root]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

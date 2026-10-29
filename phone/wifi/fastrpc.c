@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include "pmem.h"
 #include "fastrpc.h"
+#include "smmu.h"
 
 #define SC_MAKE(m, in, out)	((((uint32_t)(m) & 0x1f) << 24) | (((in) & 0xff) << 16) | (((out) & 0xff) << 8))
 #define SC_METHOD(sc)		(((sc) >> 24) & 0x1f)
@@ -72,6 +73,7 @@ static uint64_t cur_ctx;
 static uint32_t cur_sc, out_off[MAXARGS];
 static struct rarg cur[MAXARGS];
 static uint32_t listener_h;
+static int root_mode;	/* audio step 5: attach to the root PD (pd 0) only, report, stop */
 
 /* next2 state */
 static uint32_t n2_in[4], n2_out[4];
@@ -139,12 +141,13 @@ static int invoke(uint32_t handle, uint32_t sc, struct rarg *a)
 	if (pm_wr(dma_pa, meta, align(off, 4)))
 		return -1;
 	seq++;
-	cur_ctx = ((uint64_t)seq << 12) | (1u << 4);	/* downstream: (ctx ptr & ~0xfff) | (table index << 4) */
+	cur_ctx = root_mode ? (uint64_t)(seq % 255 + 1) << 4 :	/* step 5: n << 4 | pd, as the SM7150 reference */
+		  ((uint64_t)seq << 12) | (1u << 4);	/* downstream: (ctx ptr & ~0xfff) | (table index << 4) */
 	cur_sc = sc;
 	if (n)
 		memcpy(cur, a, n * sizeof(*a));
 	/* guess: downstream sends pid 0 for kernel-originated invokes (the attach); we use tgid for all user ones */
-	struct smq_msg m = { state == 1 ? 0 : tgid, tgid, cur_ctx | PD_SENSORS, handle, sc, dsp_base,
+	struct smq_msg m = { state == 1 ? 0 : tgid, tgid, cur_ctx | (root_mode ? 0 : PD_SENSORS), handle, sc, dsp_base,
 			     align(off, 4096) };
 	printf("rpc: -> h %u m %u in %u out %u (sc %08x) ctx %llx, %u bytes\n", handle, SC_METHOD(sc), SC_IN(sc),
 	       SC_OUT(sc), sc, (unsigned long long)m.ctx, off);
@@ -707,6 +710,12 @@ void fastrpc_rx(const void *p, size_t n)
 	printf("rpc: <- rsp ctx %llx ret %d (%zu bytes)\n", (unsigned long long)ctx, ret, n);
 	if (!ret)
 		fetch_outs();
+	if (root_mode && state == 1) {	/* step 5: report the reply and the SMMU state, nothing more */
+		printf("rpc: root PD attach -> %d\n", ret);
+		smmu_status("ADSP rpc", 0x1b23);
+		state = 6;
+		return;
+	}
 	switch (state) {
 	case 1: {	/* attach done: remotectl_open("adsp_default_listener") */
 		if (ret) {
@@ -773,6 +782,11 @@ void fastrpc_rx(const void *p, size_t n)
 	}
 }
 
+void fastrpc_root(int on)
+{
+	root_mode = on;
+}
+
 void fastrpc_buffer(uint64_t pa, uint64_t dsp)
 {
 	dma_pa = pa;
@@ -789,8 +803,11 @@ int fastrpc_start(fastrpc_send_fn send)
 	if (!dsp_base)
 		dsp_base = dma_pa;
 	tgid = (uint32_t)getpid();
-	printf("rpc: DMA buffer %llx+%x (DSP sees %llx), tgid %u, attaching to the sensors PD (pd %u)\n",
-	       (unsigned long long)dma_pa, DMA_SIZE, (unsigned long long)dsp_base, tgid, PD_SENSORS);
+	printf("rpc: DMA buffer %llx+%x (DSP sees %llx), tgid %u, attaching to the %s PD (pd %u)\n",
+	       (unsigned long long)dma_pa, DMA_SIZE, (unsigned long long)dsp_base, tgid, root_mode ? "root" : "sensors",
+	       root_mode ? 0 : PD_SENSORS);
+	if (root_mode)
+		smmu_status("ADSP rpc", 0x1b23);	/* step 4/5: fault state before the DSP gets the address */
 	state = 1;
 	static uint32_t t;
 	t = tgid;

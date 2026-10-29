@@ -157,8 +157,18 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 		for (unsigned k = 0; k < n; k++)
 			printf(" %#x->SMR%d", sids[k], slot[k]);
 		printf(" (dry run: nothing written)\n");
+		/* audio step 2: the writes and table entries the real run makes (T = the 3 table pages from pm_alloc) */
+		printf("smmu: %s dry: SCTLR=0 FSR=ffffffff TTBR0=T|ASID %d<<48 TTBR1=0 TCR=%08x TCR2=%08x MAIR0=%08x"
+		       " CBA2R=%08x CBAR=%08x TLBIASID=%d TLBIALL TLBSYNC SCTLR=%08x, then S2CR=%d + SMR per SID\n", name, cb,
+		       T_TCR, T_TCR2, T_MAIR0, CB_CBA2R, CB_CBAR, cb, T_SCTLR, cb);
+		printf("smmu: %s dry: L1[%llu]=T+0x1000|3 L2[%llu]=T+0x2000|3 L3[%llu..%llu]=%llx..%llx (AF %s)\n", name,
+		       (unsigned long long)((iova >> 30) & 3), (unsigned long long)((iova >> 21) & 0x1ff),
+		       (unsigned long long)((iova >> 12) & 0x1ff), (unsigned long long)(((iova + len - 1) >> 12) & 0x1ff),
+		       (unsigned long long)(pa | T_PAGE), (unsigned long long)((pa + len - 0x1000) | T_PAGE),
+		       (T_PAGE >> 10) & 1 ? "set" : "MISSING");
 		return 0;
 	}
+	uint64_t asid = (uint64_t)cb << 48;	/* audio step 2: ASID = bank number, as the SM7150 reference */
 	uint64_t tbl = pm_alloc(3 * 0x1000, 0x1000);
 	if (!tbl) {
 		printf("smmu: %s: no memory for the tables\n", name);
@@ -176,7 +186,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	uint64_t gr1 = s + psize, cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
 	wr32(cbp, 0);
 	wr32(cbp + 0x58, 0xffffffff);			/* FSR: clear */
-	wr64(cbp + 0x20, l1);				/* TTBR0, ASID 0 */
+	wr64(cbp + 0x20, l1 | asid);			/* TTBR0 */
 	wr64(cbp + 0x28, 0);				/* TTBR1 */
 	wr32(cbp + 0x30, T_TCR);
 	wr32(cbp + 0x10, T_TCR2);
@@ -184,6 +194,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	wr32(cbp + 0x3c, 0);
 	wr32(gr1 + 0x800 + 4 * cb, CB_CBA2R);
 	wr32(gr1 + 4 * cb, CB_CBAR);
+	wr32(cbp + 0x610, (uint32_t)cb);		/* TLBIASID (audio step 2) */
 	wr32(cbp + 0x618, 0);				/* TLBIALL */
 	wr32(cbp + 0x7f0, 0);				/* TLBSYNC */
 	for (int i = 0; i < 1000 && (rd32(cbp + 0x7f4) & 1); i++)
@@ -196,7 +207,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	pm_rd(l3 + 8 * (((iova + len - 1) >> 12) & 0x1ff), &r3b, 8);
 	uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
 	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | T_PAGE) && r3b == ((pa + len - 0x1000) | T_PAGE) &&
-		 ttbr == l1 && rd32(cbp + 0x30) == T_TCR && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
+		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == T_TCR && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
 		 rd32(gr1 + 4 * cb) == CB_CBAR;
 	printf("smmu: %s: CB%d tables %llx: TTBR0 %llx TCR %08x TCR2 %08x SCTLR %08x CBAR %08x; L3 first %llx last %llx"
 	       " -> %s\n", name, cb, (unsigned long long)tbl, (unsigned long long)ttbr, rd32(cbp + 0x30),
@@ -234,4 +245,13 @@ void smmu_faults(const char *name, uint32_t sid)
 		return;
 	}
 	printf("smmu: %s %#x: no SMR\n", name, sid);
+}
+
+/* audio step 3: read-only fault state: the global sGFSR/sGFSYNR0-1/sGFAR and the bank SID goes through. */
+void smmu_status(const char *name, uint32_t sid)
+{
+	uint64_t s = SMMU_PA;
+	printf("smmu: sGFSR %08x sGFSYNR0 %08x sGFSYNR1 %08x sGFAR %08x%08x sCR0 %08x\n", rd32(s + 0x48), rd32(s + 0x50),
+	       rd32(s + 0x54), rd32(s + 0x44), rd32(s + 0x40), rd32(s));
+	smmu_faults(name, sid);
 }

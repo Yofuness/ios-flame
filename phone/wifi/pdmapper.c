@@ -19,6 +19,12 @@ static const struct { const char *service, *domain; uint32_t instance; } db[] = 
 	{ "kernel/elf_loader", "msm/modem/wlan_pd", 180 },
 	{ "tms/servreg", "msm/modem/wlan_pd", 180 },
 	{ "wlan/fw", "msm/modem/wlan_pd", 180 },
+	/* audio step 1 (research/notes/audio-sm7150-reference.md): the ADSP's PDs, as the SM7150 reference serves them */
+	{ "tms/servreg", "msm/adsp/root_pd", 74 },
+	{ "tms/pdr_enabled", "msm/adsp/root_pd", 74 },
+	{ "tms/servreg", "msm/adsp/audio_pd", 74 },
+	{ "avs/audio", "msm/adsp/audio_pd", 74 },
+	{ "tms/servreg", "msm/adsp/sensor_pd", 74 },
 };
 
 int pdmapper_init(void)

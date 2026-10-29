@@ -14,6 +14,8 @@ typedef void (*fastrpc_send_fn)(const void *pkt, size_t n);
 
 /* Use this buffer (PA for the CPU, DSP its address on the DSP side) instead of a pm_alloc one at PA. */
 void fastrpc_buffer(uint64_t pa, uint64_t dsp);
+/* 1: attach to the root PD (pd 0, client id = tid) instead, print the reply + SMMU faults, stop. */
+void fastrpc_root(int on);
 /* Allocate the DMA buffer and send the sensors-PD attach; 0 = started. */
 int fastrpc_start(fastrpc_send_fn send);
 /* One received message (smq_invoke_rsp). */
