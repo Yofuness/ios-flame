@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 13:10 the 10 s fatal = SarClient in the static sensors image (firmware strings)
+- ../restore/fw/vendor/adsp/adsp.b13 @1156273-1156520: "CHRE_util", "Failed to initialize ASH SEE helper", "chre_utils fatal", "sar.cc", then sns_qmi_client_alt.c "qmi_client_init_instance error %i"; adsp.b18 @10212: "9SarClient", "N4chre26SeeHelperCallbackInterfaceE", "Failed to find sensor '%s'". No SAR/CHRE config key or nanoapp file.
+- au12: the ADSP sent no NEW_LOOKUP (HELLO, 12 NEW_SERVER, 4 DATA). Our adspboot announces only svc 64 to it; the modem's services (wland's edge) are never announced to the ADSP. Hypothesis: SarClient waits ~10 s for a QMI service (likely the modem's SAR service) and asserts. Next: stub-service option in adspboot, then real modem<->ADSP forwarding if confirmed.
+
 ### 2026-10-29 12:55 sensors registry builds; DSP still dies at 10.1 s (au12; adspboot 1530cd3)
 - 1530cd3: persist paths with `..` were refused (EACCES); now normalised; remove/rename inside persist. tools/sunfish-soc0-files.sh: soc_id 365 (DT qcom,msm-id), hw_platform OEM, subtype id 14, version 2621440, revision 1.0 (guesses except soc_id).
 - au12 (ssh 16 s, 4455 mV): both PDs attach/register/init2 0; sensors PD 905 calls (fwrite 206, frename 119, fopen 161 ...); 87 registry files in /var/local/sensors-persist/registry/registry; no file errors left except lowi_lp.conf; no PD FAILURE line, no SMMU fault. ADSP CRASH at 10124 ms: `sensor_process ... sar.cc:27 chre_utils fatal` (same as au10, where the sensors PD was never attached). iOS unaffected, no reset.
