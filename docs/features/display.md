@@ -23,6 +23,11 @@
 ### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
 - Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
 
+### 2026-10-29 20:30 one-step rotate `R N` (rot4-rot6; SweetMetal2 2d1dc3c, bd6030b)
+- 2d1dc3c `R N` = backboardd D N 0 + SpringBoard E N + front-scene update, 1 s re-apply to new front apps. rot4: Calculator rotated; Settings later came up landscape by itself; Safari never reached the screen in the window; `R 1` only reached the front scene (Settings), Calculator stayed landscape.
+- bd6030b: R updates all app scenes (`externalApplicationSceneHandles`), re-apply incl. R 1, front-change logging. rot5/rot6: "R 3: applied to calculator-default" but the screen stayed portrait even after 20 s (regression vs rot3/rot4); Safari took > 15 s to come to the front; R 1 restored portrait. UIWDT 1 line in rot6's log (not checked whether a kill or the armed line).
+- Next: front scenes via the foreground handles (as S/rot4), background ones from the all-handles set; log object identities.
+
 ### 2026-10-29 19:55 ROTATION WORKS: the app scene follows a direct settings update (rot3, kernel98; SweetMetal2 4963564)
 - iOS 16.7 SpringBoard has no SBApplication -> scene-handle selector; the route: `+[SBSceneManagerCoordinator mainDisplaySceneManager]` -> `-externalForegroundApplicationSceneHandles` -> `-sceneIfExists` (research/notes/rotation-ios16.md; class-dumps in research/re/sb/).
 - P (Calculator in front): handle SBDeviceApplicationSceneHandle currentInterfaceOrientation 1, supported 26; scene sceneID:com.apple.calculator-default, UIApplicationSceneSettings orientation 1, frame 375x812, deviceOrientation 0.
