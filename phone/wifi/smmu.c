@@ -240,8 +240,11 @@ void smmu_faults(const char *name, uint32_t sid)
 			continue;
 		uint32_t cb = rd32(s + 0xc00 + 4 * i) & 0xff;
 		uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
-		printf("smmu: %s %#x CB%u: FSR %08x FAR %08x%08x FSYNR0 %08x\n", name, sid, cb, rd32(cbp + 0x58),
-		       rd32(cbp + 0x64), rd32(cbp + 0x60), rd32(cbp + 0x68));
+		/* FSR bits 10:9 are FORMAT (0x400 = AArch64 record), not a fault: only 0xc00001fe counts. */
+		uint32_t fsr = rd32(cbp + 0x58);
+		printf("smmu: %s %#x CB%u: FSR %08x (%s) FORMAT %u FAR %08x%08x FSYNR0 %08x\n", name, sid, cb, fsr,
+		       (fsr & 0xc00001feu) ? "FAULT" : "no fault", (fsr >> 9) & 3, rd32(cbp + 0x64), rd32(cbp + 0x60),
+		       rd32(cbp + 0x68));
 		return;
 	}
 	printf("smmu: %s %#x: no SMR\n", name, sid);

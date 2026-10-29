@@ -20,7 +20,7 @@
  *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
  * Facts (recon/live.dts): qcom,lpass@62400000 pas-id 1, smem-id 423 (crash reason), proxy rails lcx.lvl /
- * lmx.lvl (>= 385); pil_adsp_mem 0x96b00000+0x2200000; smp2p-adsp out 443 / in 429, IPC bit 26; glink_adsp
+ * lmx.lvl (>= 385); pil_adsp_mem 0x96b00000+0x2200000; smp2p-adsp in 443 / out 429, IPC bit 26; glink_adsp
  * remote-pid 2, IPC bit 24. adsp.mdt is relocatable (linked at 0x93c00000): segments go to
  * region + (paddr - lowest paddr), as Linux qcom_mdt_load.
  * Never touches the modem: SMEM host 2 only, APCS bits 24/26, AOSS bit 0. Exit 0 = edge up.
@@ -43,8 +43,9 @@
 #define FW_DIR		"/var/local/fw/adsp"
 #define SMEM_HOST_ADSP	2
 #define CRASH_ITEM	423
-#define SMP2P_OUT	443
-#define SMP2P_IN	429
+/* qcom,smem = <443 429> is <inbound outbound> (Linux smem_items[0] = inbound): the ADSP writes 443. */
+#define SMP2P_OUT	429
+#define SMP2P_IN	443
 #define APCS_IPC	0x17c0000cull
 #define IPC_AOSS	0
 #define IPC_ADSP_GLINK	24
@@ -266,14 +267,21 @@ static int smp2p_in(uint32_t *v)
 	uint32_t sz;
 	if (smem_get(SMEM_HOST_ADSP, SMP2P_IN, &pa, &sz))
 		return -1;
+	static int logged;
 	uint32_t n = rd32(pa + 12) >> 16;
+	if (!logged)
+		printf("adsp: smp2p in item %u at %llx: magic %08x pids %08x entries %u\n", SMP2P_IN,
+		       (unsigned long long)pa, rd32(pa), rd32(pa + 8), n);
 	for (uint32_t i = 0; i < n && i < 16; i++) {
 		uint64_t e = pa + 20 + 20ull * i;
 		char nm[17];
 		for (int k = 0; k < 16; k++)
 			nm[k] = (char)(rd32(e + (k & ~3)) >> (8 * (k & 3)));
 		nm[16] = 0;
+		if (!logged)
+			printf("adsp: smp2p in entry %u \"%s\" = %x\n", i, nm, rd32(e + 16));
 		if (!strcmp(nm, "slave-kernel")) {
+			logged = 1;
 			*v = rd32(e + 16);
 			return 0;
 		}
