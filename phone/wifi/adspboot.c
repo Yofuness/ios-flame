@@ -7,7 +7,8 @@
  *   adspboot [boot]   votes, load adsp.mdt + .bNN, PAS init / mem setup / auth-and-reset, SMP2P ready, glink
  *   adspboot status   read-only: SMP2P state, glink items, crash reason
  *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
- *                     and --no-pdmap (no service locator for the ADSP)
+ *                     and --no-pdmap (no service locator for the ADSP) and --no-sleepstate (no "sleepstate"
+ *                     SMP2P out entry, which the sensors image's remote_proc_state needs)
  *   adspboot boot --rpc [--watch 120]  also serve FastRPC (fastrpc.c): attach to the sensors PD on
  *                     fastrpcglink-apps-dsp, run adsp_default_listener and answer its apps_std file calls
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
@@ -241,6 +242,12 @@ static void wr_name(uint64_t pa, const char *name)
 	}
 }
 
+/* Outbound item layout ("$SMP" v1): +0 magic, +4 version | features << 8, +8 local pid | remote pid << 16,
+ * +12 total entries | valid entries << 16, +16 flags, then 20-byte entries from +20 (16-byte name, u32 value).
+ * Entry 0 "master-kernel"; entry 1 "sleepstate", bit 0 = AP awake (Android's smp2p-sleepstate): the ADSP's
+ * SEE remote_proc_state driver registers on it and the static sensors image dies at 10 s without it. */
+static int sleepstate = 1;	/* --no-sleepstate leaves the entry out (A/B) */
+
 static int smp2p_create(void)
 {
 	uint64_t pa;
@@ -250,16 +257,32 @@ static int smp2p_create(void)
 	}
 	if (rd32(pa) != 0x504d5324) {
 		wr32(pa + 8, 0 | (2u << 16));		/* local pid 0, remote pid 2 */
-		wr32(pa + 12, 16 | (1u << 16));
+		wr32(pa + 12, 16 | ((sleepstate ? 2u : 1u) << 16));
 		wr32(pa + 16, 0);
 		wr_name(pa + 20, "master-kernel");
 		wr32(pa + 36, 0);
+		if (sleepstate) {
+			wr_name(pa + 40, "sleepstate");
+			wr32(pa + 56, 1);		/* bit 0: awake */
+		}
 		wr32(pa + 0, 0x504d5324);		/* "$SMP" */
 		__asm__ volatile("dsb sy" ::: "memory");
 		wr32(pa + 4, 1 | (1u << 8));
+	} else if (sleepstate && (rd32(pa + 12) >> 16) == 1) {	/* item from an older run: append */
+		wr_name(pa + 40, "sleepstate");
+		wr32(pa + 56, 1);
+		__asm__ volatile("dsb sy" ::: "memory");
+		wr32(pa + 12, 16 | (2u << 16));
 	}
+	__asm__ volatile("dsb sy" ::: "memory");
 	kick(IPC_ADSP_SMP2P);
+	uint32_t n = rd32(pa + 12) >> 16;
 	printf("adsp: smp2p out item %u at %llx ok\n", SMP2P_OUT, (unsigned long long)pa);
+	if (n >= 2)
+		printf("adsp: smp2p out item %u: entries %u: \"master-kernel\" = %x, \"sleepstate\" = %x\n",
+		       SMP2P_OUT, n, rd32(pa + 36), rd32(pa + 56));
+	else
+		printf("adsp: smp2p out item %u: entries %u: \"master-kernel\" = %x\n", SMP2P_OUT, n, rd32(pa + 36));
 	return 0;
 }
 
@@ -937,6 +960,8 @@ int main(int argc, char **argv)
 			watch = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--no-early"))
 			early = 0;
+		else if (!strcmp(argv[i], "--no-sleepstate"))
+			sleepstate = 0;
 		else if (!strcmp(argv[i], "--no-pdmap"))
 			pdmap = 0;
 		else if (!strcmp(argv[i], "--smmu"))
