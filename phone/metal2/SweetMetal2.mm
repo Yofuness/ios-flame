@@ -983,11 +983,14 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 				return;
 			@try {
 				if (bbd) {
-					sm2_orient_d(rn, 0);
+					/* rot9: S N alone rotates and stays; with backboardd's D the app scene was reset to
+					 * portrait (rot5-rot8). D (touch mapping) only on request: "R N t". */
+					if (strchr(buf + 2, 't'))
+						sm2_orient_d(rn, 0);
 				} else {
 					/* rot7: with E first the app scene was rotated back (re-apply needed) and never redrew in
 					 * landscape; "R N s" skips E (scenes only, as the working S N in rot3) */
-					bool skip_e = strchr(buf + 2, 's') != NULL;
+					bool skip_e = !strchr(buf + 2, 'e');	/* rot9: E only with "R N e" */
 					sm2_log("orient: R %ld: %sall app scenes", rn, skip_e ? "" : "E + ");
 					sm2_r_orient = rn;
 					if (!skip_e)
