@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 18:10 CS35L41: config verified, but no PUP_DONE (amp-check2/3, sp1; kernel98 sweetse9=2 sweetampreset=1; adspboot d161564)
+- d161564: cs35l41.c per research/notes/cs35l41-plan.md (B2 errata + test key, pup/pdn patches 0x2084, 100 ms timeouts, no SP_RATE_CTRL, gain 0.5 dB, boost bypass only, left amp 0x40 only, volume clamp <= -20 dB) and `adspboot --amp-check` / `--amp` (GLOBAL_EN only after the first WRITE_DONE, <= 3 s, IRQ poll every 50 ms, power-down before teardown and on every exit).
+- amp-check without the boot-args: SE9 clocks off -> refused. With sweetse9=2 sweetampreset=1 run too early: no ACK (the kernel releases the resets at ~31 s: `SWEET AMPRESET: after 0xc700 ... 0xca00`). After 31 s: devid 0x35a40 revid 0xb2, PWR_CTRL2 0x3321, IRQ1 status1 0 / status3 0x20000000 / status4 0x3; 19 registers written and verified; GLOBAL_EN never set; restored.
+- sp1 (-30 dB, tone -20 dBFS, PCM 388 periods ok, AFE ok): GLOBAL_EN=1 -> `no PUP_DONE in 100 ms`, IRQ1_STATUS1 0x00400000 (bit 22) throughout, no error bits; powered down. Laptop mic: no tone (expected without PUP). No reset; 4456 mV.
+- Suspect: no bit clock at the amp (LPI pin mux / LPASS hw vote missing, or a different MI2S/TDM port). Investigating.
+
 ### 2026-10-29 17:40 PCM plays the full 3 s through ASM/ADM/AFE (pc3; kernel98; adspboot bba8a7c)
 - bba8a7c: remote intents kept with an in-use flag; the ADSP's RX_DONE_W_REUSE frees them again (RX_DONE deletes); grants logged; 1 s heartbeat during PCM (`--intent-once` = old behaviour).
 - pc3: setup ok (handle b0a52a28, copp 0); `pcm: done: ok; 308 periods written, 308 done (0 errors) in 3055 ms, 0 underflows`; teardown (pause, close, ADM close, unmap) and AFE stop/clock off all status 0. apr_audio_svc: 116 remote intents, none stuck; rx 325 / rx_done_reuse 325. ADSP state 6 after; no SMMU fault; no reset; ssh 17 s; 4456 mV. Amps off: no sound expected.
