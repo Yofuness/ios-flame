@@ -1,0 +1,19 @@
+diff --git a/crates/metal2vulkan-runtime/src/linear_plan.rs b/crates/metal2vulkan-runtime/src/linear_plan.rs
+--- a/crates/metal2vulkan-runtime/src/linear_plan.rs
++++ b/crates/metal2vulkan-runtime/src/linear_plan.rs
+@@ -533,6 +533,15 @@
+     if gpu.end() > length {
+         return Err(BufferRefusal::TexelsPastLength);
+     }
++    // 0106 (B29, diagnostic): a plane whose GPU pitch differs from the CPU's (rounded to 16, or a
++    // narrow one under 16 bytes a row); row_bytes is width x bytes a texel. Off: M2V_B29_LOG=0.
++    if gpu.row_pitch != cpu.row_pitch && std::env::var_os("M2V_B29_LOG").is_none_or(|v| v != "0") {
++        eprintln!(
++            "B29 iosurface plane rows {} row_bytes {} offset {} pitch {} -> gpu pitch {} offset {} narrow {}",
++            cpu.rows, cpu.row_bytes, cpu.offset, cpu.row_pitch, gpu.row_pitch, gpu.offset,
++            cpu.rows > 1 && cpu.row_pitch < alignment
++        );
++    }
+     Ok(Placed {
+         gpu,
+         cpu,

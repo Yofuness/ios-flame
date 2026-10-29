@@ -69,6 +69,8 @@ static void noteProblem(NSString *what) {
 }
 extern "C" void sm2_logs(const char *);
 #define NBLOG(...) do{NSString *nbText=[NSString stringWithFormat:__VA_ARGS__];sm2_logs(nbText.UTF8String);noteProblem(nbText);}while(0)
+// 0106 (B29, diagnostic): 1-byte texel textures' row pitch, logged without counting as a problem. Off: M2V_B29_LOG=0.
+#define B29LOG(...) do{const char *nbOff=getenv("M2V_B29_LOG");if(!nbOff||strcmp(nbOff,"0"))sm2_logs([NSString stringWithFormat:__VA_ARGS__].UTF8String);}while(0)
 // The pixel formats textures were asked for (first eight distinct), with how many were refused: native_bridge_metal_formats.
 static uint32_t gFormats[8];static unsigned gFormatCount;static std::atomic<uint64_t> gTextureRefusals;
 static void noteFormat(uint32_t format,bool made) {
@@ -1676,6 +1678,7 @@ static char sweetMemoryOwnerKey;
  }
  uint64_t row=nmb_device_linear_bytes_per_row(gDevice,d.pixelFormat,d.width);
  if(row && row*d.height>length && length%d.height==0)row=length/d.height;
+ if(sweetTexelBytes(d.pixelFormat)==1)B29LOG(@"B29 bytesNoCopy %lux%lu fmt %lu length %lu pitch %llu",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,(unsigned long)length,(unsigned long long)row);
  if(!row || row*d.height>length){NBLOG(@"native-metal: newTextureWithBytesNoCopy: %lux%lu fmt %lu does not fit %lu bytes",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,(unsigned long)length);return nil;}
  id<MTLBuffer> buffer=[(id<MTLDevice>)self newBufferWithBytesNoCopy:bytes length:(length+page-1)&~(page-1) options:MTLResourceStorageModeShared deallocator:deallocator];
  if(!buffer)return nil;
@@ -1727,6 +1730,11 @@ static char sweetMemoryOwnerKey;
  if(!page || (page&(page-1)) || !base || ((uintptr_t)base&(page-1)) || !allocation || allocation>SIZE_MAX-(page-1))return nil;
  const size_t bytes=(allocation+page-1)&~(page-1);
  NBBuffer *buffer=surfaceBuffer(surface,base,bytes);if(!buffer)return nil;
+ const OSType fourcc=IOSurfaceGetPixelFormat(surface);
+ if(sweetTexelBytes(d.pixelFormat)==1 || IOSurfaceGetBytesPerElement(surface)==1)
+  B29LOG(@"B29 iosurface %lux%lu fmt %lu surface %c%c%c%c %zux%zu bpe %zu bpr %zu plane %lu pitch %zu",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,
+   (char)(fourcc>>24),(char)(fourcc>>16),(char)(fourcc>>8),(char)fourcc,IOSurfaceGetWidth(surface),IOSurfaceGetHeight(surface),IOSurfaceGetBytesPerElement(surface),
+   IOSurfaceGetBytesPerRow(surface),(unsigned long)plane,IOSurfaceGetBytesPerRow(surface));
  NBTexture *texture=textureOnBuffer(buffer,d,0,IOSurfaceGetBytesPerRow(surface),true);if(!texture)return nil;
  texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;
 }
