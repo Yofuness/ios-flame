@@ -18,6 +18,7 @@ struct cs_exp {
 struct cs_amp {
 	uint8_t addr;
 	int right;		/* takes ASP RX slot 1 (unused: 0x41 is never written) */
+	int amp_gain;		/* sp3: analog PCM gain steps after the errata (0.5 dB + 1 dB/step), clamped 0..10 */
 	uint32_t gain_saved;	/* AMP_GAIN_CTRL before us, restored by cs_power_down */
 	uint32_t err_bits;	/* IRQ1 error bits seen */
 	int probed, configured, verified, up;

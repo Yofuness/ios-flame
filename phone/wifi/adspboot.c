@@ -1972,6 +1972,8 @@ int main(int argc, char **argv)
 			amp_check = 1;
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
 			amp_db = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--amp-gain") && i + 1 < argc)	/* sp3: analog gain steps 0..10 (cs_config clamps) */
+			amp.amp_gain = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--pcm-sid") && i + 1 < argc) {
 			pcm_sid = (uint32_t)strtoul(argv[++i], NULL, 0);
 			pcm_shift = pcm_sid & 0xf;
@@ -2041,7 +2043,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N]] [--amp-check [--amp-db N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N] [--amp-gain N]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

@@ -28,6 +28,7 @@
 #define DAC_PCM1_SRC	0x00004c00	/* [6:0] 0x08 = ASPRX1 (DSP bypass) */
 #define AMP_DIG_VOL	0x00006000	/* [13:3] signed, 0.125 dB, 0 = 0 dB; bit15 kept (reset value) */
 #define AMP_GAIN_CTRL	0x00006c04	/* PCM gain [9:5]; 0 = 0.5 dB (B2 errata), reset value restored at the end */
+#define AMP_GAIN_MAX	10		/* sp3: 10.5 dB ceiling for --amp-gain */
 #define IRQ1_STATUS1	0x00010010	/* W1C */
 #define IRQ1_STATUS3	0x00010018	/* sp2: bit1 PLL_LOCK */
 #define IRQ1_STATUS4	0x0001001c
@@ -200,6 +201,11 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 	err |= set(a, 0x00004c28, 0);
 	err |= set(a, 0x00004c2c, 0);
 	err |= lock(a);
+	/* sp3: analog PCM gain AMP_GAIN_CTRL[9:5] (Linux cs35l41.h AMP_GAIN_PCM_MASK 0x3e0), 0.5 dB + 1 dB per step,
+	 * hard clamp 0..10 (<= 10.5 dB; stock 19 = 19.5 dB) */
+	int g = a->amp_gain < 0 ? 0 : a->amp_gain > AMP_GAIN_MAX ? AMP_GAIN_MAX : a->amp_gain;
+	printf("cs35l41 %#x: analog gain %d (%d.5 dB)\n", a->addr, g, g);
+	err |= upd(a, AMP_GAIN_CTRL, 0x3e0, (uint32_t)g << 5);
 	/* boost bypass: FET on, VBST = VP; no boost-enable path in this version */
 	err |= upd(a, PWR_CTRL2, 0x30, 1u << 4);
 	/* PLL from BCLK 1.536 MHz (48 kHz x 16 bit x 2), cs35l41.c:841-856 */
