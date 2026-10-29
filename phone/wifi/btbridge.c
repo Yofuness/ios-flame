@@ -6,9 +6,10 @@
  * between it and the polled SE3 UART (as ios-redfin's btd --bridge does). bluetoothd job:
  * BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the line stays at 115200; termios is ignored).
  *
- *   btbridge [-n] [-L] [-W] [-R] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
+ *   btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
  *                                 extended LE translation (bt7, bt_lext.c); -W: no chip watchdog (bt8); -R: no rx
- *                                 sequencer restart after an overrun (bt8, bt_uart.c); DIR: firmware
+ *                                 sequencer restart after an overrun (bt8, bt_uart.c); -F: manual RTS held ready
+ *                                 instead of automatic RX flow control (bt10); -v: per-packet log lines; DIR: firmware
  *                                 (/var/local/fw/bt); -p: the old pty instead of /dev/btbridge (/dev/cu.bluetooth ->
  *                                 pty slave; bluetoothd 20H392 has no tty H4 driver, bt4: kept for comparison)
  * Log: /var/local/btbridge.log (the previous run's: .prev). Off: /var/local/btbridge.off. Runs in the foreground
@@ -46,6 +47,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <util.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include "pmem.h"
 #include "bt_uart.h"
@@ -61,6 +63,7 @@
 #define WD_SECS		2.0
 #define WD_MISSES	2		/* bt9: was 3; the AirPods hang showed 2 misses then bluetoothd gave up */
 
+static int verbose;			/* bt10: per-packet lines only with -v (log cost in the pump) */
 static int shim = 1, lext = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
 static int cmds_known, chip_err_rd, chip_err_wr;
@@ -126,14 +129,16 @@ static void answer(uint16_t op, uint8_t status, const uint8_t *data, unsigned n)
 /* bt7: bt_lext hooks */
 int lext_to_chip(const uint8_t *p, unsigned n)
 {
-	hexline("-> lext cmd", p, n, 4 + 16);
+	if (verbose)
+		hexline("-> lext cmd", p, n, 4 + 16);
 	return tx(p, n);
 }
 
 void lext_to_host(const uint8_t *p, unsigned n)
 {
 	n_local++;
-	log_event("<- lext", p, n);
+	if (verbose)
+		log_event("<- lext", p, n);
 	up(p, n);
 }
 
@@ -149,7 +154,8 @@ static int host_cmd(uint8_t *p, unsigned n)
 	n_cmd++;
 	last_op = op;
 	last_sub = p[3] && n > 4 ? p[4] : 0;
-	hexline("-> cmd", p, n, 4 + 16);
+	if (verbose)
+		hexline("-> cmd", p, n, 4 + 16);
 	if (!shim)
 		return 0;
 	if (lext && lext_tx(p, n))	/* bt7: legacy LE -> extended (-L: off) */
@@ -180,7 +186,8 @@ static int host_cmd(uint8_t *p, unsigned n)
 static int chip_evt(uint8_t *p, unsigned n)
 {
 	n_evt++;
-	log_event("<- chip", p, n);
+	if (verbose)
+		log_event("<- chip", p, n);
 	if (n >= 7 && ((p[1] == 0x0e && p[6]) || (p[1] == 0x0f && p[3]))) {
 		uint16_t op = p[1] == 0x0e ? p[4] | p[5] << 8 : p[5] | p[6] << 8;
 		printf("chip error: op %#06x status %#x%s\n", op, p[1] == 0x0e ? p[6] : p[3],
@@ -260,7 +267,7 @@ static void host_input(void)
 		int done = 0;
 		if (hb[0] == 0x01)
 			done = host_cmd(hb, need);
-		else if (n_acl_up++ < 8 || n_acl_up % 256 == 0)
+		else if ((n_acl_up++ < 8 || n_acl_up % 256 == 0) && verbose)
 			printf("-> %s handle %#x len %u\n", hb[0] == 0x02 ? "acl" : "sco", (hb[1] | hb[2] << 8) & 0xfff,
 			       need - (hb[0] == 0x02 ? 5 : 4));
 		/* bt9 (AirPods, U9b): bluetoothd's HCI_Reset came while an older command was still watched, so the reset
@@ -289,7 +296,7 @@ static void chip_input(void)
 			n_dbg++;
 			return;
 		}
-		if (n_acl_down++ < 8 || n_acl_down % 256 == 0)
+		if ((n_acl_down++ < 8 || n_acl_down % 256 == 0) && verbose)
 			printf("<- acl handle %#x len %u\n", h, n - 5);
 		up(p, n);
 	} else {
@@ -307,7 +314,9 @@ static int bring_up_chip(void)
 {
 	for (int k = 1; k <= 3 && !stop_sig; k++) {
 		failed = 0;
-		if (!(power() || version() || firmware(fw_dir)))
+		int rc = power() || version() || firmware(fw_dir);
+		fflush(stdout);
+		if (!rc)
 			return 0;
 		printf("btbridge: bring-up %d failed\n", k);
 		off();
@@ -331,6 +340,7 @@ static void watchdog_check(void)
 	double t0 = now_s();
 	printf("watchdog: recovery %u: chip silent (uart dropped %u, overruns %u), bring-up again\n", n_recover,
 	       rx_dropped, rx_overruns);
+	fflush(stdout);
 	off();
 	sleep(1);
 	int rc = bring_up_chip();
@@ -406,6 +416,7 @@ static void wait_wifi(void)
 			printf("wifi: rails up after %d s\n", t);
 			return;
 		}
+		fflush(stdout);
 		sleep(1);
 	}
 	printf("wifi: no \"modem ready\" in %s after 60 s: trying anyway\n", WLAND_LOG);
@@ -422,12 +433,16 @@ int main(int argc, char **argv)
 			watchdog = 0;
 		else if (!strcmp(argv[i], "-R"))
 			rx_restart = 0;
+		else if (!strcmp(argv[i], "-F"))
+			rx_auto_rfr = 0;
+		else if (!strcmp(argv[i], "-v"))
+			verbose = 1;
 		else if (!strcmp(argv[i], "-p"))
 			use_pty = 1;
 		else if (!strcmp(argv[i], "-d") && i + 1 < argc)
 			fw_dir = argv[++i];
 		else {
-			fprintf(stderr, "usage: btbridge [-n] [-L] [-W] [-R] [-p] [-d DIR]\n");
+			fprintf(stderr, "usage: btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-d DIR]\n");
 			return 2;
 		}
 	}
@@ -440,10 +455,15 @@ int main(int argc, char **argv)
 		freopen(LOG_PATH, "a", stdout);
 		dup2(1, 2);
 	}
-	setvbuf(stdout, NULL, _IOLBF, 0);
-	printf("btbridge: start, shim %s, lext %s, watchdog %s, rx restart %s, firmware %s, host side %s\n",
+	/* bt10: full buffering; flushed once a second in the pump and after each bring-up step / recovery */
+	setvbuf(stdout, NULL, _IOFBF, 1 << 16);
+	/* bt10: the pump at a higher priority (-10); a failure is only logged */
+	if (setpriority(PRIO_PROCESS, 0, -10))
+		printf("btbridge: setpriority: %s\n", strerror(errno));
+	printf("btbridge: start, shim %s, lext %s, watchdog %s, rx restart %s, rx flow %s, log %s, firmware %s, host side %s\n",
 	       shim ? "on" : "off (-n)", shim && lext ? "on" : "off (-L)", watchdog ? "on" : "off (-W)",
-	       rx_restart ? "on" : "off (-R)", fw_dir, use_pty ? "pty (-p)" : KDEV);
+	       rx_restart ? "on" : "off (-R)", rx_auto_rfr ? "auto rfr" : "manual ready (-F)",
+	       verbose ? "per packet (-v)" : "quiet", fw_dir, use_pty ? "pty (-p)" : KDEV);
 	/* bt8: SIGTERM/SIGINT stop cleanly (chip off, pid file removed); no SA_RESTART so sleeps end early */
 	struct sigaction sa = { .sa_handler = on_signal };
 	sigaction(SIGTERM, &sa, NULL);
@@ -468,7 +488,8 @@ int main(int argc, char **argv)
 		chmod(READY, 0644);
 	}
 	printf("btbridge: ready, pumping\n");
-	double stats = now_s() + 60;
+	fflush(stdout);
+	double stats = now_s() + 60, flush = now_s() + 1;
 	while (!stop_sig) {
 		/* bt5b: poll() on /dev/btbridge never reported POLLIN (bluetoothd's commands piled up unread in the kernel
 		 * ring), so on the kernel device read every pass (O_NONBLOCK: EAGAIN when empty) */
@@ -482,6 +503,10 @@ int main(int argc, char **argv)
 			       "overruns %u, rx restarts %u, recoveries %u\n", n_cmd, n_evt, n_local, n_acl_up, n_acl_down, n_dbg,
 			       host_dropped, rx_dropped, rx_overruns, rx_restarts, n_recover);
 			stats = now_s() + 60;
+		}
+		if (now_s() > flush) {
+			fflush(stdout);
+			flush = now_s() + 1;
 		}
 	}
 	stop_bridge();

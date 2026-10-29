@@ -8,6 +8,7 @@
 
 extern int failed;
 extern unsigned rx_overruns, rx_restarts, rx_dropped, acl_pkts, acl_bytes;
+extern int rx_auto_rfr;			/* bt10: automatic RX flow control (RFR) after power-on (default 1) */
 extern int rx_restart;			/* bt8: restart a stopped rx sequencer after an overrun (default 1) */
 
 double now_s(void);

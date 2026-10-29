@@ -298,6 +298,8 @@ static int uart_setup(void)
 	return 0;
 }
 
+static void rx_poll(void);
+
 int tx(const uint8_t *b, unsigned n)
 {
 	if (wait_bit(SE + GENI_STATUS, 1u, 0, 100))
@@ -310,12 +312,22 @@ int tx(const uint8_t *b, unsigned n)
 		for (unsigned k = 0; k < 4 && j + k < n; k++)
 			w |= (uint32_t)b[j + k] << (8 * k);
 		unsigned spin = 0;
-		while ((sr(TX_FIFO_ST) & 0xfffffffu) >= 15)
+		while ((sr(TX_FIFO_ST) & 0xfffffffu) >= 15) {
 			if (++spin == 200000)
 				return fail("tx fifo stuck");
+			if (!(spin & 63))
+				rx_poll();
+		}
 		sw(TX_FIFO, w);
 	}
-	if (wait_bit(SE + M_IRQ_STATUS, 1u, 1, 2000)) {
+	/* bt10 (AirPods, 3347 bytes dropped): a 260-byte ACL takes ~23 ms at 115200, the RX FIFO fills in ~5 ms, so
+	 * keep draining RX while the TX completes instead of sleeping in wait_bit */
+	double end = now_s() + 2.0;
+	while (!(sr(M_IRQ_STATUS) & 1u) && now_s() < end) {
+		rx_poll();
+		usleep(100);
+	}
+	if (!(sr(M_IRQ_STATUS) & 1u)) {
 		printf("uart: tx of %u not done (m_irq %#x status %#x)\n", n, sr(M_IRQ_STATUS), sr(GENI_STATUS));
 		return fail("tx timeout");
 	}
@@ -324,7 +336,7 @@ int tx(const uint8_t *b, unsigned n)
 }
 
 unsigned rx_overruns, rx_restarts;
-int rx_restart = 1;
+int rx_restart = 1, rx_auto_rfr = 1;
 
 /* bytes received within ms (stops early when max is reached) */
 static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
@@ -333,6 +345,8 @@ static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
 	for (unsigned waited = 0; waited <= ms && got < max;) {
 		uint32_t st = sr(RX_FIFO_ST), w = st & 0x1ffffffu;
 		if (!w) {
+			if (waited >= ms)	/* bt10: ms 0 = take what is there, no sleep */
+				break;
 			delay_ms(1);
 			waited++;
 			continue;
@@ -416,6 +430,17 @@ int power(void)
 	unsigned got = rx(in, sizeof(in), 500);
 	hex("after power-on pulse", in, got);
 	flow(1);
+	/* bt10 (AirPods: overruns 88): the manual "RTS held ready" above stops the chip from ever pausing. Now
+	 * automatic RFR (MANUAL_RFR 0, as qcom_geni_serial_set_mctrl with TIOCM_RTS): the SE deasserts RFR when the
+	 * RX FIFO reaches RX_RFR_WM, depth - 2 as qcom_geni_serial_port_setup's geni_se_init(UART_RX_WM, depth - 2).
+	 * rx_auto_rfr = 0 (btbridge -F) keeps the old manual ready. */
+	if (rx_auto_rfr) {
+		uint32_t depth = (sr(RX_FIFO_DEPTH_R) >> 16) & 0x3f;	/* SE_HW_PARAM_1 RX_FIFO_DEPTH [21:16], words */
+		sw(RX_RFR_WM, depth > 4 ? depth - 2 : 14);
+		sw(MANUAL_RFR, 0);
+		printf("uart: auto rfr: rx fifo depth %u, rfr watermark %u, rx watermark %u, manual rfr %#x\n", depth,
+		       sr(RX_RFR_WM), sr(RX_WM), sr(MANUAL_RFR));
+	}
 	printf("gpio: cts %u rts %u tx %u rx %u\n", rd32(GPIO_IO(38)) & 1, rd32(GPIO_IO(39)) & 1,
 	       rd32(GPIO_IO(40)) & 1, rd32(GPIO_IO(41)) & 1);
 	return 0;
@@ -424,7 +449,7 @@ int power(void)
 /* H4 reassembly (bt3): the chip also sends ACL packets (QCA debug log, handle 0x2edc, ~485 bytes) between events;
  * the old reader skipped to the next 0x04 byte and so framed "events" out of ACL payload. Now: 0x04 event and 0x02 ACL
  * are parsed by their headers, any other byte is dropped one at a time (counted) until a type byte lines up. */
-static uint8_t rxb[8192];
+static uint8_t rxb[65536];	/* bt10: was 8192 */
 static unsigned rxn;
 unsigned rx_dropped, acl_pkts, acl_bytes;
 
@@ -438,11 +463,19 @@ static void pump(unsigned ms)
 	rxn += rx(rxb + rxn, sizeof(rxb) - rxn, ms);
 }
 
+/* bt10: whatever the FIFO holds now, no waiting (called from tx's waits) */
+static void rx_poll(void)
+{
+	if (sizeof(rxb) - rxn >= 64)
+		rxn += rx(rxb + rxn, sizeof(rxb) - rxn, 0);
+}
+
 /* next complete H4 packet (type 02/04) within ms; copies up to max bytes, returns its full length, 0 on timeout */
 unsigned pkt(uint8_t *p, unsigned max, unsigned ms)
 {
 	double end = now_s() + ms / 1000.0;
 	unsigned drop = 0;
+	rx_poll();		/* bt10: empty the FIFO even when a whole packet is already buffered */
 	for (;;) {
 		unsigned need = 0;
 		while (rxn) {
