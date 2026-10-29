@@ -23,6 +23,13 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:40 bt5: bluetoothd takes the kernel transport; Settings spinner (kernel105 btbridge=1)
+- Bridge at boot: patch 51.8 s (slow at boot), NVM 2.0 s; logging-off 0xfc17 -> `04 0e 05 01 17 fc 00 14` (status 0); HCI_Reset OK; drain: 0 dropped, 0 overruns (the bt4 framing slips are gone); "kdev: /dev/btbridge fd 4; btbridge: ready, pumping" at ~98 s.
+- /dev: cu.bluetooth + uart.bluetooth (21,0, 0666), btwake (21,2), btbridge (21,1, 0600).
+- bluetoothd[321] (started before the bridge was ready): "Searching for transport H4BC" / driver "POSIX" matched (no more "could not be matched"), then HCI_Reset 0x0c03 and Read_Local_Version timed out (STATUS 621) -> restart reason 108. bluetoothd[335] then stayed up (PowerManager power state 2, "Returning bluetooth power state: cafebabe") but sent no HCI command; no kernel "uart.bluetooth" line.
+- bluetool-stub answered pid 306's boot/init ("btbridge ready after 0 ms"). Settings: Bluetooth row "Off"; the Bluetooth page shows a spinner instead of the switch. No reset; 4455 mV.
+- Next: restart bluetoothd once the bridge is ready (bt5b); gate the kernel control connect until /dev/btbridge is open, so early starts fail fast instead of timing out.
+
 ### 2026-10-30 08:50 xnu 0226 kernel bridge (from ios-redfin 1010 + 1015, MIT) built: kernel105 (untested)
 - `btbridge=1`: kernel control com.apple.uart.bluetooth (stream, not privileged, one client) + /dev/cu.bluetooth = /dev/uart.bluetooth (one pipe), /dev/btbridge (userland end, our btbridge), /dev/btwake (dummy); 16 KiB rings, termios stored. `btbridge=3`: nodes only. Off by default. Not taken: redfin 0982 nubs (our ADT node is seen), 1016 Skywalk privilege (A2DP, later).
 - btbridge now opens /dev/btbridge (`-p` = old pty); bluetoothd env BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (rerun sunfish-install-btbridge.sh).
