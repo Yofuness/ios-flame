@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 11:50 DSP READY, sensors PD survives, root PD attach faults in the SMMU instead of resetting (au5, au6; kernel95; adspboot 3a275a6)
+- 3a275a6: SMP2P items were swapped (we wrote our header into the ADSP's item 443 and waited on 429). Now in 443 / out 429; FSR status separates FORMAT (0x400) from faults.
+- au5 `adspboot boot`: `smp2p in item 443: magic $SMP, entries 3: "smp2p" = 0, "slave-kernel" = 6`, `READY after 110 ms (state 6)`; pd-mapper avs/audio, tms/pdr_enabled; NO sensor_process PD failure (first time). `smmu --rpc` + `--status`: 0x1b23 -> CB13, FSR 0x400 no fault.
+- Re-running boot on an up DSP: glink_core_intent.c:874 assertion (expected; needs a fresh boot).
+- au6 fresh boot: READY after 48 ms; root PD attach (buffer 1062c8000, DSP sees 0x380000000): DSP crash after 1049 ms `EX:kernel:0x0:frpck_0_0:0x95`; CB13 FSR 0x402 (TF) FAR 0x80000000 FSYNR0 0x00110000. No SoC reset: the stream bits route the access to our bank now; the bank's table walk fails (guess: table coherency or TCR/MAIR). Fix in progress. ssh 21 s, 4455 mV.
+
 ### 2026-10-29 11:35 audio steps 1-3 (au1, au3; kernel95; adspboot e111a25, c814f18)
 - e111a25: pd-mapper adsp domains (instance 74), CB with ASID + TLBIASID before SCTLR, `smmu --status`, dsp addresses IOVA|3<<32, `boot --rpc --root`. Backups on the phone: /var/local/bin/adspboot.pre-e111, wland.pre-e111. Wi-Fi still joins with the new wland (au1).
 - au1 `adspboot boot`: glink up (IPCRTR, fastrpcglink-apps-dsp, apr_audio_svc ...), "no ready in 10 s", sensor_process chre_utils fatal; no pd-mapper lines: the ADSP's IPCRTR is adspboot's, the locator lived only in wland.
