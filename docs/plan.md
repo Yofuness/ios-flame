@@ -7,8 +7,8 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 1. **Audio via the SM7150 reference** (B16/B23): DSP addresses carry the SMMU stream (IOVA | 3<<32), pd-mapper adsp
    domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Done: FastRPC, ADSP stable, APR, AFE, PCM stream, CS35L41
    powers up (PLL lock, PUP_DONE, OTP trims). Unheard by the PC mic: waits for U5 (the user listens) or a loopback capture. (audio.md)
-2. ▶ **Screen rotation** (B20): `R 3` / `R 1` rotates the front app (Calculator landscape, scientific layout; rot10).
-   Next: Safari draws only the left ~45% in landscape; touch mapping (`R N t`); sensors later. (display.md)
+2. ▶ **Screen rotation** (B20): `R 3` / `R 1` rotates the front app; apps opened later follow (Calculator, Safari full width; rot12).
+   Next: touch mapping in landscape (U6 / `R N t`), home screen, auto-rotate from the accelerometer. (display.md)
 3. **Zero-copy scanout** (O2; the user liked ios-s9's smoothness): an MDP pipe scans backboardd's surface directly
    instead of our GPU blit (ios-s9 xnu 0096/0097, MIT); first a read-only MDP layout dump. (smoothness.md)
 
@@ -23,6 +23,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U1 flashlight button by hand: tap on/off, long-press for a lower level. ~2 min.
 - U3 battery % while discharging: phone off the charger 30 min. (B13)
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
+- U6 rotation touch: after `R 3` (Claude sends it), tap Safari's address bar and a Calculator key: does the right spot react? ~2 min.
 - U5 speaker beep: listen next to the phone for a 3 s 1 kHz tone (amp powers up cleanly; the PC mic hears nothing). Ready now.
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)

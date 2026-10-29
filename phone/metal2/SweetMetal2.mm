@@ -877,11 +877,17 @@ static void sm2_orient_r_apply(long n, bool reapply)
 			[os addObject:[NSString stringWithFormat:@"%@", sm2_get(sm2_get(sc, "settings"), "interfaceOrientation")]];
 		}
 		NSString *f = [ids componentsJoinedByString:@","];
+		static int stable;
 		if (!last_front || ![f isEqualToString:last_front]) {
 			last_front = f;
+			stable = 0;
 			sm2_log("orient: R front now %s (orientations %s)", f.length ? [f UTF8String] : "none",
 			    [[os componentsJoinedByString:@","] UTF8String]);
 		}
+		/* rot10/rot11: Safari re-applied on its first front tick (still launching) drew only the left ~45%; R sent
+		 * with Safari already in front drew full width. Wait until the front set has been the same for 2 more ticks. */
+		if (++stable < 3)
+			return;
 	}
 	SEL ub = sel_registerName("updateSettingsWithBlock:");
 	for (NSUInteger i = 0; i < scenes.count; i++) {

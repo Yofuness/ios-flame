@@ -20,6 +20,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 22:10 Safari rotates full width; re-apply waits for a stable front app (rot11, rot12; kernel98)
+- rot11 (cbb2525): `R 3` sent with Safari already in front -> landscape, full width (rot11-b/c). Settings opened later stayed portrait: no "re-applied" line; Settings is portrait-only on iPhone (mask check skips it), so that is expected.
+- Fix: the 1 s re-apply waits until the front set has stayed the same for 3 ticks (Safari was re-applied on its first front tick, still launching -> left ~45% drawn).
+- rot12: Calculator `R 3` landscape (a); Safari opened afterwards: "R re-applied 3" once, landscape, ~100% width (b), stable 15 s later (c); `R 1` -> portrait, no bottom strip (d). No reset; battery 4454 mV.
+- Open: touch mapping in landscape (needs a finger: U6, or `R N t`); SpringBoard home screen stays portrait; auto-rotate from the accelerometer.
+
 ### 2026-10-29 21:40 ONE-STEP ROTATE WORKS: `R 3` / `R 1` (rot7-rot10, kernel98; SweetMetal2 50a5730, cbb2525)
 - rot7/rot8 (50a5730: front scenes first, then background): R still left Calculator portrait. rot9: plain `S 3` rotated it, `S 1` restored it, so the backboardd D step (and E) reset the app scene after the update.
 - cbb2525: `R N` = scene updates only (front first, then the rest) + 1 s re-apply to apps that come to the front; D only with `R N t`, E only with `R N e`.
