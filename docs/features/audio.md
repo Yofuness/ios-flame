@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 05:00 sp8: VI loopback records only zeros (kernel98, sweetse9=2 sweetampreset=1; adspboot --rec)
+- All APR steps accepted (AFE 0x1003 SD1, ADM TX, ASM read session 2, matrix 1); 231 READ_V2, 0 errors; READ_DONE says 4096 B filled (enc_framesize 0x1000, offset 0). Data: exact zeros on both channels in baseline (22528 frames), tone (122880) and after (87632). PC mic: 0 tone windows. No reset, 4439 mV. No "ampreset" line in the live log this boot (waited 125 s).
+- Amp TX writes read back as set (PWR_CTRL2 0x11 -> 0x3011, TX1 src 0x18, TX2 src 0x19, TX WL 0x18 -> 0x10, TX slots 0x3020100 -> 0x100, SP_ENABLES 0x10000 -> 0x10003) and were restored; gpio11 0x401 -> 0xc8 -> 0x401.
+- Not the read path: /dev/pmem flushes the dcache before DRAM reads (sweet_pmem.c:132). Exact zeros (not noise) = nothing drives SD1 into the DSP. Guesses (untested): the amp's SDOUT stays Hi-Z (DT cirrus,asp-sdout-hiz = 3; the HiZ control register not set), SD1 isn't the amp's data-out on this board, or the amp was not in PUP during the reads.
+- Parked: the listening test U5 is the faster proof. Resume with the SDOUT HiZ register (Linux cs35l41 "asp-sdout-hiz" handling) and the amp PUP status during --rec.
+
 ### 2026-10-30 03:10 Speaker self-check: no level register; VMON/IMON loopback is the proof (read-only; research/notes/cs35l41-selfcheck.md)
 - Facts (Linux cs35l41.h): VMON/IMON/VPMON/VBSTMON/TEMPMON are only routing sources (0x18/0x19/0x28/0x29/0x3A), not readable values; PWR_CTRL2 0x2018 bit 12 VMON_EN, bit 13 IMON_EN; IRQ1 status 0x10010 / raw 0x10090 hold fault bits only; ASP_TX1..4_SRC 0x4C20-0x4C2C, SP_ENABLES 0x4800 (TX1 bit 0, TX2 bit 1, RX1 bit 16).
 - Plan (inference): ASP_TX1_SRC=VMON, ASP_TX2_SRC=IMON, enable VMON/IMON + TX1/TX2, record SEC_MI2S_TX (AFE 0x1003) on the ADSP during the tone; IMON rising = current through the coil. Needs: the sunfish MI2S data-in lane and an AFE TX record client in adspboot.
