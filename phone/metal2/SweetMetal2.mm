@@ -584,6 +584,49 @@ static void sm2_orient_e(long n)
 	sm2_log("orient: E %ld (accelerometer %p)", n, acc);
 }
 
+/* Rotation probe in app processes (MobileSafari etc.): after each change of /var/local/sweet-orient, log what the app's
+ * UIKit sees (scene orientation, coordinate space, key window bounds + transform). Read-only. */
+__attribute__((constructor)) static void sm2_app_orient_probe(void)
+{
+	const char *pn = getprogname();
+	if (!strcmp(pn, "SpringBoard") || !strcmp(pn, "backboardd") || strcmp(pn, "MobileSafari") != 0 ||
+	    access("/var/local/sweet-orient", F_OK) != 0)
+		return;
+	static dispatch_source_t t;
+	t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+	dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 10);
+	dispatch_source_set_event_handler(t, ^{
+		static struct timespec last;
+		static int pending;
+		struct stat st;
+		if (stat("/var/local/sweet-orient", &st) == 0 && (st.st_mtimespec.tv_sec != last.tv_sec ||
+		    st.st_mtimespec.tv_nsec != last.tv_nsec)) {
+			last = st.st_mtimespec;
+			pending = 2;	/* log on the 2nd tick after the change (~1.5 s) */
+			return;
+		}
+		if (!pending || --pending)
+			return;
+		@try {
+			id app = [objc_getClass("UIApplication") performSelector:@selector(sharedApplication)];
+			id win = [app respondsToSelector:@selector(keyWindow)] ? [app performSelector:@selector(keyWindow)] : nil;
+			id scene = [win respondsToSelector:@selector(windowScene)] ? [win performSelector:@selector(windowScene)] : nil;
+			SEL io = sel_registerName("interfaceOrientation");
+			long o = [scene respondsToSelector:io] ? ((long (*)(id, SEL))objc_msgSend)(scene, io) : -1;
+			id cs = [scene respondsToSelector:@selector(coordinateSpace)] ? [scene performSelector:@selector(coordinateSpace)] : nil;
+			NSString *csb = cs ? [[cs valueForKey:@"bounds"] description] : @"?";
+			NSString *wb = win ? [[win valueForKey:@"bounds"] description] : @"?";
+			NSString *tf = win ? [[[win valueForKey:@"layer"] valueForKey:@"transform"] description] : @"?";
+			sm2_log("orient: app probe: scene orientation %ld, scene bounds %s, key window %p bounds %s, layer transform %s",
+			    o, [csb UTF8String], win, [wb UTF8String], [tf UTF8String]);
+		} @catch (id ex) {
+			sm2_log("orient: app probe exception %s", [[ex description] UTF8String]);
+		}
+	});
+	dispatch_resume(t);
+	sm2_log("orient: app probe in %s", pn);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
