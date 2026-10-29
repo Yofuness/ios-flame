@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 09:35 B29: shadow refresh switch, no change; parked (b29c, kernel94, bundle 561e6cd)
+- shadow.rs: every encoder starts with all shadows stale (new ShadowSync per encoder), so each encoder copies buffer -> shadow before first use; nothing CPU-side marks entries stale.
+- Bridge 0108 `M2V_SHADOW_REFRESH=always` (copy-in before every use) set in /var/local/mtl2-env: backboardd logged the switch, the two lock-screen buttons still noisy (webcam b29c), clock clean, no UIWDT/hang. Switch removed again (mtl2-env empty, as before).
+- Parked. Open leads: CA writes after the command buffer ran (race), the image sampled with no copy-in in that encoder, or the icons are not these shadow textures at all (only backboardd logs buffer textures; SpringBoard none).
+
 ### 2026-10-29 09:25 B29: lock-screen button noise, storage of buffer textures (b29a, b29b; kernel94; bundle f6550d2)
 - a980246 logs (bytesNoCopy / IOSurface, 1-byte formats): 0 lines; the textures come through `-[MTLBuffer newTextureWithDescriptor:offset:bytesPerRow:]`.
 - f6550d2 (bridge 0107) logs each buffer texture's storage: backboardd only, 32 lines: 17 wider alias (e.g. 1125x2436 BGRA8, RG8 23x23/32x40 row 64, A8 rows 64-aligned), 15 shadow. Shadows: RGBA8 101x101 / 103x103 / 97x76 row 416, BGRA8 194x237 r784, 1x1, A8 216x61 r224, 463x54 r480, 712x234 / 732x174 / 736x234 r736, 981x245 r992, big BGRA8 1326x1326 / 1271x1823 / RGBA8 1105x1160. Reason: no-copy buffer, Turnip refuses the row pitch (needs 64; host-allocation linear needs 256).
