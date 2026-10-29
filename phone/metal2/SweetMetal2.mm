@@ -504,7 +504,12 @@ static void sm2_orient_d(long n, long src)
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
-	if ((!bbd && strcmp(getprogname(), "SpringBoard") != 0) || access("/var/local/sweet-orient", F_OK) != 0)
+	if (!bbd && strcmp(getprogname(), "SpringBoard") != 0)
+		return;
+	int ok = access("/var/local/sweet-orient", F_OK);
+	if (bbd)
+		sm2_log("orient: backboardd watcher: access %d errno %d", ok, ok ? errno : 0);
+	if (ok != 0)
 		return;
 	if (!bbd && !dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
 		sm2_log("orient: AccessibilityUtilities: %s", dlerror());

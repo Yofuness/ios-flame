@@ -20,4 +20,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 20:35 rotation without sensors: methods A-D, none rotates (parked)
+- SweetMetal2 file watcher /var/local/sweet-orient: A `N` AX setDeviceOrientation (SpringBoard; the AX server isn't running), B `B N` SBDeviceOrientationUpdateManager enqueue, C `C N` BKSHIDServicesSetDeviceOrientationForAutomation after an unlock (needs com.apple.backboardd.setDeviceOrientation, which SpringBoard lacks), D `D N S` in backboardd: BKOrientationManager updateDeviceOrientation:N changeSource:S with CoreMotion updates dropped.
+- or1 (kernel94): D worked only after backboardd was restarted on the new bundle (sunfish-test.sh -b installs after boot without restarting backboardd). Then `D 3 S` for S = 0..5 logs `effective 3`, but Safari stays portrait (webcam d3s1-5).
+- Next: check whether SpringBoard's BKSAccelerometer client gets the change (hook _orientationDidChange / log SBDeviceOrientationUpdateManager's observer), and whether SpringBoard's orientation events are enabled.
+
 Older entries (before 2026-10-25): [archive/features/display.md](../archive/features/display.md).
