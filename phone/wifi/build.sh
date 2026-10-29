@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build wland, adspboot, aprtest, apr_tone, i2cprobe and camid for iOS 16 arm64 into phone/wifi/out (signed ad hoc).
+# Build wland, adspboot, aprtest, apr_tone, i2cprobe, camid and btup for iOS 16 arm64 into phone/wifi/out (signed ad hoc).
 set -e
 cd "$(dirname "$0")"
 mkdir -p out
@@ -15,4 +15,6 @@ mkdir -p out
 ../../tools/linux-ios-sign out/i2cprobe 2>/dev/null
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/camid camid.c geni_i2c.c smem.c pmem.c
 ../../tools/linux-ios-sign out/camid 2>/dev/null
-ls -la out/wland out/adspboot out/aprtest out/apr_tone out/i2cprobe out/camid
+../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/btup btup.c pmem.c
+../../tools/linux-ios-sign out/btup 2>/dev/null
+ls -la out/btup out/wland out/adspboot out/aprtest out/apr_tone out/i2cprobe out/camid
