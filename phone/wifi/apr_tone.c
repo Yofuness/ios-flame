@@ -242,8 +242,7 @@ static void lpi_pins(int on)
 static void amps_down(void)
 {
 	for (int i = 0; i < n_amp; i++)
-		if (amps[i].up)
-			cs_power_down(&amps[i]);
+		cs_power_down(&amps[i]);	/* sp1: also restores a configured, never powered amp */
 }
 
 int main(int argc, char **argv)
@@ -340,7 +339,7 @@ int main(int argc, char **argv)
 
 	/* 4. amps on */
 	for (int i = 0; i < n_amp; i++)
-		if (cs_config(&amps[i], vol, boost))
+		if (cs_config(&amps[i], -vol, boost) || cs_verify(&amps[i]))	/* sp1: dB, read-back */
 			goto out;
 	uint64_t t0 = now_ms();
 	for (int i = 0; i < n_amp; i++)

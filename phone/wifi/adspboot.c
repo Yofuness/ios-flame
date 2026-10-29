@@ -50,6 +50,8 @@
 #include "fastrpc.h"
 #include "pdmapper.h"
 #include "qmi.h"
+#include "geni_i2c.h"
+#include "cs35l41.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -1048,6 +1050,77 @@ static uint32_t pcm_op, pcm_rsp, pcm_handle, pcm_copp, pcm_tone_at;
 static uint32_t pcm_sent, pcm_done, pcm_out, pcm_underflow, pcm_werr;
 static uint64_t pcm_due, pcm_t0, pcm_t1;
 static int16_t pcm_sine[48];
+static uint32_t pcm_tone_periods = PCM_TONE_PERIODS;
+
+/*
+ * sp1: `--amp` (implies --pcm) turns the left amp (0x40 only) on for the tone: configured and read back before the
+ * ADSP boot, GLOBAL_EN only once the stream runs (first WRITE_DONE: BCLK present), IRQ1 errors polled every 50 ms,
+ * at most AMP_MAX_MS on and off while >= 0.5 s of tone is still queued; powered down before the PCM/AFE teardown,
+ * on signals, errors and exit. `--amp-check` = probe, configure, read back, restore; never GLOBAL_EN.
+ */
+#define AMP_MAX_MS		3000
+#define AMP_TONE_PERIODS	380	/* 3.8 s with --amp: the tone outlasts the amp window */
+#define AMP_TAIL_PERIODS	50	/* off with 0.5 s of tone still to play */
+static int amp_on, amp_check, amp_db = -30, amp_ready, amp_used;
+static struct cs_amp amp = { .addr = 0x40 };
+static uint64_t amp_t0, amp_next;
+
+static void amp_off(void)
+{
+	if (!amp.configured)
+		return;
+	printf("amp: power down%s\n", amp.up ? ", was on" : "");
+	cs_power_down(&amp);
+	if (amp_t0)
+		printf("amp: on for %llu ms\n", (unsigned long long)(now_ms() - amp_t0));
+	amp_ready = 0;
+}
+
+/* probe + configure + read back (no GLOBAL_EN); 0 = ready for amp_start */
+static int amp_prepare(void)
+{
+	if (gi2c_init() || cs_probe(&amp))
+		return -1;
+	if (cs_config(&amp, amp_db, 0) || cs_verify(&amp)) {
+		amp_off();
+		return -1;
+	}
+	amp_ready = 1;
+	return 0;
+}
+
+/* first WRITE_DONE: once per run */
+static void amp_start(void)
+{
+	if (!amp_on || !amp_ready || amp_used)
+		return;
+	amp_used = 1;
+	printf("amp: power up (%d dB)\n", amp_db);
+	if (cs_power_up(&amp)) {
+		amp_off();
+		return;
+	}
+	amp_t0 = now_ms();
+	amp_next = amp_t0 + 50;
+}
+
+/* while on: IRQ1 errors every 50 ms, the 3 s cap, the tone tail */
+static void amp_poll(void)
+{
+	if (!amp.up || now_ms() < amp_next)
+		return;
+	amp_next = now_ms() + 50;
+	if (cs_check(&amp)) {
+		printf("amp: IRQ1 error: power down now\n");
+		amp_off();
+	} else if (now_ms() - amp_t0 >= AMP_MAX_MS) {
+		printf("amp: %d ms cap\n", AMP_MAX_MS);
+		amp_off();
+	} else if (pcm_sent + AMP_TAIL_PERIODS >= pcm_tone_periods) {
+		printf("amp: tone ends in <= 0.5 s: off\n");
+		amp_off();
+	}
+}
 
 static void pcm_tx(uint8_t svc, uint16_t port, uint32_t token, uint32_t opcode, const void *pl, uint16_t len)
 {
@@ -1077,7 +1150,7 @@ static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
-	int tone = pcm_sent < PCM_TONE_PERIODS;
+	int tone = pcm_sent < pcm_tone_periods;
 	for (unsigned f = 0; f < PCM_FRAMES; f++)
 		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
 	pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));	/* pm_wr cleans to PoC: the DSP reads DRAM */
@@ -1099,6 +1172,8 @@ static void afe_next(int ok, uint32_t status);
 /* Run step pcm_step; teardown steps with nothing to undo are skipped. P_DONE hands back to the AFE (stop). */
 static void pcm_run(void)
 {
+	if (pcm_step >= P_PAUSE)
+		amp_off();	/* sp1: amp down before any PCM/AFE teardown */
 	for (;; pcm_step++) {
 		switch (pcm_step) {
 		case P_MAP: {
@@ -1145,7 +1220,7 @@ static void pcm_run(void)
 			return;
 		}
 		case P_PLAY:
-			printf("pcm: playing 1 kHz -20 dBFS for %u x 10 ms, %u periods of %u B in flight\n", PCM_TONE_PERIODS,
+			printf("pcm: playing 1 kHz -20 dBFS for %u x 10 ms, %u periods of %u B in flight\n", pcm_tone_periods,
 			       PCM_PERIODS, PCM_BYTES);
 			pcm_op = 0;
 			pcm_t0 = pcm_t1 = now_ms();
@@ -1225,7 +1300,9 @@ static void pcm_back(unsigned p)
 	pcm_due = pcm_t1 + 1000;
 	if (pcm_step != P_PLAY)
 		return;
-	if (pcm_sent < PCM_TONE_PERIODS + PCM_PERIODS)
+	if (pcm_done == 1)
+		amp_start();	/* sp1: stream running, BCLK present */
+	if (pcm_sent < pcm_tone_periods + PCM_PERIODS)
 		pcm_write(p % PCM_PERIODS);
 	else if (!pcm_out) {
 		pcm_step = P_PAUSE;
@@ -1655,6 +1732,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 	while (now_ms() < end) {
 		if (got_sig) {
 			printf("adsp: signal %d: stopping\n", (int)got_sig);
+			amp_off();	/* sp1 */
 			heartbeat();
 			if (rpc_on) {
 				fastrpc_summary();
@@ -1677,6 +1755,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 		}
 		rpc_poll();
 		apr_poll();
+		amp_poll();	/* sp1 */
 		if (stop && now_ms() >= next) {
 			next = now_ms() + 1000;
 			uint32_t v;
@@ -1798,6 +1877,12 @@ int main(int argc, char **argv)
 			apr_on = afe_on = 1;
 		else if (!strcmp(argv[i], "--pcm"))	/* ap6: ASM + ADM PCM to the AFE port, amps untouched; implies --afe */
 			apr_on = afe_on = pcm_on = smmu = 1;
+		else if (!strcmp(argv[i], "--amp"))	/* sp1: left amp on for the --pcm tone; implies --pcm */
+			amp_on = apr_on = afe_on = pcm_on = smmu = 1;
+		else if (!strcmp(argv[i], "--amp-check"))	/* sp1: configure + read back only, no GLOBAL_EN, then exit */
+			amp_check = 1;
+		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
+			amp_db = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--pcm-sid") && i + 1 < argc) {
 			pcm_sid = (uint32_t)strtoul(argv[++i], NULL, 0);
 			pcm_shift = pcm_sid & 0xf;
@@ -1826,6 +1911,22 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	fastrpc_sensors(sensors);
+	if (amp_db > -20)
+		amp_db = -20;	/* sp1: ceiling (cs_config clamps too) */
+	atexit(amp_off);	/* sp1: every exit path powers the amp down */
+	if (amp_check) {
+		int r = amp_prepare();
+		printf("amp: check %s (%d dB); GLOBAL_EN never set\n", r ? "FAILED" : "ok", amp_db);
+		amp_off();
+		return r ? 1 : 0;
+	}
+	if (amp_on) {
+		if (amp_prepare()) {
+			printf("amp: not ready: stop before the ADSP boot\n");
+			return 1;
+		}
+		pcm_tone_periods = AMP_TONE_PERIODS;
+	}
 	if (!strcmp(cmd, "status"))
 		return status();
 	if (!strcmp(cmd, "shutdown")) {
@@ -1850,7 +1951,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N]] [--amp-check [--amp-db N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
