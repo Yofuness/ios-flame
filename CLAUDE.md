@@ -44,6 +44,11 @@
 # How to work (the user's rules, 2026-10-29; keep these across compactions)
 - **Goal:** keep iterating until everything on iOS works (except iCloud). Getting as many systems working as
   possible comes first.
+- **Focus:** a couple of systems at a time, from the Priority list in `docs/plan.md` (at most 5, the active one
+  marked). Easy things go first: the user loves seeing progress.
+- **After each finished priority item:** scan the Broken list for low-hanging fruit and move the easiest items up
+  into the Priority list.
+- **Wins:** push-notify the user every time something starts working.
 - **Broken list:** `docs/plan.md`'s Broken list. Anything newly found broken goes on it; then carry on.
 - **While waiting** (tests, builds, boots): work on other Broken items instead of idling.
 - **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
