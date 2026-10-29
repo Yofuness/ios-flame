@@ -7,11 +7,11 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md) and iOSPlus10 (MIT).
 1. **Speaker** (B16): PARKED 2026-10-30 after ~15 runs (all silent; amp, DSP, routing, memory proven); next: prove
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
-2. **Bluetooth follow-ups** (B15): pairing works (Xbox controller). Next: chip recovery after RX overruns + btbridge
-   SIGTERM, redfin 1016 (AirPods crash), 3 Mbaud / interrupt RX, faster boot firmware load. (bluetooth.md)
+2. ▶ **Bluetooth follow-ups** (B15): pairing works (Xbox controller). Built, untested: btbridge watchdog + SIGTERM,
+   kernel108 = 107 + xnu 0231 (AirPods crash). Then 3 Mbaud / interrupt RX, faster boot firmware load. (bluetooth.md)
 3. **iOS sound path**: redfin's kernel APR stream + RedwoodAudio.driver HAL plug-in, once the speaker plays. (audio.md)
-4. ▶ **Sensors -> auto-rotate** (B12): all 6 sensors answer; iOS rotates natively from the orientation HID service
-   (kernel107, faked events). Next: per-sensor QRTR ports so real samples flow, then a tilt test (U10). (sensors.md)
+4. ▶ **Sensors -> auto-rotate** (B12): samples flow (per-sensor ports); iOS rotates natively on fake events, but a
+   held real tilt only rotates on the way back (U10). Next: raw accel during a hold (logged now) -> axes/filter. (sensors.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
