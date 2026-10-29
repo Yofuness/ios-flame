@@ -320,7 +320,7 @@ void sns_tick(const struct sns_link_ops *ops)
 		printf(", written %llu\n", (unsigned long long)written);
 		last_print = now;
 	}
-	if (secs && now - t0 >= secs * 1000L) {
+	if (secs && now - t0 >= secs * 1000L) {	/* --sns-secs 0 = no limit (launchd job) */
 		stop_all();
 		done = 1;
 		sns_summary();

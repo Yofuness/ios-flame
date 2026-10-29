@@ -74,6 +74,7 @@ tools/build-cocoatop-linux.sh
 tools/sunfish-setup-phone.sh           # launchd job drops, CA_FORCE_TIMER, phone tools, CocoaTop, timezone, flag files
 tools/sunfish-install-adsp.sh          # audio (unfinished feature)
 tools/sunfish-install-bt.sh            # Bluetooth firmware (crbtfw21.tlv, crnv21.bin from the factory vendor image) + btup
+tools/sunfish-install-sensors.sh       # auto-rotate: adspboot sensor feed at boot, job org.iosonpixel.sensors (kernel107+, sweetmotion=0x37 default; after step 8's config push)
 tools/sunfish-install-btbridge.sh      # Bluetooth for iOS: btbridge + BlueTool stand-in + bluetoothd transport (kernel105+, boot-arg btbridge=1, default)
 ```
 Reboot after these (launchd reads its job list at boot).

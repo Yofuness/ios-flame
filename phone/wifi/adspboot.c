@@ -9,7 +9,7 @@
  *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
  *                     and --no-pdmap (no service locator for the ADSP) and --no-sleepstate (no "sleepstate"
  *                     SMP2P out entry, which the sensors image's remote_proc_state needs)
- *   adspboot boot --rpc [--watch 120]  also serve FastRPC (fastrpc.c): attach to the sensors PD on
+ *   adspboot boot --rpc [--watch 120]  (0 = no limit) also serve FastRPC (fastrpc.c): attach to the sensors PD on
  *                     fastrpcglink-apps-dsp, run adsp_default_listener and answer its apps_std file calls
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
  *                     summary at the end. Implies --smmu; the FastRPC streams then go through a translating bank
@@ -2448,6 +2448,8 @@ int main(int argc, char **argv)
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
 		return 1;
+	if (watch <= 0 && (rpc_on || apr_on))	/* sns9: --watch 0 = no limit (launchd job); ~23 days fits the int ms math */
+		watch = 2000000;
 	if (rpc_on || apr_on)	/* au14: --watch N is the whole serve, not N per phase; ADSP_WATCH_PER_PHASE=1 for the old way */
 		watch_end = getenv("ADSP_WATCH_PER_PHASE") ? 0 : now_ms() + (uint64_t)watch * 1000;
 
