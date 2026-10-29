@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 partial: amps answer on I²C, the ADSP boots and runs, no sound yet (sensor PD needs a FastRPC file listener). **Updated:** 2026-10-29.
+**State:** 🟡 DSP boots READY, pd-mapper answered, first FastRPC call (root PD attach) works; sensors PD needs its files; no sound yet. **Updated:** 2026-10-29.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 12:20 FIRST FastRPC call: root PD attach -> 0 (au8, au9; kernel95; adspboot 6d4720f, afa2fd6)
+- 6d4720f: the translating bank with the reference's exact values (SCTLR 0x1127, TCR 0x00803519 = cacheable inner-shareable walks, TCR2 0x38011, MAIR0 0xf404ff44, CBAR 0x1f300, leaf 0xe43). au8: refused by our read-back check (SCTLR reads 0x127: HUPCF is RAZ); afa2fd6 tolerates it.
+- au9 (4454 mV, ssh 17 s): bank ok, 0x1b23 -> CB13; READY 117 ms; `rpc: <- rsp ctx 20 ret 0`, `rpc: root PD attach -> 0`. No SMMU fault (FSR 0x400 = format only), no reset. Then `sensor_process ... sar.cc:27 chre_utils fatal` again; `files opened: 0` (nobody serves the sensors files yet).
+- The reference values are now the default (smmu.c; SMMU_OLD=1 = our old values). Difference that mattered (guess): cacheable/inner-shareable table walks and/or SCTLR TRE/AFE.
+- Next: root PD listener (remotectl open, register, init2, next2) serving apps_std files, sensors files staged from the vendor partition onto /var/local (phone only, out of git), then the sensors PD.
 
 ### 2026-10-29 12:05 root PD attach with a 39-bit bank: same translation fault (au7; adspboot 0b14a57)
 - Bank (CB12/13): SCTLR 0x61, TCR 0x00800019 (T0SZ 25), TCR2 0x62, MAIR0 0x44, CBAR 0x1f000, CBA2R 1; walk for 0x80000000 and 0x380000000 both L1->L2->L3 = DMA page | 0x443 (correct, before and after).
