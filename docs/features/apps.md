@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications; 14 of 18 surveyed apps open fine (Maps, Notes, Wallet confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
+**State:** ✅ 32 staged apps installed in /Applications; 15 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music fixed/confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -47,6 +47,12 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 10:05 Music works: kernel95 emulates sandbox extensions (sb1; xnu 0219, default args)
+- xnu 0219 (sweet_amfi.c): __mac_syscall("Sandbox") op 5 (issue) copies out a well-formed token (< 0x800, class + data), op 6 (consume) returns handle 1, 2, ...; ops 4 / 0x43 still ENOENT. Boot-arg `sweetsbext=0` restores the old ENOENT. ABI notes: research/notes/sandbox-extension-abi.md.
+- sb1 (kernel95; boot 6 s, ssh up 17 s, 4455 mV): no panic; lock screen and Safari fine. Issues seen (first 16): nsurlsessiond com.apple.StreamingUnzipService, tccd kTCCServiceAddressBook x5, cloudd com.apple.app-sandbox.read-write x9.
+- Music: opens to "Listen Now" / "You're Offline" and stays up (webcam sb1-m5, sb1-m15), 0 CRASH Music. Was SIGSEGV on launch.
+- oslog itself crashed (sig 11, far 0x10) during the capture; the capture held no tccd lines.
 
 ### 2026-10-29 10:00 TCC works, sandbox extensions don't: shared cause of Music and Photos (b24e, b24f; kernel94)
 - Photos with MobileSlideShow in mtl2-clients: same SIGABRT (same pc/lr/far) as without; not Metal. Reverted.

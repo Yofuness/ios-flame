@@ -44,7 +44,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Wi-Fi](docs/features/wifi.md) | ✅ | joins the home network at boot (from a config file on the phone); iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining a new network from Settings is untested |
 | [Battery](docs/features/battery.md) | 🟡 | real reading; % shows no jumps at idle, discharge unchecked |
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
-| [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 14 of 18 open fine (Maps fixed); Photos and Music crash, Camera black (no camera) |
+| [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 15 of 18 open fine (Maps, Music fixed); Photos crashes, Camera black (no camera) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer, the audio DSP boots and runs; no sound yet: the DSP needs memory shared through the hypervisor (it resets the phone otherwise) |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |

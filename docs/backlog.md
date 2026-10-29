@@ -5,8 +5,8 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B24 Photos SIGABRT: assetsd 'requires TCCPhotosService access' (same cause as B25); Camera black (B17).
-- B25 Music + B24 Photos: TCC grants, but sandbox extension issue fails (kernel Sandbox stub ENOENT for ops 5/6, patch 0050) -> clients see no access. Fix: emulate issue/consume in the kernel (in progress 2026-10-29).
+- Camera black (no camera stack, B17).
+- B24 Photos: assetsd needs TCC + a sandbox extension; kernel95 (xnu 0219) issues extensions now (Music fixed); re-enable assetsd and test.
 - B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
 - B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
@@ -24,6 +24,7 @@ history in the feature Logs.
 - B20 Screen rotation: see priority 2.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
+- B31 oslog (/var/local/bin/oslog) crashes with SIGSEGV (far 0x10/0x20) on some captures; low priority tool bug.
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)
