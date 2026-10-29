@@ -37,7 +37,8 @@ what you need to fetch yourself.
   tqftpserv for those protocols. The FTS touch driver (patch 0085) was written from Google's `fts_touch`
   module (GPL-2.0) and the phone's device tree.
 - **akshaynexus/iOSPlus10** (<https://github.com/akshaynexus/iOSPlus10>, MIT): `phone/wifi/bluetool_stub.c` is adapted
-  from their `negroni-bluetool.c`; btbridge's H4 shim rules follow their bluetoothd findings (patches 0333/0336/0337).
+  from their `negroni-bluetool.c`; btbridge's H4 shim rules follow their bluetoothd findings (patches 0333/0336/0337);
+  `phone/wifi/bt_lext.c` (btbridge's legacy -> extended LE translation) is ported from their xnu 0338 and `tools/bt-shim-test/bt_lext_test.c` from their `tools/bt-shim-test/bt_shim_test.c`.
 - **DenialOfGravity/ios-redfin** (<https://github.com/DenialOfGravity/ios-redfin>, MIT, Pixel 5 port): btbridge's
   Command Disallowed / Unknown Command rewrites and bluetool-stub's wait for the bridge and btaddress echo follow
   their `phone/bt/btd.c` and `bluetool.c` (rules re-implemented, no code copied). The CS35L41 sp8 options in

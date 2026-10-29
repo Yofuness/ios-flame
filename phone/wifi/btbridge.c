@@ -6,7 +6,8 @@
  * between it and the polled SE3 UART (as ios-redfin's btd --bridge does). bluetoothd job:
  * BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the line stays at 115200; termios is ignored).
  *
- *   btbridge [-n] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); DIR: firmware
+ *   btbridge [-n] [-L] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
+ *                                 extended LE translation (bt7, bt_lext.c); DIR: firmware
  *                                 (/var/local/fw/bt); -p: the old pty instead of /dev/btbridge (/dev/cu.bluetooth ->
  *                                 pty slave; bluetoothd 20H392 has no tty H4 driver, bt4: kept for comparison)
  * Log: /var/local/btbridge.log (the previous run's: .prev). Off: /var/local/btbridge.off. Runs in the foreground
@@ -24,6 +25,9 @@
  *     parameters and enable), and a chip "Unknown HCI Command" (0x01) Command Complete -> status 0 + 8 data bytes
  *     (sub-opcode echo): both from ios-redfin phone/bt/btd.c bridge_tap (MIT, research/re/redfin/; rules only).
  *   - chip vendor events (0xff) are not forwarded; every other chip error is logged.
+ *   - bt7: legacy LE scan/advertising/connect commands -> the extended set, extended advertising reports -> legacy
+ *     ones (bt_lext.c, ported from iOSPlus10 xnu 0338, MIT): the chip refuses 0x200b/0x200c with 0x0c after
+ *     bluetoothd's 0x204a. Off: -L.
  * When the chip is ready, btbridge writes its pid to /private/var/tmp/btbridge.pid (bluetool-stub waits for it).
  * Always: ACL from handle 0xedc (the QCA debug log) is dropped, not forwarded.
  */
@@ -39,6 +43,7 @@
 #include <sys/stat.h>
 #include "pmem.h"
 #include "bt_uart.h"
+#include "bt_lext.h"
 
 #define LOG_PATH	"/var/local/btbridge.log"
 #define OFF_FLAG	"/var/local/btbridge.off"
@@ -48,7 +53,7 @@
 #define READY		"/private/var/tmp/btbridge.pid"
 #define KDEV		"/dev/btbridge"
 
-static int shim = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
+static int shim = 1, lext = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
 static int cmds_known, chip_err_rd, chip_err_wr;
 static uint16_t last_op;
@@ -98,6 +103,25 @@ static void answer(uint16_t op, uint8_t status, const uint8_t *data, unsigned n)
 	up(ev, 7 + n);
 }
 
+/* bt7: bt_lext hooks */
+int lext_to_chip(const uint8_t *p, unsigned n)
+{
+	hexline("-> lext cmd", p, n, 4 + 16);
+	return tx(p, n);
+}
+
+void lext_to_host(const uint8_t *p, unsigned n)
+{
+	n_local++;
+	log_event("<- lext", p, n);
+	up(p, n);
+}
+
+uint64_t lext_us(void)
+{
+	return (uint64_t)(now_s() * 1e6);
+}
+
 /* bluetoothd -> chip; returns 1 when the shim answered it */
 static int host_cmd(uint8_t *p, unsigned n)
 {
@@ -108,6 +132,8 @@ static int host_cmd(uint8_t *p, unsigned n)
 	hexline("-> cmd", p, n, 4 + 16);
 	if (!shim)
 		return 0;
+	if (lext && lext_tx(p, n))	/* bt7: legacy LE -> extended (-L: off) */
+		return 1;
 	if (op >> 10 == 0x3f) {
 		/* btbridge shim: vendor commands answered here, status 0 + VSC_DATA bytes (sub-opcode echo) */
 		uint8_t d[VSC_DATA] = { p[3] && n > 4 ? p[4] : 0 };
@@ -146,6 +172,8 @@ static int chip_evt(uint8_t *p, unsigned n)
 		printf("shim: vendor event dropped\n");
 		return 0;
 	}
+	if (lext && lext_rx(p, n))	/* bt7: chain step or converted report (-L: off) */
+		return 0;
 	if (p[1] != 0x0e || n < 7)
 		return 1;
 	uint16_t op = p[4] | p[5] << 8;
@@ -309,12 +337,14 @@ int main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-n"))
 			shim = 0;
+		else if (!strcmp(argv[i], "-L"))
+			lext = 0;
 		else if (!strcmp(argv[i], "-p"))
 			use_pty = 1;
 		else if (!strcmp(argv[i], "-d") && i + 1 < argc)
 			dir = argv[++i];
 		else {
-			fprintf(stderr, "usage: btbridge [-n] [-p] [-d DIR]\n");
+			fprintf(stderr, "usage: btbridge [-n] [-L] [-p] [-d DIR]\n");
 			return 2;
 		}
 	}
@@ -328,8 +358,8 @@ int main(int argc, char **argv)
 		dup2(1, 2);
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	printf("btbridge: start, shim %s, firmware %s, host side %s\n", shim ? "on" : "off (-n)", dir,
-	       use_pty ? "pty (-p)" : KDEV);
+	printf("btbridge: start, shim %s, lext %s, firmware %s, host side %s\n", shim ? "on" : "off (-n)",
+	       shim && lext ? "on" : "off (-L)", dir, use_pty ? "pty (-p)" : KDEV);
 	unlink(READY);
 	pm_init();
 	wait_wifi();

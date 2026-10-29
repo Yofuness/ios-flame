@@ -17,7 +17,7 @@ mkdir -p out
 ../../tools/linux-ios-sign out/camid 2>/dev/null
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/btup btup.c bt_uart.c pmem.c
 ../../tools/linux-ios-sign out/btup 2>/dev/null
-../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/btbridge btbridge.c bt_uart.c pmem.c
+../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/btbridge btbridge.c bt_lext.c bt_uart.c pmem.c
 ../../tools/linux-ios-sign out/btbridge 2>/dev/null
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/bluetool-stub bluetool_stub.c
 ../../tools/linux-ios-sign out/bluetool-stub 2>/dev/null
