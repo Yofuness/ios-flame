@@ -94,6 +94,16 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:20 A/B: flip mode saves the GPU copy but not frames (zc5a-d; BENCH_TIGHT=1 fpsbench 30 s)
+| run | mode | fps lines | avg fps | other |
+|---|---|---|---|---|
+| zc5a | flip (k103) | 8 | 20.2 | ~21 flips/s, 0 panel copies, skipped 2 |
+| zc5b | blit (k98) | 8 | 20.6 | avg copy ~7200 us (600-13000) |
+| zc5c | flip (k103) | 7 | 21.5 | ~25 flips/s, skipped 1 |
+| zc5d | blit (k98) | 7 | 22.5 | avg copy ~9200 us (2500-14200) |
+- Observation: same ~21 fps in both modes; flip mode removes 7-9 ms of GPU copy per frame. So the ~21 fps limit is upstream (backboardd/CA render or GPU submission), not the panel copy. No reset; still frames sharp in both modes.
+- Guess (untested): the GPU time freed may matter under app load (render + copy share the GPU); a heavy-app bench would show it.
+
 ### 2026-10-30 02:00 xnu 0225 auto flip mode built (kernel104 = 103 + 0225; untested)
 - `sweetfb_zerocopy=2`: when both slots are owned, flip mode turns on by itself (retry from swap() once per second if the MDP isn't mapped yet); frames are dropped (not blitted over slot0) until then; a freed slot surface leaves flip mode and the next pair re-enters. `=1` unchanged.
 
