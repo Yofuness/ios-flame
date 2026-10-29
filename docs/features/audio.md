@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 16:15 AFE silent (af1; kernel98; adspboot 2273261 --afe)
+- `--afe`: clock set (AFE_SVC_CMD_SET_PARAM module 0x1028F param 0x10290, clk 0x102 SEC_MI2S_IBIT 1.536 MHz, 68-byte packets from APPS/svc 4) via 0x100F3 then 0x100FC: no reply in 3 s to either; config/start not reached. CORE still answers GET_FWK_VERSION (9 services), GET_STATE 0x1326C still no reply. ADSP stays up (state 6), no SMMU fault, no reset; ssh 17 s; 4455 mV.
+- Next: compare the reference's sequence before its first AFE command (ready polling, audio PD, packet bytes).
+
 ### 2026-10-29 16:00 APR WORKS in adspboot (apr3; kernel100; adspboot e9610fd)
 - e9610fd `--apr`: apr_audio_svc opened in adspboot's own glink loop (ADSP opened it, we answer OPEN + OPEN_ACK on lcid 5), 8 x 1024 RX intents; core queries. `adspboot boot --rpc --root --sensors --apr --unsafe --watch 40`:
   `apr: apr_audio_svc up (lcid 5, rcid 5)`; GET_STATE 0x1326c: no reply in 3 s; GET_FWK_VERSION 0x1292c -> `rx svc 3 op 1292d token 2 status 4000102 (len 148)`: 9 services: 0, 3 CORE (api 5), 4 AFE (api 7), 7 ASM (api 2), 8 ADM (api 4), d, 9, a, b.
