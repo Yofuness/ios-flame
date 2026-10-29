@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 13:20 U5 by the user: silent in both modes (kernel107, sweetse9=2 sweetampreset=1)
+- u5a (bypass) and u5b (--amp-boost, stock DT values): amp power up -20 dB, PUP_DONE 3 ms, PLL_LOCK, on ~3.0 s, no faults; the user listened with an ear at the speaker: nothing, not even a click. So the speaker is really silent: the fault is upstream of (or inside) the amp, not the PC mic.
+- The user added a USB measurement microphone (speaker-calibration type, no calibration file) on the laptop for later tests.
+
 ### 2026-10-30 09:10 sp9: ios-redfin amp recipe, still unheard (kernel98, sweetse9=2 sweetampreset=1; adspboot a70ebac)
 - Run A (bypass): AMP_OUT_MUTE 0x2024 was already 0 before we touched it (set 0x10 -> cleared 2 ms after GLOBAL_EN -> 0 mid-tone): so mute was never the cause. SP_RATE_CTRL = 0x1b (our 1.536 MHz code). PUP_DONE 3 ms, PLL_LOCK, no IRQ/fault, on 3025 ms; PCM 388 periods, 0 errors/underflows. PC mic: 0 tone windows (1 kHz bin 2-22 vs rms 1200-1700 = noise).
 - Run B (+ internal boost, stock DT values: K1 0x24 K2 0x24 slope 0x75 LBST 0 IPK 0x3a = 3700 mA, BST_EN 2): same clean power-up, no fault, on 3038 ms; mic: 0 tone windows.

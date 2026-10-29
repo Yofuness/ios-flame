@@ -32,7 +32,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U9 Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
 - U8 home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
-- U5 speaker beep: listen next to the phone for a 3 s 1 kHz tone (amp powers up cleanly; the PC mic hears nothing). Ready now.
+- U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
 - D5 [DONE 2026-10-29] fake taps/swipes (`T`/`W` in /var/local/sweet-orient): tests no longer need a finger.
