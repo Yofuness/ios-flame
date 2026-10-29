@@ -240,7 +240,8 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	pm_rd(l3 + 8 * (((iova + len - 1) >> 12) & 0x1ff), &r3b, 8);
 	uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
 	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | page) && r3b == ((pa + len - 0x1000) | page) &&
-		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == tcr && (rd32(cbp + 0x10) & 7) == (tcr2 & 7) &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == sctlr &&
+		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == tcr && (rd32(cbp + 0x10) & 7) == (tcr2 & 7) &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */
+		 (rd32(cbp) & ~0x1000u) == (sctlr & ~0x1000u) &&	/* SCTLR.HUPCF (bit 12) reads 0 here (au8) */
 		 rd32(gr1 + 4 * cb) == cbar;
 	printf("smmu: %s: CB%d tables %llx: TTBR0 %llx TCR %08x TCR2 %08x SCTLR %08x CBAR %08x; L3 first %llx last %llx"
 	       " -> %s\n", name, cb, (unsigned long long)tbl, (unsigned long long)ttbr, rd32(cbp + 0x30),
