@@ -4,6 +4,7 @@
  * points at and nobody set up; never changes an existing SMR (an overlapping one is reported, not touched).
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include "pmem.h"
 #include "smmu.h"
 
@@ -99,6 +100,14 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
  */
 #define T_SCTLR		0x00000061u	/* M | CFRE | CFIE; CFCFG 0: terminate on fault */
 #define T_TCR		(32u | (1u << 23))	/* T0SZ 32, EPD1; walks non-cacheable, 4 KB granule */
+/*
+ * audio step 6: the DSP puts the stream into address bits 33:32 (IOVA | 3<<32 = 0x380000000), which is outside a
+ * 32-bit input space: CB13 took a translation fault at the first access. So a 39-bit space (T0SZ 25, still walking
+ * from level 1, as the SM7150 reference's TCR 0x00803619) with the 1 GB L1 slot mapped at both IOVA and IOVA|3<<32.
+ * SMMU_T0SZ32=1 in the environment goes back to the 32-bit space.
+ */
+#define T_TCR39		(25u | (1u << 23))
+#define T_ALIAS		(3ull << 32)
 #define T_TCR2		0x00000002u	/* PASize 40 bits */
 #define T_MAIR0		0x00000044u	/* attr 0: normal non-cacheable */
 #define T_PAGE		((1ull << 10) | (1ull << 6) | 3)	/* AF | AP 01 (EL0/EL1 RW) | page */
@@ -168,6 +177,9 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 		       (T_PAGE >> 10) & 1 ? "set" : "MISSING");
 		return 0;
 	}
+	int t39 = !getenv("SMMU_T0SZ32");	/* audio step 6 */
+	uint32_t tcr = t39 ? T_TCR39 : T_TCR;
+	unsigned l1i = (unsigned)((iova >> 30) & (t39 ? 0x1ff : 3)), l1a = (unsigned)(((iova | T_ALIAS) >> 30) & 0x1ff);
 	uint64_t asid = (uint64_t)cb << 48;	/* audio step 2: ASID = bank number, as the SM7150 reference */
 	uint64_t tbl = pm_alloc(3 * 0x1000, 0x1000);
 	if (!tbl) {
@@ -176,7 +188,9 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	}
 	uint64_t l1 = tbl, l2 = tbl + 0x1000, l3 = tbl + 0x2000, d;
 	d = l2 | 3;
-	pm_wr(l1 + 8 * ((iova >> 30) & 3), &d, 8);
+	pm_wr(l1 + 8 * l1i, &d, 8);
+	if (t39)
+		pm_wr(l1 + 8 * l1a, &d, 8);		/* audio step 6: the IOVA|3<<32 alias, same L2 */
 	d = l3 | 3;
 	pm_wr(l2 + 8 * ((iova >> 21) & 0x1ff), &d, 8);
 	for (uint64_t o = 0; o < len; o += 0x1000) {
@@ -188,7 +202,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	wr32(cbp + 0x58, 0xffffffff);			/* FSR: clear */
 	wr64(cbp + 0x20, l1 | asid);			/* TTBR0 */
 	wr64(cbp + 0x28, 0);				/* TTBR1 */
-	wr32(cbp + 0x30, T_TCR);
+	wr32(cbp + 0x30, tcr);
 	wr32(cbp + 0x10, T_TCR2);
 	wr32(cbp + 0x38, T_MAIR0);
 	wr32(cbp + 0x3c, 0);
@@ -201,13 +215,18 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 		delay_ms(1);
 	wr32(cbp, T_SCTLR);				/* SCTLR last */
 	uint64_t r1 = 0, r2 = 0, r3a = 0, r3b = 0;
-	pm_rd(l1 + 8 * ((iova >> 30) & 3), &r1, 8);
+	pm_rd(l1 + 8 * l1i, &r1, 8);
+	if (t39) {
+		uint64_t ra = 0;
+		pm_rd(l1 + 8 * l1a, &ra, 8);
+		r1 = ra == r1 ? r1 : 0;
+	}
 	pm_rd(l2 + 8 * ((iova >> 21) & 0x1ff), &r2, 8);
 	pm_rd(l3 + 8 * ((iova >> 12) & 0x1ff), &r3a, 8);
 	pm_rd(l3 + 8 * (((iova + len - 1) >> 12) & 0x1ff), &r3b, 8);
 	uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
 	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | T_PAGE) && r3b == ((pa + len - 0x1000) | T_PAGE) &&
-		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == T_TCR && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
+		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == tcr && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
 		 rd32(gr1 + 4 * cb) == CB_CBAR;
 	printf("smmu: %s: CB%d tables %llx: TTBR0 %llx TCR %08x TCR2 %08x SCTLR %08x CBAR %08x; L3 first %llx last %llx"
 	       " -> %s\n", name, cb, (unsigned long long)tbl, (unsigned long long)ttbr, rd32(cbp + 0x30),
@@ -257,4 +276,44 @@ void smmu_status(const char *name, uint32_t sid)
 	printf("smmu: sGFSR %08x sGFSYNR0 %08x sGFSYNR1 %08x sGFAR %08x%08x sCR0 %08x\n", rd32(s + 0x48), rd32(s + 0x50),
 	       rd32(s + 0x54), rd32(s + 0x44), rd32(s + 0x40), rd32(s));
 	smmu_faults(name, sid);
+}
+
+/* audio step 6: read-only: the registers of SID's bank and the table entries walked for IOVA (TTBR0 read back). */
+void smmu_dump(const char *name, uint32_t sid, uint64_t iova)
+{
+	uint64_t s = SMMU_PA;
+	uint32_t id0 = rd32(s + 0x20), id1 = rd32(s + 0x24), nsmr = id0 & 0xff;
+	uint32_t psize = (id1 >> 31) ? 0x10000 : 0x1000, npage = 1u << (((id1 >> 28) & 7) + 1);
+	for (uint32_t i = 0; i < nsmr && i < 128; i++) {
+		if ((rd32(s + 0x800 + 4 * i) & 0x80007fffu) != (0x80000000u | sid))
+			continue;
+		uint32_t cb = rd32(s + 0xc00 + 4 * i) & 0xff, tcr;
+		uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize, gr1 = s + psize;
+		uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
+		tcr = rd32(cbp + 0x30);
+		printf("smmu: %s %#x CB%u: SCTLR %08x TCR %08x TCR2 %08x MAIR0 %08x TTBR0 %llx CBAR %08x CBA2R %08x\n",
+		       name, sid, cb, rd32(cbp), tcr, rd32(cbp + 0x10), rd32(cbp + 0x38), (unsigned long long)ttbr,
+		       rd32(gr1 + 4 * cb), rd32(gr1 + 0x800 + 4 * cb));
+		uint32_t t0sz = tcr & 0x3f;
+		if (!(rd32(cbp) & 1) || t0sz < 25 || t0sz > 33) {
+			printf("smmu: %s: no walk (translation off or T0SZ %u)\n", name, t0sz);
+			return;
+		}
+		/* 4 KB granule, start level 1 for T0SZ 25..33 */
+		uint64_t t = ttbr & 0xfffffffff000ull, d = 0;
+		for (int lv = 1; lv <= 3; lv++) {
+			unsigned idx = (unsigned)((iova >> (39 - 9 * lv)) & 0x1ff);
+			if (lv == 1)
+				idx = (unsigned)((iova >> 30) & ((1u << (34 - t0sz)) - 1));	/* 64 - T0SZ - 30 index bits */
+			d = 0;
+			pm_rd(t + 8 * idx, &d, 8);
+			printf("smmu: %s walk %llx: L%d[%u] @%llx = %016llx\n", name, (unsigned long long)iova, lv, idx,
+			       (unsigned long long)(t + 8 * idx), (unsigned long long)d);
+			if ((d & 3) != 3)
+				return;
+			t = d & 0xfffffffff000ull;
+		}
+		return;
+	}
+	printf("smmu: %s %#x: no SMR\n", name, sid);
 }

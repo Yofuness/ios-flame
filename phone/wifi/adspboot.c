@@ -16,6 +16,7 @@
  *   adspboot boot --rpc --root --unsafe  attach to the root PD only (pd 0, one 4 KB page), print the reply and
  *                     the SMMU fault state (audio step 5)
  *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
+ *                 [--dump]  + the bank's registers and the table walk for 0x80000000 and 0x380000000
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
  *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
@@ -876,7 +877,7 @@ int main(int argc, char **argv)
 	printf("adsp: smem ok\n");
 	int watch = 20, early = 1, smmu = 0, unsafe = 0, i;
 	uint32_t sid = 0, mask = 0;
-	int one = 0, sstatus = 0;
+	int one = 0, sstatus = 0, sdump = 0;
 	const char *cmd = "boot";
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
@@ -893,6 +894,8 @@ int main(int argc, char **argv)
 			rpc_on = smmu = 1;
 		else if (!strcmp(argv[i], "--status"))
 			sstatus = 1;
+		else if (!strcmp(argv[i], "--dump"))
+			sdump = 1;
 		else if (!strcmp(argv[i], "--root"))
 			fastrpc_root(1);
 		else if (!strcmp(argv[i], "--dry"))
@@ -920,6 +923,10 @@ int main(int argc, char **argv)
 	}
 	if (!strcmp(cmd, "smmu") && sstatus) {
 		smmu_status("ADSP rpc", 0x1b23);
+		if (sdump) {	/* audio step 6 */
+			smmu_dump("ADSP rpc", 0x1b23, 0x80000000ull);
+			smmu_dump("ADSP rpc", 0x1b23, 0x380000000ull);
+		}
 		return 0;
 	}
 	if (!strcmp(cmd, "smmu"))
