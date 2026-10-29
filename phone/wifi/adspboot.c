@@ -13,8 +13,9 @@
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
  *                     summary at the end. Implies --smmu; the FastRPC streams then go through a translating bank
  *                     (32-bit IOVA 0x80000000 -> a pm_alloc buffer). `adspboot smmu --rpc --dry` shows that plan.
- *   adspboot boot --rpc --root --unsafe  attach to the root PD only (pd 0, one 4 KB page), print the reply and
- *                     the SMMU fault state (audio step 5)
+ *   adspboot boot --rpc --root --unsafe  attach to the root PD (pd 0), print the reply and the SMMU fault state
+ *                     (audio step 5), then serve its listener (apps_std files, step 6) for --watch seconds
+ *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
  *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
  *                 [--dump]  + the bank's registers and the table walk for 0x80000000 and 0x380000000
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
@@ -877,7 +878,7 @@ int main(int argc, char **argv)
 	printf("adsp: smem ok\n");
 	int watch = 20, early = 1, smmu = 0, unsafe = 0, i;
 	uint32_t sid = 0, mask = 0;
-	int one = 0, sstatus = 0, sdump = 0;
+	int one = 0, sstatus = 0, sdump = 0, root = 0, sensors = 0;
 	const char *cmd = "boot";
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
@@ -897,7 +898,9 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--dump"))
 			sdump = 1;
 		else if (!strcmp(argv[i], "--root"))
-			fastrpc_root(1);
+			fastrpc_root(root = 1);
+		else if (!strcmp(argv[i], "--sensors"))
+			sensors = 1;
 		else if (!strcmp(argv[i], "--dry"))
 			smmu_dry = 1;
 		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
@@ -908,6 +911,11 @@ int main(int argc, char **argv)
 		else
 			cmd = argv[i];
 	}
+	if (sensors && !root) {	/* step 6: the sensors PD after the root PD needs the root session */
+		fprintf(stderr, "adspboot: --sensors needs --rpc --root\n");
+		return 2;
+	}
+	fastrpc_sensors(sensors);
 	if (!strcmp(cmd, "status"))
 		return status();
 	if (!strcmp(cmd, "shutdown")) {
@@ -932,7 +940,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

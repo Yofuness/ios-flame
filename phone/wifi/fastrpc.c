@@ -47,6 +47,10 @@
 #define VENDOR_SNS	"/vendor/etc/sensors"
 #define VENDOR_DIR	"/var/local/fw/sensors"
 #define PERSIST_DIR	"/var/local/sensors-persist"
+/* step 6: the DSP's libraries (ADSP_LIBRARY_PATH dirs) and /sys/devices/soc0 (the reference serves the phone's own
+ * soc0 files, nothing synthesized) */
+#define DSP_DIR		"/var/local/fw/dsp"
+#define SOC0_DIR	"/var/local/fw/soc0"
 
 /* Reverse handles we hand out from apps_remotectl open. guess: any nonzero value works (quic uses table ids). */
 #define RH_APPS_STD	0x11
@@ -63,27 +67,37 @@ struct rarg {
 	void *p;
 	uint32_t len;
 };
-
 static fastrpc_send_fn tx;
 static uint64_t dma_pa, dsp_base;
 static uint8_t meta[DMA_SIZE];
 static uint32_t tgid, seq;
-static int state;	/* 0 off, 1 attach, 2 remotectl open, 3 register, 4 init2, 5 next2 loop, 6 dead */
-static uint64_t cur_ctx;
-static uint32_t cur_sc, out_off[MAXARGS];
-static struct rarg cur[MAXARGS];
-static uint32_t listener_h;
-static int root_mode;	/* audio step 5: attach to the root PD (pd 0) only, report, stop */
+static int root_mode;	/* audio step 5: attach to the root PD (pd 0); step 6: then serve its listener */
+static int sns_too;	/* audio step 6 (--sensors): once the root listener serves, attach the sensors PD as well */
 
-/* next2 state */
-static uint32_t n2_in[4], n2_out[4];
-static uint8_t n2_bufs[BUFS_LEN], obuf[OBUF_MAX];
-static uint32_t obuf_len, prev_ctx;
-static int prev_result = -1, n2_retry;
+/* One FastRPC session (one PD). Step 6: the root PD and the sensors PD run side by side as in the SM7150
+ * reference (rootpd + sensorspd of hexagonrpcd), each in its own half of the DMA buffer; files are shared. */
+struct sess {
+	const char *name;
+	uint32_t pd, client, size, ctxn, ctxbase;
+	uint64_t pa, dsp;
+	int state;	/* 0 off, 1 attach, 2 remotectl open, 3 register, 4 init2, 5 next2 loop, 6 dead */
+	uint64_t cur_ctx;
+	uint32_t cur_sc, out_off[MAXARGS];
+	struct rarg cur[MAXARGS];
+	uint32_t listener_h;
+	/* next2 state */
+	uint32_t n2_in[4], n2_out[4];
+	uint8_t n2_bufs[BUFS_LEN], obuf[OBUF_MAX];
+	uint32_t obuf_len, prev_ctx, calls;
+	int prev_result, n2_retry;
+};
+static struct sess s_root = { .name = "root PD", .pd = 0, .ctxbase = 0, .prev_result = -1 },
+		   s_sns = { .name = "sensors PD", .pd = PD_SENSORS, .ctxbase = 127, .prev_result = -1 };
 
 /* summary */
 static unsigned n_std[40], n_ctl, n_other, n_err, n_files;
-static char files[32][96];
+static char files[32][96], missing[32][96];
+static unsigned n_missing, quiet_missing;
 
 static const char *std_name[] = { "fopen", "freopen", "fflush", "fclose", "fread", "fwrite", "fgetpos", "fsetpos",
 	"ftell", "fseek", "flen", "rewind", "feof", "ferror", "clearerr", "print_string", "getenv", "setenv",
@@ -108,7 +122,7 @@ static void dev_rd(uint64_t pa, void *p, uint32_t len)
 
 /* ---- forward invoke: everything (metadata + copies of all buffers) in one pm_alloc buffer, PA = DSP address ---- */
 
-static int invoke(uint32_t handle, uint32_t sc, struct rarg *a)
+static int invoke(struct sess *s, uint32_t handle, uint32_t sc, struct rarg *a)
 {
 	uint32_t n = SC_IN(sc) + SC_OUT(sc);
 	if (n > MAXARGS)
@@ -122,45 +136,48 @@ static int invoke(uint32_t handle, uint32_t sc, struct rarg *a)
 		uint64_t pv = 0, len = a[i].len, pp[2] = { 0, 0 };
 		if (a[i].len) {
 			off = align(off, BALIGN);
-			if (off + a[i].len > DMA_SIZE)
+			if (off + a[i].len > s->size)
 				return -1;
-			pv = dsp_base + off;	/* guess: downstream puts its kernel VA here; the DSP only needs the page offset */
+			pv = s->dsp + off;	/* guess: downstream puts its kernel VA here; the DSP only needs the page offset */
 			pp[0] = pv & ~0xfffull;
 			pp[1] = (((pv + len - 1) >> 12) - (pv >> 12) + 1) << 12;
 			if (i < SC_IN(sc))
 				memcpy(meta + off, a[i].p, a[i].len);
 			else
 				memset(meta + off, 0, a[i].len);
-			out_off[i] = off;
+			s->out_off[i] = off;
 			off += a[i].len;
 		}
 		uint64_t r[2] = { pv, len };
 		memcpy(rpra + 16 * i, r, 16);
 		memcpy(pages + 16 * i, pp, 16);
 	}
-	if (pm_wr(dma_pa, meta, align(off, 4)))
+	if (pm_wr(s->pa, meta, align(off, 4)))
 		return -1;
 	seq++;
-	cur_ctx = root_mode ? (uint64_t)(seq % 255 + 1) << 4 :	/* step 5: n << 4 | pd, as the SM7150 reference */
-		  ((uint64_t)seq << 12) | (1u << 4);	/* downstream: (ctx ptr & ~0xfff) | (table index << 4) */
-	cur_sc = sc;
+	/* step 5: n << 4 | pd, as the SM7150 reference; step 6: root n 1..127, sensors 128..254 so the replies of
+	 * the two sessions never share a context */
+	s->ctxn = s->ctxn % 127 + 1;
+	s->cur_ctx = root_mode ? (uint64_t)(s->ctxbase + s->ctxn) << 4 | s->pd :
+		     ((uint64_t)seq << 12) | (1u << 4) | PD_SENSORS;	/* downstream: (ctx ptr & ~0xfff) | (index << 4) */
+	s->cur_sc = sc;
 	if (n)
-		memcpy(cur, a, n * sizeof(*a));
-	/* guess: downstream sends pid 0 for kernel-originated invokes (the attach); we use tgid for all user ones */
-	struct smq_msg m = { state == 1 ? 0 : tgid, tgid, cur_ctx | (root_mode ? 0 : PD_SENSORS), handle, sc, dsp_base,
+		memcpy(s->cur, a, n * sizeof(*a));
+	/* guess: downstream sends pid 0 for kernel-originated invokes (the attach); we use the client for user ones */
+	struct smq_msg m = { s->state == 1 ? 0 : s->client, s->client, s->cur_ctx, handle, sc, s->dsp,
 			     align(off, 4096) };
-	printf("rpc: -> h %u m %u in %u out %u (sc %08x) ctx %llx, %u bytes\n", handle, SC_METHOD(sc), SC_IN(sc),
+	printf("rpc: %s -> h %u m %u in %u out %u (sc %08x) ctx %llx, %u bytes\n", s->name, handle, SC_METHOD(sc), SC_IN(sc),
 	       SC_OUT(sc), sc, (unsigned long long)m.ctx, off);
 	tx(&m, sizeof(m));
 	return 0;
 }
 
 /* Copy the out buffers back from the DMA buffer. */
-static void fetch_outs(void)
+static void fetch_outs(struct sess *s)
 {
-	for (uint32_t i = SC_IN(cur_sc); i < SC_IN(cur_sc) + SC_OUT(cur_sc); i++)
-		if (cur[i].len)
-			dev_rd(dma_pa + out_off[i], cur[i].p, cur[i].len);
+	for (uint32_t i = SC_IN(s->cur_sc); i < SC_IN(s->cur_sc) + SC_OUT(s->cur_sc); i++)
+		if (s->cur[i].len)
+			dev_rd(s->pa + s->out_off[i], s->cur[i].p, s->cur[i].len);
 }
 
 /* ---- apps_std ---- */
@@ -189,9 +206,40 @@ static int map_path(const char *in, char *out, size_t sz, int *w)
 		snprintf(out, sz, PERSIST_DIR "%s", rest);
 		*w = 1;
 	} else {
+		/* step 6: DSP library dirs -> DSP_DIR, soc0 -> SOC0_DIR */
+		static const char *libs[] = { "/vendor/dsp", "/usr/lib/qcom/adsp", "/vendor/lib/rfsa/adsp", "/dsp" };
+		for (unsigned i = 0; i < sizeof(libs) / sizeof(libs[0]); i++)
+			if (under(in, libs[i])) {
+				snprintf(out, sz, DSP_DIR "%s", in + strlen(libs[i]));
+				return 0;
+			}
+		if (under(in, "/sys/devices/soc0")) {
+			snprintf(out, sz, SOC0_DIR "%s", in + strlen("/sys/devices/soc0"));
+			return 0;
+		}
+		if (in[0] && in[0] != '/') {	/* the reference: relative names are under ADSP_LIBRARY_PATH */
+			snprintf(out, sz, DSP_DIR "/%s", in);
+			return 0;
+		}
+		static unsigned n_unmapped;
+		if (n_unmapped++ < 40)
+			printf("rpc: unmapped DSP path \"%s\"\n", in);
 		return ENOENT;
 	}
 	return 0;
+}
+
+/* step 6: remember a path the DSP wanted and did not get (summary) */
+static void note_missing(const char *name)
+{
+	if (quiet_missing)
+		return;
+	for (unsigned i = 0; i < n_missing && i < 32; i++)
+		if (!strcmp(missing[i], name))
+			return;
+	if (n_missing < 32)
+		snprintf(missing[n_missing], sizeof(missing[0]), "%s", name);
+	n_missing++;
 }
 
 /* mkdir -p for the parent dirs of path (only below PERSIST_DIR). */
@@ -235,8 +283,10 @@ static int do_fopen(const char *name, const char *mode, struct rarg *ro)
 	int e = map_path(name, path, sizeof(path), &w);
 	if (!e && wantw && !w)
 		e = EROFS;
-	if (e)
+	if (e) {
+		note_missing(name);
 		return e;
+	}
 	if (wantw)
 		mkparents(path);
 	int fd;
@@ -245,8 +295,10 @@ static int do_fopen(const char *name, const char *mode, struct rarg *ro)
 	if (fd >= 32)
 		return EMFILE;
 	FILE *f = fopen(path, mode);
-	if (!f)
+	if (!f) {
+		note_missing(name);
 		return errno ? errno : AEE_EFAILED;
+	}
 	ftab[fd] = f;
 	if (n_files < 32)
 		snprintf(files[n_files], sizeof(files[0]), "%s", name);
@@ -264,7 +316,7 @@ static int search_env(const char *env, char *val, size_t sz)
 {
 	/* guess: only ADSP_LIBRARY_PATH is set, to what adsprpcd uses on Android; others unset */
 	if (!strcmp(env, "ADSP_LIBRARY_PATH")) {
-		snprintf(val, sz, "/vendor/lib/rfsa/adsp;/vendor/dsp/sensorspd;/vendor/dsp");
+		snprintf(val, sz, "/vendor/lib/rfsa/adsp;/vendor/dsp/sensorspd;/vendor/dsp;/usr/lib/qcom/adsp;/dsp");
 		return 0;
 	}
 	return -1;
@@ -309,11 +361,15 @@ static int apps_std(uint32_t sc, struct rarg *a)
 			r = do_fopen(n, m, &a[5]);
 			break;
 		}
+		quiet_missing = 1;	/* step 6: one missing entry per name, not one per search dir */
 		for (char *s = strtok(val, d[0] ? d : ";"); s && r; s = strtok(NULL, d[0] ? d : ";")) {
 			char full[256];
 			snprintf(full, sizeof(full), "%s/%s", s, n);
 			r = do_fopen(full, m, &a[5]);
 		}
+		quiet_missing = 0;
+		if (r)
+			note_missing(n);
 		break;
 	}
 	case 2: case 3: case 11: case 23: {	/* fflush / fclose / rewind / fsync: in {fd} */
@@ -480,6 +536,8 @@ static int apps_std(uint32_t sc, struct rarg *a)
 		}
 		snprintf(what, sizeof(what), "%s", n);
 		r = map_path(n, path, sizeof(path), &w);
+		if (r && mid != 22)
+			note_missing(n);
 		if (mid == 22) {	/* out {bool} */
 			struct stat st;
 			if (nout == 1 && a[2].len)
@@ -511,6 +569,7 @@ static int apps_std(uint32_t sc, struct rarg *a)
 			struct stat st;
 			if (stat(path, &st)) {
 				r = errno;
+				note_missing(n);
 				break;
 			}
 			uint64_t s[12] = { 96, (uint64_t)st.st_dev, (uint64_t)st.st_ino,
@@ -569,8 +628,13 @@ static int apps_std(uint32_t sc, struct rarg *a)
 		r = AEE_EUNSUPPORTED;
 		snprintf(what, sizeof(what), "unsupported (in %u out %u)", nin, nout);
 	}
-	printf("rpc: <- apps_std.%s %s -> %d\n", mid < sizeof(std_name) / sizeof(std_name[0]) ? std_name[mid] : "?",
-	       what, r);
+	/* step 6: the first 60 of each method, then the summary's counts only */
+	if (mid >= 40 || n_std[mid] <= 60)
+		printf("rpc: apps_std %s %s -> %d\n", mid < sizeof(std_name) / sizeof(std_name[0]) ? std_name[mid] : "?",
+		       what, r);
+	else if (n_std[mid] == 61)
+		printf("rpc: apps_std %s: more calls, not logged\n",
+		       mid < sizeof(std_name) / sizeof(std_name[0]) ? std_name[mid] : "?");
 	return r;
 }
 
@@ -613,29 +677,30 @@ static int dispatch(uint32_t h, uint32_t sc, struct rarg *a)
 
 /* ---- the listener loop: adsp_listener_next2 (handle 3, method 4, in 2 out 2) ---- */
 
-static void next2(void)
+static void next2(struct sess *s)
 {
-	n2_in[0] = prev_ctx;
-	n2_in[1] = (uint32_t)prev_result;
-	n2_in[2] = prev_result ? 0 : obuf_len;	/* quic: no out bufs with an error result */
-	n2_in[3] = BUFS_LEN;
-	struct rarg a[4] = { { n2_in, 16 }, { obuf, n2_in[2] }, { n2_out, 16 }, { n2_bufs, BUFS_LEN } };
-	if (invoke(H_LISTENER, SC_MAKE(4, 2, 2), a))
-		state = 6;
+	s->n2_in[0] = s->prev_ctx;
+	s->n2_in[1] = (uint32_t)s->prev_result;
+	s->n2_in[2] = s->prev_result ? 0 : s->obuf_len;	/* quic: no out bufs with an error result */
+	s->n2_in[3] = BUFS_LEN;
+	struct rarg a[4] = { { s->n2_in, 16 }, { s->obuf, s->n2_in[2] }, { s->n2_out, 16 }, { s->n2_bufs, BUFS_LEN } };
+	if (invoke(s, H_LISTENER, SC_MAKE(4, 2, 2), a))
+		s->state = 6;
 }
 
 /* Unpack the DSP's packed in bufs + out lens (quic listener_buf.h), run it, pack the out bufs for the reply. */
-static void serve(void)
+static void serve(struct sess *s)
 {
-	uint32_t ctx = n2_out[0], h = n2_out[1], sc = n2_out[2], req = n2_out[3];
+	uint32_t ctx = s->n2_out[0], h = s->n2_out[1], sc = s->n2_out[2], req = s->n2_out[3];
 	uint32_t nin = SC_IN(sc), nout = SC_OUT(sc), o = 0;
 	struct rarg a[MAXARGS];
 	int r = 0;
-	prev_ctx = ctx;
-	obuf_len = 0;
+	s->prev_ctx = ctx;
+	s->obuf_len = 0;
+	s->calls++;
 	if (req > BUFS_LEN || nin + nout > MAXARGS || SC_HANDLES(sc)) {
-		printf("rpc: <- ctx %x h %x sc %08x: in bufs %u bytes / handles: refused\n", ctx, h, sc, req);
-		prev_result = AEE_EBADPARM;
+		printf("rpc: %s <- ctx %x h %x sc %08x: in bufs %u bytes / handles: refused\n", s->name, ctx, h, sc, req);
+		s->prev_result = AEE_EBADPARM;
 		n_err++;
 		return;
 	}
@@ -645,13 +710,13 @@ static void serve(void)
 			r = AEE_EBADPARM;
 			break;
 		}
-		memcpy(&l, n2_bufs + o, 4);
+		memcpy(&l, s->n2_bufs + o, 4);
 		o += 4;
 		if (l)
 			o = align(o, 8);
 		if (o + l > req)
 			r = AEE_EBADPARM;
-		a[i].p = n2_bufs + o;
+		a[i].p = s->n2_bufs + o;
 		a[i].len = l;
 		o += l;
 	}
@@ -662,13 +727,13 @@ static void serve(void)
 			r = AEE_EBADPARM;
 			break;
 		}
-		memcpy(&l, n2_bufs + o, 4);
+		memcpy(&l, s->n2_bufs + o, 4);
 		o += 4;
 		if (w + 4 > OBUF_MAX) {
 			r = AEE_EBADPARM;
 			break;
 		}
-		memcpy(obuf + w, &l, 4);
+		memcpy(s->obuf + w, &l, 4);
 		w += 4;
 		if (l)
 			w = align(w, 8);
@@ -676,20 +741,111 @@ static void serve(void)
 			r = AEE_EBADPARM;
 			break;
 		}
-		memset(obuf + w, 0, l);
-		a[nin + i].p = obuf + w;
+		memset(s->obuf + w, 0, l);
+		a[nin + i].p = s->obuf + w;
 		a[nin + i].len = l;
 		w += l;
 	}
 	if (r) {
-		printf("rpc: <- ctx %x h %x sc %08x: bad packing (%u bytes)\n", ctx, h, sc, req);
+		printf("rpc: %s <- ctx %x h %x sc %08x: bad packing (%u bytes)\n", s->name, ctx, h, sc, req);
 	} else {
 		r = dispatch(h, sc, a);
-		obuf_len = w;
+		s->obuf_len = w;
 	}
 	if (r)
 		n_err++;
-	prev_result = r;
+	s->prev_result = r;
+}
+
+static void sess_attach(struct sess *s)
+{
+	static uint32_t t[2];
+	uint32_t *tp = &t[s == &s_sns];
+	*tp = s->client;
+	s->state = 1;
+	printf("rpc: attaching to the %s (pd %u, client %u, DSP %llx+%x)\n", s->name, s->pd, s->client,
+	       (unsigned long long)s->dsp, s->size);
+	struct rarg a[1] = { { tp, 4 } };
+	if (invoke(s, H_PROCESS_GROUP, SC_MAKE(0, 1, 0), a))
+		s->state = 6;
+}
+
+/* One reply for session s: the attach -> remotectl open -> register -> init2 -> next2 loop. */
+static void sess_rx(struct sess *s, int32_t ret)
+{
+	switch (s->state) {
+	case 1: {	/* attach done: remotectl_open("adsp_default_listener") */
+		if (s == &s_root && root_mode) {
+			printf("rpc: root PD attach -> %d\n", ret);
+			smmu_status("ADSP rpc", 0x1b23);
+		}
+		if (ret) {
+			printf("rpc: %s attach failed (%d)\n", s->name, ret);
+			s->state = 6;
+			return;
+		}
+		static char name[] = "adsp_default_listener", dlerr[256];
+		static uint32_t pin[2], pout[2][2];
+		uint32_t *po = pout[s == &s_sns];
+		pin[0] = sizeof(name);
+		pin[1] = sizeof(dlerr);
+		/* name, pin and dlerr are only read at the invoke (copied into the DMA buffer): sharing them is fine */
+		struct rarg a[4] = { { pin, 8 }, { name, sizeof(name) }, { po, 8 }, { dlerr, sizeof(dlerr) } };
+		s->state = 2;
+		invoke(s, H_REMOTECTL, SC_MAKE(0, 2, 2), a);
+		return;
+	}
+	case 2: {
+		uint32_t *pout = s->cur[2].p;
+		s->listener_h = pout[0];
+		printf("rpc: %s remotectl_open adsp_default_listener -> ret %d handle %x nErr %d%s%.64s\n", s->name, ret,
+		       pout[0], (int)pout[1], ret ? " dlerror " : "", ret ? (char *)s->cur[3].p : "");
+		if (ret || pout[1]) {
+			s->state = 6;
+			return;
+		}
+		s->state = 3;
+		/* guess: adsp_default_listener_register = method 0 on the opened handle, no args */
+		invoke(s, s->listener_h, SC_MAKE(0, 0, 0), NULL);
+		return;
+	}
+	case 3:
+		printf("rpc: %s adsp_default_listener_register -> %d\n", s->name, ret);
+		if (ret) {
+			s->state = 6;
+			return;
+		}
+		s->state = 4;
+		invoke(s, H_LISTENER, SC_MAKE(3, 0, 0), NULL);	/* adsp_listener_init2 */
+		return;
+	case 4:
+		printf("rpc: %s adsp_listener_init2 -> %d\n", s->name, ret);
+		if (ret) {
+			s->state = 6;
+			return;
+		}
+		s->state = 5;
+		next2(s);
+		/* step 6: the sensors PD only once the root listener serves (reference: else its watchdog kills the DSP) */
+		if (s == &s_root && sns_too && !s_sns.state)
+			sess_attach(&s_sns);
+		return;
+	case 5:
+		if (ret) {	/* quic: retry once with the error as the result, then give up */
+			if (s->n2_retry++) {
+				printf("rpc: %s next2 failed twice (%d): listener stops\n", s->name, ret);
+				s->state = 6;
+				return;
+			}
+			s->prev_result = ret;
+			next2(s);
+			return;
+		}
+		s->n2_retry = 0;
+		serve(s);
+		next2(s);
+		return;
+	}
 }
 
 void fastrpc_rx(const void *p, size_t n)
@@ -702,89 +858,29 @@ void fastrpc_rx(const void *p, size_t n)
 	}
 	memcpy(&ctx, p, 8);
 	memcpy(&ret, (const uint8_t *)p + 8, 4);
-	if ((ctx & ~3ull) != (cur_ctx & ~3ull)) {	/* downstream compares rsp->ctx & ~3 */
-		printf("rpc: rx for ctx %llx (waiting for %llx), dropped\n", (unsigned long long)ctx,
-		       (unsigned long long)cur_ctx);
+	/* downstream compares rsp->ctx & ~3 */
+	struct sess *s = s_root.state && (ctx & ~3ull) == (s_root.cur_ctx & ~3ull) ? &s_root :
+			 s_sns.state && (ctx & ~3ull) == (s_sns.cur_ctx & ~3ull) ? &s_sns : NULL;
+	if (!s) {
+		printf("rpc: rx for ctx %llx (waiting for %llx / %llx), dropped\n", (unsigned long long)ctx,
+		       (unsigned long long)s_root.cur_ctx, (unsigned long long)s_sns.cur_ctx);
 		return;
 	}
-	printf("rpc: <- rsp ctx %llx ret %d (%zu bytes)\n", (unsigned long long)ctx, ret, n);
+	if (s->state != 5 || s->calls < 200)	/* cap the per-request lines of a long serve */
+		printf("rpc: %s <- rsp ctx %llx ret %d (%zu bytes)\n", s->name, (unsigned long long)ctx, ret, n);
 	if (!ret)
-		fetch_outs();
-	if (root_mode && state == 1) {	/* step 5: report the reply and the SMMU state, nothing more */
-		printf("rpc: root PD attach -> %d\n", ret);
-		smmu_status("ADSP rpc", 0x1b23);
-		state = 6;
-		return;
-	}
-	switch (state) {
-	case 1: {	/* attach done: remotectl_open("adsp_default_listener") */
-		if (ret) {
-			printf("rpc: sensors PD attach failed (%d)\n", ret);
-			state = 6;
-			return;
-		}
-		static char name[] = "adsp_default_listener", dlerr[256];
-		static uint32_t pin[2], pout[2];
-		pin[0] = sizeof(name);
-		pin[1] = sizeof(dlerr);
-		struct rarg a[4] = { { pin, 8 }, { name, sizeof(name) }, { pout, 8 }, { dlerr, sizeof(dlerr) } };
-		state = 2;
-		invoke(H_REMOTECTL, SC_MAKE(0, 2, 2), a);
-		return;
-	}
-	case 2: {
-		uint32_t *pout = cur[2].p;
-		listener_h = pout[0];
-		printf("rpc: remotectl_open adsp_default_listener -> ret %d handle %x nErr %d%s%.64s\n", ret, pout[0],
-		       (int)pout[1], ret ? " dlerror " : "", ret ? (char *)cur[3].p : "");
-		if (ret || pout[1]) {
-			state = 6;
-			return;
-		}
-		state = 3;
-		/* guess: adsp_default_listener_register = method 0 on the opened handle, no args */
-		invoke(listener_h, SC_MAKE(0, 0, 0), NULL);
-		return;
-	}
-	case 3:
-		printf("rpc: adsp_default_listener_register -> %d\n", ret);
-		if (ret) {
-			state = 6;
-			return;
-		}
-		state = 4;
-		invoke(H_LISTENER, SC_MAKE(3, 0, 0), NULL);	/* adsp_listener_init2 */
-		return;
-	case 4:
-		printf("rpc: adsp_listener_init2 -> %d\n", ret);
-		if (ret) {
-			state = 6;
-			return;
-		}
-		state = 5;
-		next2();
-		return;
-	case 5:
-		if (ret) {	/* quic: retry once with the error as the result, then give up */
-			if (n2_retry++) {
-				printf("rpc: next2 failed twice (%d): listener stops\n", ret);
-				state = 6;
-				return;
-			}
-			prev_result = ret;
-			next2();
-			return;
-		}
-		n2_retry = 0;
-		serve();
-		next2();
-		return;
-	}
+		fetch_outs(s);
+	sess_rx(s, ret);
 }
 
 void fastrpc_root(int on)
 {
 	root_mode = on;
+}
+
+void fastrpc_sensors(int on)
+{
+	sns_too = on;
 }
 
 void fastrpc_buffer(uint64_t pa, uint64_t dsp)
@@ -803,23 +899,39 @@ int fastrpc_start(fastrpc_send_fn send)
 	if (!dsp_base)
 		dsp_base = dma_pa;
 	tgid = (uint32_t)getpid();
-	printf("rpc: DMA buffer %llx+%x (DSP sees %llx), tgid %u, attaching to the %s PD (pd %u)\n",
+	printf("rpc: DMA buffer %llx+%x (DSP sees %llx), tgid %u, attaching to the %s PD (pd %u)%s\n",
 	       (unsigned long long)dma_pa, DMA_SIZE, (unsigned long long)dsp_base, tgid, root_mode ? "root" : "sensors",
-	       root_mode ? 0 : PD_SENSORS);
+	       root_mode ? 0 : PD_SENSORS, sns_too ? ", then the sensors PD" : "");
 	if (root_mode)
 		smmu_status("ADSP rpc", 0x1b23);	/* step 4/5: fault state before the DSP gets the address */
-	state = 1;
-	static uint32_t t;
-	t = tgid;
-	struct rarg a[1] = { { &t, 4 } };
-	return invoke(H_PROCESS_GROUP, SC_MAKE(0, 1, 0), a);
+	if (!root_mode) {	/* the sensors PD alone, the whole buffer (as before step 6) */
+		s_sns.pa = dma_pa;
+		s_sns.dsp = dsp_base;
+		s_sns.size = DMA_SIZE;
+		s_sns.client = tgid;
+		sess_attach(&s_sns);
+		return s_sns.state == 6 ? -1 : 0;
+	}
+	/* step 6: the root PD the first half, the sensors PD the second; guess: its own client number (tgid + 1),
+	 * as the reference gives each session its own */
+	s_root.pa = dma_pa;
+	s_root.dsp = dsp_base;
+	s_root.size = DMA_SIZE / 2;
+	s_root.client = tgid;
+	s_sns.pa = dma_pa + DMA_SIZE / 2;
+	s_sns.dsp = dsp_base + DMA_SIZE / 2;
+	s_sns.size = DMA_SIZE / 2;
+	s_sns.client = tgid + 1;
+	sess_attach(&s_root);
+	return s_root.state == 6 ? -1 : 0;
 }
 
 void fastrpc_summary(void)
 {
 	static const char *st[] = { "off", "attach", "remotectl_open", "register", "init2", "serving", "stopped" };
-	printf("rpc: summary: state %s, %u invokes, %u remotectl calls, %u other-handle calls, %u errors\n", st[state],
-	       seq, n_ctl, n_other, n_err);
+	printf("rpc: summary: root PD %s (%u calls served), sensors PD %s (%u calls served), %u invokes, "
+	       "%u remotectl calls, %u other-handle calls, %u errors\n", st[s_root.state], s_root.calls, st[s_sns.state],
+	       s_sns.calls, seq, n_ctl, n_other, n_err);
 	for (unsigned i = 0; i < 40; i++)
 		if (n_std[i])
 			printf("rpc:   apps_std.%s x%u\n", i < sizeof(std_name) / sizeof(std_name[0]) ? std_name[i] : "?",
@@ -827,4 +939,7 @@ void fastrpc_summary(void)
 	printf("rpc:   files opened: %u\n", n_files);
 	for (unsigned i = 0; i < n_files && i < 32; i++)
 		printf("rpc:     %s\n", files[i]);
+	printf("rpc:   missing (not found or not mapped): %u\n", n_missing);
+	for (unsigned i = 0; i < n_missing && i < 32; i++)
+		printf("rpc:     %s\n", missing[i]);
 }
