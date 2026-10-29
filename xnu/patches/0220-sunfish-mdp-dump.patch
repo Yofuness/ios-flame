@@ -1,0 +1,234 @@
+From ef2ed15c126501d42405a68281bc4ae9ebd72b7a Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 11:36:20 -0400
+Subject: [PATCH] sunfish: read-only kern.sweet_mdpdump dumps MDP
+ SSPP/CTL/LM/INTF/PP and apps SMMU SMR/S2CR for SID 0x800 (0220)
+
+---
+ bsd/conf/files                    |   1 +
+ bsd/dev/sweet_mdpdump.c           | 180 ++++++++++++++++++++++++++++++
+ iokit/Kernel/arm/SweetBattery.cpp |   2 +
+ 3 files changed, 183 insertions(+)
+ create mode 100644 bsd/dev/sweet_mdpdump.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index d68d1a1..6457cfe 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -119,6 +119,7 @@ bsd/dev/sweet_gpu.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_camprobe.c		standard
++bsd/dev/sweet_mdpdump.c		standard
+ bsd/dev/sweet_usb.c			standard
+ bsd/dev/redwood_sta.c		standard
+ bsd/dev/redwood_net.c		standard
+diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
+new file mode 100644
+index 0000000..ca93630
+--- /dev/null
++++ b/bsd/dev/sweet_mdpdump.c
+@@ -0,0 +1,180 @@
++/*
++ * 0220: read-only MDP/SMMU state dump (zero-copy plan step 0). kern.sweet_mdpdump
++ * returns the SSPP, CTL, LM, INTF and PP registers of MDSS (0x0ae00000) and the
++ * apps SMMU SMR/S2CR entries matching the MDP stream 0x800. 32-bit loads only,
++ * no writes; MDSS is clocked while the panel scans out. No boot-arg: on demand.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <stdarg.h>
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/sysctl.h>
++#include <sys/errno.h>
++#include <kern/thread_call.h>
++#include <kern/clock.h>
++#include <libkern/OSAtomic.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_mdpdump_register(void);
++
++#define MDP_PA      0x0ae00000u
++#define MDP_LEN     0x84208u
++#define SMMU_PA     0x15000000u	/* live.dts apps-smmu reg */
++#define SMMU_LEN    0x100000u
++#define MDP_SID     0x800u
++#define DUMP_MAX    8192
++
++static vm_offset_t mdp, smmu;
++static char dump_buf[DUMP_MAX];
++static int dump_len, dump_busy;
++
++static uint32_t
++md_rd(vm_offset_t b, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(b + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++md_out(const char *fmt, ...) __printflike(1, 2);
++
++static void
++md_out(const char *fmt, ...)
++{
++	va_list ap;
++	if (dump_len >= DUMP_MAX - 1) {
++		return;
++	}
++	va_start(ap, fmt);
++	int n = vsnprintf(dump_buf + dump_len, DUMP_MAX - dump_len, fmt, ap);
++	va_end(ap);
++	if (n > 0) {
++		dump_len += n;
++		if (dump_len > DUMP_MAX - 1) {
++			dump_len = DUMP_MAX - 1;
++		}
++	}
++}
++
++/* name, then count consecutive words from off */
++static void
++md_words(const char *name, uint32_t off, unsigned count)
++{
++	md_out("%s@%#x:", name, off);
++	for (unsigned i = 0; i < count; i++) {
++		md_out(" %08x", md_rd(mdp, off + 4 * i));
++	}
++	md_out("\n");
++}
++
++static void
++md_dump(void)
++{
++	static const struct { const char *name; uint32_t off; int vig; } sspp[] = {
++		{"VIG0", 0x5000, 1}, {"VIG1", 0x7000, 1},
++		{"DMA0", 0x25000, 0}, {"DMA1", 0x27000, 0}, {"DMA2", 0x29000, 0},
++	};
++	dump_len = 0;
++	dump_buf[0] = 0;
++	for (unsigned i = 0; i < sizeof(sspp) / sizeof(sspp[0]); i++) {
++		uint32_t b = sspp[i].off;
++		md_out("%s src_size %08x src_xy %08x out_size %08x out_xy %08x addr0 %08x"
++		    " ystride0 %08x fmt %08x op %08x\n", sspp[i].name,
++		    md_rd(mdp, b + 0x00), md_rd(mdp, b + 0x08), md_rd(mdp, b + 0x0c),
++		    md_rd(mdp, b + 0x10), md_rd(mdp, b + 0x14), md_rd(mdp, b + 0x24),
++		    md_rd(mdp, b + 0x30), md_rd(mdp, b + 0x38));
++		if (sspp[i].vig) {
++			md_words(" qseed", b + 0xa00, 8);
++		}
++	}
++	for (unsigned n = 0; n < 3; n++) {
++		uint32_t b = 0x2000 + 0x200 * n;
++		md_out("CTL%u layer0 %08x top %08x flush %08x\n", n,
++		    md_rd(mdp, b + 0x0), md_rd(mdp, b + 0x14), md_rd(mdp, b + 0x18));
++		md_words(" ctl", b, 16);
++	}
++	md_words("LM0", 0x45000, 4);
++	md_words("LM1", 0x46000, 4);
++	md_words("INTF0", 0x6b000, 4);
++	md_words("INTF1", 0x6b800, 4);
++	md_words("INTF2", 0x6c000, 4);
++	md_words("INTF3", 0x6c800, 4);
++	md_out("INTF1 autorefresh(+0x2b4) %08x\n", md_rd(mdp, 0x6bab4));
++	md_words("PP0", 0x71000, 4);
++	md_words("PP1", 0x71800, 4);
++
++	/* SMMUv2 GR0: IDR0 NUMSMRG [7:0]; IDR1 PAGESIZE [31], NUMPAGENDXB [30:28]. */
++	uint32_t idr0 = md_rd(smmu, 0x20), idr1 = md_rd(smmu, 0x24);
++	unsigned nsmr = idr0 & 0xffu;
++	uint32_t pg = (idr1 & (1u << 31)) ? 0x10000u : 0x1000u;
++	uint32_t cbbase = (1u << (((idr1 >> 28) & 7u) + 1)) * pg;
++	md_out("SMMU idr0 %08x idr1 %08x nsmr %u cb %#x\n", idr0, idr1, nsmr, cbbase);
++	for (unsigned n = 0; n < nsmr && n < 128; n++) {
++		uint32_t smr = md_rd(smmu, 0x800 + 4 * n);
++		uint32_t id = smr & 0xffffu, mask = (smr >> 16) & 0x7fffu;
++		if (!(smr & (1u << 31)) || ((MDP_SID ^ id) & ~mask & 0x7fffu)) {
++			continue;
++		}
++		uint32_t s2cr = md_rd(smmu, 0xc00 + 4 * n);
++		unsigned type = (s2cr >> 16) & 3u, cb = s2cr & 0xffu;
++		md_out("SMR%u %08x id %#x mask %#x S2CR %08x type %u(%s) cb %u", n, smr, id,
++		    mask, s2cr, type, type == 0 ? "xlate" : type == 1 ? "bypass" : "fault", cb);
++		if (type == 0 && cbbase + (cb + 1) * pg <= SMMU_LEN) {
++			md_out(" sctlr %08x", md_rd(smmu, cbbase + cb * pg));
++		}
++		md_out("\n");
++	}
++}
++
++static int
++sysctl_sweet_mdpdump SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	if (req->newptr) {
++		return EPERM;
++	}
++	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
++		return EBUSY;
++	}
++	md_dump();
++	int err = SYSCTL_OUT(req, dump_buf, dump_len + 1);
++	dump_busy = 0;
++	return err;
++}
++
++/* Manual OID as in 0195 (sweet_spmi.c): permanent nodes panic after lockdown. */
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdpdump,
++    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_mdpdump, "A", "sunfish MDP/SMMU register dump (0220)");
++
++static void
++md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	mdp = ml_io_map(MDP_PA, round_page(MDP_LEN));
++	smmu = ml_io_map(SMMU_PA, SMMU_LEN);
++	if (!mdp || !smmu) {
++		printf("SWEET MDP: MMIO mapping failed\n");
++		return;
++	}
++	sysctl_register_oid(&sysctl__kern_sweet_mdpdump);
++	printf("SWEET MDP: kern.sweet_mdpdump ready\n");
++}
++
++/* Called from SweetBattery::start, like sweet_camprobe_register(). */
++void
++sweet_mdpdump_register(void)
++{
++	static thread_call_t reg;
++	if (reg) {
++		return;
++	}
++	reg = thread_call_allocate(md_register_late, NULL);
++	if (!reg) {
++		return;
++	}
++	uint64_t deadline;
++	clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(reg, deadline);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index d2574ec..43f646c 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -20,6 +20,7 @@ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ extern "C" void sweet_torch_register(void); /* 0190 */
+ extern "C" void sweet_ampreset_register(void); /* 0217 */
+ extern "C" void sweet_camprobe_register(void); /* 0211, bsd/dev/sweet_camprobe.c */
++extern "C" void sweet_mdpdump_register(void); /* 0220, bsd/dev/sweet_mdpdump.c */
+ 
+ /* 0198: the PON line again later (the live log starts at ~41 s) and as kern.sweet_pon;
+  * manual OID like 0195, registered from poll() long after lockdown. */
+@@ -356,6 +357,7 @@ SweetBattery::start(IOService *provider)
+ 	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
+ 	sweet_ampreset_register(); /* 0217: no-op without sweetampreset=1 */
+ 	sweet_camprobe_register(); /* 0211: no-op without sweetcamprobe=1 */
++	sweet_mdpdump_register(); /* 0220: read-only kern.sweet_mdpdump */
+ 	/* 0197: log the PM6150 PON reason registers once (read only); sweetpon=0 skips. */
+ 	int pon = 1;
+ 	(void)PE_parse_boot_argn("sweetpon", &pon, sizeof(pon));
+-- 
+2.56.0
+
