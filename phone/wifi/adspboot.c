@@ -483,13 +483,14 @@ static int boot(void)
 struct chan {
 	char name[32];
 	uint16_t rcid, lcid;
-	uint32_t r_iid[16], r_isz[16];
+	uint32_t r_iid[64], r_isz[64];	/* ap5: 64 (was 16): apr intents were dropped, table full */
 	int r_n, ndata, up;
 	uint8_t pend[NPEND][512];	/* (pd-mapper replies are ~150 bytes) */
 	uint32_t pend_len[NPEND];
 	int npend;
 };
 static struct chan ch[NCHAN];
+static struct chan *apr_chan;
 static int nch, edge_up, ver_seen, our_iid = 100;
 static int rpc_started, ready_seen;
 /* au14: --watch was paid twice with --rpc (the early watch, then glink_watch) and silent; one deadline for the
@@ -558,6 +559,9 @@ static void chan_send(struct chan *c, const void *pkt, size_t n)
 		return;
 	}
 	uint32_t iid = c->r_iid[i];
+	if (c == apr_chan)	/* ap5: which remote intent carried the APR packet */
+		printf("adsp: %s: tx %zu bytes on remote intent %u (%u bytes, %d left)\n", c->name, n, iid, c->r_isz[i],
+		       c->r_n - 1);
 	c->r_iid[i] = c->r_iid[--c->r_n];
 	c->r_isz[i] = c->r_isz[c->r_n];
 	uint8_t d[8 + sizeof(c->pend[0])];
@@ -733,13 +737,13 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
  * "apr_audio_svc" is answered like every other channel; once it is up, the step-1 queries of aprtest.c go out
  * (GET_STATE, GET_FWK_VERSION, fallback GET_VERSIONS; 3 s each) and every APR packet received is logged.
  */
-#define APR_HDR_FIELD	0x0150		/* SEQ_CMD (1) << 8 | 5 words << 4 | version 0 */
+#define APR_HDR_FIELD	0x0250		/* ap5: SEQ_CMD (2) << 8 | 5 words << 4 | version 0 (0x0150 was CMD_RSP) */
 #define APR_DOMAIN_ADSP	4
 #define APR_DOMAIN_APPS	5
 #define APR_SVC_CORE	0x3
 #define APR_BASIC_RSP	0x000110e8
-#define AVCS_GET_STATE		0x0001326c
-#define AVCS_GET_STATE_RSP	0x0001326d
+#define AVCS_GET_STATE		0x0001290c	/* ap5: was 0x1326c (hakios adsp_sm7150.c, Linux q6core) */
+#define AVCS_GET_STATE_RSP	0x0001290d
 #define AVCS_GET_FWK_VERSION	0x0001292c
 #define AVCS_GET_FWK_VERSION_RSP 0x0001292d
 #define AVCS_GET_VERSIONS	0x00012905
@@ -755,9 +759,14 @@ struct apr_hdr {
 } __attribute__((packed));
 
 static int apr_on, apr_step, close_acks;	/* apr_step: 0 idle, 1..3 waiting for query 1..3, 4 done */
-static struct chan *apr_chan;
 static uint64_t apr_due;
+/* ap5: ready gate (hakios step_apr): GET_STATE every ~200 ms (500 ms per reply) for up to 10 s; AFE only once
+ * words[0] == 1. ADSP_APR_NO_GATE=1 = the old single GET_STATE, AFE regardless. */
+static int apr_ready, apr_gate_wait;	/* apr_gate_wait: 1 = reply pending, 0 = next poll due at apr_due */
+static uint64_t apr_gate_end;
 static const uint32_t apr_q[3] = { AVCS_GET_STATE, AVCS_GET_FWK_VERSION, AVCS_GET_VERSIONS };
+
+static void apr_next(int ok);
 
 static void apr_send(uint32_t opcode, uint32_t token)
 {
@@ -769,7 +778,25 @@ static void apr_send(uint32_t opcode, uint32_t token)
 	};
 	printf("apr: tx svc %x op %x token %u\n", APR_SVC_CORE, opcode, token);
 	chan_send(apr_chan, &h, sizeof(h));
-	apr_due = now_ms() + 3000;
+	apr_due = now_ms() + (opcode == AVCS_GET_STATE && !getenv("ADSP_APR_NO_GATE") ? 500 : 3000);
+	apr_gate_wait = 1;
+}
+
+/* ap5: a GET_STATE reply (or 500 ms without one): ready -> next query; else poll again in 200 ms until 10 s. */
+static void apr_gate(int replied, uint32_t state)
+{
+	if (replied && state == 1) {
+		apr_ready = 1;
+		apr_next(1);
+	} else if (now_ms() >= apr_gate_end) {
+		printf("apr: ADSP audio not ready after 10 s\n");
+		apr_next(0);
+	} else if (replied) {
+		apr_gate_wait = 0;
+		apr_due = now_ms() + 200;
+	} else {
+		apr_send(AVCS_GET_STATE, 1);
+	}
 }
 
 /* Next query: step 1 GET_STATE, 2 FWK_VERSION, 3 GET_VERSIONS (only if 2 failed), then done. */
@@ -777,6 +804,8 @@ static void apr_next(int ok)
 {
 	if (apr_step == 2 && ok)
 		apr_step = 3;
+	if (!apr_step)
+		apr_gate_end = now_ms() + 10000;
 	if (++apr_step <= 3)
 		apr_send(apr_q[apr_step - 1], (uint32_t)apr_step);
 	else
@@ -785,7 +814,7 @@ static void apr_next(int ok)
 
 /*
  * ap4: `--afe` (implies --apr): step 2 of apr-plan.md, the SECONDARY_MI2S_RX port alone (no amps, ASM, ADM or PCM).
- * After the queries: bit clock on (AFE_SVC_CMD_SET_PARAM 0x100F3, else the V2 0x100FC), I2S config, DEVICE_START,
+ * After the queries: bit clock on (AFE_SVC_CMD_SET_PARAM 0x100F3; ap5: the V2 0x100FC fallback is gone), I2S config, DEVICE_START,
  * 2 s hold, DEVICE_STOP, clock off. Each step waits up to 3 s for its APR basic response; the first non-zero status
  * ends the sequence, but stop and clock off still run once start/clock on succeeded. Layouts: hakios
  * sound_sm7150.c afe_service_param/afe_port_param, afe_clock_set, afe_i2s (= Linux apr_audio-v2.h).
@@ -899,7 +928,7 @@ static void afe_next(int ok, uint32_t status)
 	if (afe_op)
 		printf("afe: step %d op %x: %s (status %x)\n", s, afe_op, ok ? "ok" : "FAILED", status);
 	if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && !ok)
-		afe_step = s == AFE_CLK_F3 ? AFE_CLK_FC : AFE_DONE;
+		afe_step = AFE_DONE;	/* ap5: no 0x100FC fallback, clock set only via 0x100F3 */
 	else if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && ok) {
 		afe_clk_ok = 1;
 		afe_clk_op = afe_op;
@@ -934,7 +963,7 @@ static void apr_rx(const uint8_t *p, size_t n)
 	       h.token, status, n, h.src_domain, h.src_svc, h.src_port, h.opcode == APR_BASIC_RSP ? ", for op " : "",
 	       h.opcode == APR_BASIC_RSP ? pl[0] : 0);
 	if (h.opcode == AVCS_GET_STATE_RSP)
-		printf("apr: adsp state %u (%s)\n", len ? pl[0] : 0, len && pl[0] == 1 ? "ready" : "not ready");
+		printf("apr: adsp state words[0]=%u (%s)\n", len ? pl[0] : 0, len && pl[0] == 1 ? "ready" : "not ready");
 	else if (h.opcode == AVCS_GET_FWK_VERSION_RSP && len >= 5) {
 		/* build major, minor, branch, subbranch, num_services; then {service id, api version, api branch} */
 		printf("apr: fwk %u.%u.%u.%u, %u services\n", pl[0], pl[1], pl[2], pl[3], pl[4]);
@@ -947,7 +976,10 @@ static void apr_rx(const uint8_t *p, size_t n)
 	} else if (h.opcode != APR_BASIC_RSP && len) {
 		hex32("apr: payload", p + sizeof(h), n - sizeof(h));
 	}
-	if (apr_step >= 1 && apr_step <= 3 && (h.opcode == apr_q[apr_step - 1] + 1 ||
+	if (apr_step == 1 && !getenv("ADSP_APR_NO_GATE") && (h.opcode == AVCS_GET_STATE_RSP ||
+	    (h.opcode == APR_BASIC_RSP && len && pl[0] == AVCS_GET_STATE)))
+		apr_gate(h.opcode == AVCS_GET_STATE_RSP, h.opcode == AVCS_GET_STATE_RSP && len ? pl[0] : 0);
+	else if (apr_step >= 1 && apr_step <= 3 && (h.opcode == apr_q[apr_step - 1] + 1 ||
 	    (h.opcode == APR_BASIC_RSP && len && pl[0] == apr_q[apr_step - 1])))
 		apr_next(h.opcode != APR_BASIC_RSP);
 	else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && afe_op && h.opcode == APR_BASIC_RSP && len > 1 &&
@@ -959,7 +991,10 @@ static void apr_rx(const uint8_t *p, size_t n)
 static void apr_poll(void)
 {
 	if (apr_on && apr_step > 3) {	/* ap4: --afe sequence after the queries */
-		if (afe_on && afe_step == AFE_IDLE) {
+		if (afe_on && afe_step == AFE_IDLE && !apr_ready && !getenv("ADSP_APR_NO_GATE")) {
+			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
+			afe_step = AFE_DONE;
+		} else if (afe_on && afe_step == AFE_IDLE) {
 			afe_step = AFE_CLK_F3;
 			afe_run();
 		} else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && now_ms() >= apr_due) {
@@ -978,6 +1013,10 @@ static void apr_poll(void)
 				printf("apr: apr_audio_svc up (lcid %u, rcid %u)\n", ch[i].lcid, ch[i].rcid);
 				apr_next(0);
 			}
+	} else if (apr_step == 1 && !getenv("ADSP_APR_NO_GATE") && now_ms() >= apr_due) {
+		if (apr_gate_wait)
+			printf("apr: GET_STATE: no reply in 500 ms\n");
+		apr_gate(0, 0);
 	} else if (now_ms() >= apr_due) {
 		printf("apr: op %x: no reply in 3 s\n", apr_q[apr_step - 1]);
 		apr_next(0);
@@ -1052,7 +1091,7 @@ static int pump_one(void)
 		for (uint32_t i = 0; c && i < p2; i++) {
 			uint32_t e[2];
 			glink_rx_peek(e, 8 + 8 * i, 8);
-			if (c->r_n < 16) {
+			if (c->r_n < 64) {
 				c->r_isz[c->r_n] = e[0];
 				c->r_iid[c->r_n++] = e[1];
 			} else {
