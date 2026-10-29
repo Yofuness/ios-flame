@@ -844,7 +844,31 @@ static void sm2_orient_r_apply(long n, bool reapply)
 	NSMutableArray *hs = [NSMutableArray array];
 	/* B20 rot5: R N goes to all app scenes (background apps kept the old orientation in rot4); the re-apply only to
 	 * the front ones, logging each change of the front set. */
-	NSArray *scenes = sm2_front_scenes(sm2_get(app, "_accessibilityFrontMostApplication"), false, hs, !reapply);
+	/* B20 rot7: rot5/rot6 (all scenes via externalApplicationSceneHandles) logged "applied" but the screen stayed
+	 * portrait; front scenes again come first exactly like S (worked in rot3/rot4), then the background ones not in
+	 * the front set. Pointers logged to see whether both lists return the same objects. */
+	id fa = sm2_get(app, "_accessibilityFrontMostApplication");
+	NSMutableArray *scenes = [NSMutableArray arrayWithArray:sm2_front_scenes(fa, false, hs)];
+	NSUInteger nfront = scenes.count;
+	if (!reapply) {
+		NSMutableSet *fids = [NSMutableSet set];
+		for (NSUInteger i = 0; i < nfront; i++) {
+			[fids addObject:[NSString stringWithFormat:@"%@", sm2_get(scenes[i], "identifier")]];
+			sm2_log("orient: R front %s scene %p handle %p", sm2_desc(sm2_get(scenes[i], "identifier")), scenes[i], hs[i]);
+		}
+		NSMutableArray *ahs = [NSMutableArray array];
+		NSArray *all = sm2_front_scenes(fa, false, ahs, true);
+		for (NSUInteger i = 0; i < all.count; i++) {
+			NSString *aid = [NSString stringWithFormat:@"%@", sm2_get(all[i], "identifier")];
+			bool dup = [fids containsObject:aid];
+			sm2_log("orient: R %s %s scene %p handle %p", dup ? "all-list (front dup)" : "background", [aid UTF8String],
+			    all[i], ahs[i]);
+			if (!dup) {
+				[scenes addObject:all[i]];
+				[hs addObject:ahs[i]];
+			}
+		}
+	}
 	if (reapply) {
 		static NSString *last_front;
 		NSMutableArray *ids = [NSMutableArray array], *os = [NSMutableArray array];
