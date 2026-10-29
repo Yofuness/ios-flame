@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 14:50 stable ADSP, adspboot exits cleanly (au15; kernel97; adspboot e405bb6)
+- e405bb6: with --rpc, --watch was paid twice (early watch never returned on READY, then a silent glink_watch): one deadline now, heartbeat every 10 s, summary on exit/SIGTERM, dropped glink intents logged.
+- au15 `boot --rpc --root --sensors --unsafe --watch 60`: READY 111 ms; channels glink_ssr, IPCRTR, fastrpcglink-apps-dsp, LOOPBACK_CTL_LPASS, apr_audio_svc, apr_apps2; heartbeats t=10..50 s all `state 6, root serving 2 calls ctx 70, sensors serving 590 calls ctx d62, 602 invokes, pending tx 0` (DSP idle after init); exited rc 0 at ~60 s; no CRASH/PD FAILURE; SMMU no fault; 30 s later `adspboot status`: state 6 ready (SFR text "SFR Init: wdog or kernel error suspected." = the default string, presumably).
+- Next: APR on apr_audio_svc (ADSP core version query first, read-only), then AFE port + CS35L41 for a tone (U5).
+
 ### 2026-10-29 14:05 ADSP survives: SMP2P "sleepstate" entry (au14; kernel95; adspboot f02e2a6)
 - f02e2a6: outbound SMP2P item 429 now has "master-kernel" = 0 and "sleepstate" = 1 (bit 0 = AP awake) before the PAS reset (`--no-sleepstate` = old).
 - au14 (ssh 16 s, 4454 mV): `smp2p out item 429: entries 2: "master-kernel" = 0, "sleepstate" = 1`, READY 114 ms, root + sensors PD attached and served (sns_reg_config, soc0 read ok). No CRASH, no PD FAILURE, no sar.cc line in adspboot's output or the kernel log; ~7 min later the ADSP's SMP2P state is still 6 (ready) — every earlier run went to 7 at 10.1 s.
