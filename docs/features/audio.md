@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:10 sp9: ios-redfin amp recipe, still unheard (kernel98, sweetse9=2 sweetampreset=1; adspboot a70ebac)
+- Run A (bypass): AMP_OUT_MUTE 0x2024 was already 0 before we touched it (set 0x10 -> cleared 2 ms after GLOBAL_EN -> 0 mid-tone): so mute was never the cause. SP_RATE_CTRL = 0x1b (our 1.536 MHz code). PUP_DONE 3 ms, PLL_LOCK, no IRQ/fault, on 3025 ms; PCM 388 periods, 0 errors/underflows. PC mic: 0 tone windows (1 kHz bin 2-22 vs rms 1200-1700 = noise).
+- Run B (+ internal boost, stock DT values: K1 0x24 K2 0x24 slope 0x75 LBST 0 IPK 0x3a = 3700 mA, BST_EN 2): same clean power-up, no fault, on 3038 ms; mic: 0 tone windows.
+- So the amp powers up cleanly in both modes and reports no error, but nothing is heard by the PC mic (placement unknown; U5 is still the real test). Remaining suspects: the data never reaches the amp (SD0 lane/LPI pin function, I2S format/slot, our sp8 loopback also read only zeros), or the mic can't hear it. Next: read the amp's own data-path status during playback (ASP RX/DSP-less level regs) or loop SD0 back; U5.
+
 ### 2026-10-30 05:00 sp8: VI loopback records only zeros (kernel98, sweetse9=2 sweetampreset=1; adspboot --rec)
 - All APR steps accepted (AFE 0x1003 SD1, ADM TX, ASM read session 2, matrix 1); 231 READ_V2, 0 errors; READ_DONE says 4096 B filled (enc_framesize 0x1000, offset 0). Data: exact zeros on both channels in baseline (22528 frames), tone (122880) and after (87632). PC mic: 0 tone windows. No reset, 4439 mV. No "ampreset" line in the live log this boot (waited 125 s).
 - Amp TX writes read back as set (PWR_CTRL2 0x11 -> 0x3011, TX1 src 0x18, TX2 src 0x19, TX WL 0x18 -> 0x10, TX slots 0x3020100 -> 0x100, SP_ENABLES 0x10000 -> 0x10003) and were restored; gpio11 0x401 -> 0xc8 -> 0x401.
