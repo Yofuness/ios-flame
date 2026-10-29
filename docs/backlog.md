@@ -30,7 +30,7 @@ history in the feature Logs.
 - B4 Silent resets in long app soaks (PON reason is sticky, no lead).
 
 ## Optimize (last)
-- O2 panel rate ~21 updates/s: only a second, preemptible GPU ring is left (big).
+- O2 panel rate ~21 updates/s: zero-copy scanout (ios-s9 0096/0097) now planned as priority 3; second GPU ring no longer needed if it works.
 - O3 Reduce Transparency speed (with B10).
 - O4 [DONE 2026-10-29] lskdd respawn cost: dropped.
 - O5 display-off CPU fade when sweetpanelsleep is off.
