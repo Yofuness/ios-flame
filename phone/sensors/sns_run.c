@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mach/mach_time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "sensor.h"
@@ -22,6 +23,10 @@ static uint32_t svc_node, svc_port;
 static int have_svc;
 static long svc_ms, t0, next_try, last_print, last_want;
 static int motion_fd = -1, orient_clients_seen;
+static struct motion_sample last_orient;
+static int have_orient;
+static long last_orient_ms;
+static unsigned long reposts;
 static uint64_t written, write_errors;
 static struct sensor ss[8];
 static int nss;
@@ -40,8 +45,25 @@ static void out(void *ctx, struct sensor *s, const struct motion_sample *m)
 		written++;
 	else if (write_errors++ < 5)
 		printf("sns: %s write: %s\n", motion_dev, strerror(errno));
-	if (m->type == MOTION_TYPE_ORIENTATION)
+	if (m->type == MOTION_TYPE_ORIENTATION) {
 		printf("sns: orientation %.0f posted\n", m->v[0]);
+		last_orient = *m;
+		have_orient = 1;
+	}
+}
+
+/* u10: iOS acted on each orientation only when the next one arrived (held landscape for 30 s: no rotation until the
+ * phone was turned back, then landscape + portrait at once), while repeating fake events (0.5 s) rotated at once.
+ * Re-post the current orientation every 0.5 s with a fresh time, as the fake path does, until the kernel is fixed. */
+static void orient_repost(long now)
+{
+	if (!have_orient || motion_fd < 0 || now - last_orient_ms < 500)
+		return;
+	last_orient_ms = now;
+	struct motion_sample m = last_orient;
+	m.ts_mach = mach_absolute_time();
+	if (write(motion_fd, &m, sizeof(m)) == (ssize_t)sizeof(m))
+		reposts++;
 }
 
 static struct sensor_env env = { .out = out };
@@ -240,6 +262,16 @@ void sns_tick(const struct sns_link_ops *ops)
 		if (ss[i].active)
 			sensor_poll(&env, &ss[i], 0);
 	now = sensor_now_ms();
+	if (mode == M_MOTION && orient_clients_seen)
+		orient_repost(now);
+	static long last_acc;	/* u10: raw accel once a second, to check the 4a's axes against the orientation posted */
+	if (mode == M_MOTION && now - last_acc >= 1000) {
+		last_acc = now;
+		for (int i = 0; i < nss; i++)
+			if (ss[i].active && ss[i].k->motion_type == MOTION_TYPE_ACCEL)
+				printf("sns: acc %.2f %.2f %.2f orient %d (cand %d)\n", ss[i].v[0], ss[i].v[1], ss[i].v[2],
+				    env.orient_cur, env.orient_cand);
+	}
 	if (mode == M_MOTION && now - last_want >= 2000) {
 		last_want = now;
 		follow();

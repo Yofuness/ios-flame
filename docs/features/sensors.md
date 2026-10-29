@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 14:10 U10 auto-rotate by the user: rotates only when the phone is turned back (kernel107 sweetmotion=0x77; adspboot --sns-motion)
+- Per-sensor QRTR ports fixed the feed: 1460 samples in 40 s, 0 rejected (prox off by mask).
+- U10: Calculator open; upright 5 s, landscape held 5 s / 10 s / 30 s: no rotation while held. Turning back upright: it rotates to landscape and immediately back to portrait. sensd posted 5 -> 1 -> 3 -> 1 -> 5 (accel counter rising ~27/s the whole time, so samples flow while still).
+- Theory 1 (each event delivered one step late) tested: re-posting the current orientation every 0.5 s with a fresh mach time (216 orientation events reached the kernel) changed nothing. So: next is the raw accel during a hold (1 Hz "sns: acc x y z orient cur (cand)" log added) to check the 4a's axes and the filter (sweetmotion_axes, sensor.c orientation thresholds).
+
 ### 2026-10-30 12:50 iOS ROTATES NATIVELY from the orientation HID service (mo1, mo2; kernel107 sweetmotion=0x77)
 - mo1: backboardd (pid 59) opens the orientation service at 24 s (also accel/gyro/compass/pressure/als, interval 0 except als 0.1-0.4 s). Fake orientation events reach it. Real sensors: adspboot --sns-motion posted "orientation 5" (face up, correct: phone flat) but only 5 samples written, 4 rejected: all sensors shared QRTR client port 0x40, so each sensor's queue saw the others' SUIDs ("event 1025 from another SUID ..." x1015) -> fix in progress (per-sensor ports).
 - mo1 frames looked unrotated; mo2 explains: the phone was already landscape from an earlier S 3. mo2 oslog on `m fake orient 3`: kernel "orientation #49 (fake) 3" -> backboardd "Received orientation (FaceUp to LandscapeLeft)", "Updating device orientation from CoreMotion to: landscapeLeft (3)", sent to SpringBoard -> SpringBoard "Active interface orientation changing ... to landscapeRight (3)", "Running SBRotateScenesWorkspaceTransaction", "Did set interfaceOrientation[3] on scene" for Calculator; frame landscape. No stale/ignored/locked. Orientation lock keys unset.
