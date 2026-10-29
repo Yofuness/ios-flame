@@ -24,6 +24,7 @@ history in the feature Logs.
 - B19 Respawn loops: lskdd, fairplayd.H2, wifip2pd dropped 2026-10-29; bluetoothd (10 s) kept until B15.
 - B20 Screen rotation: see priority 2.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
+- B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)
