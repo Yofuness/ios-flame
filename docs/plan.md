@@ -4,13 +4,13 @@ Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-br
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
-2. **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
-   compositing side (backboardd display transform / our framebuffer). (display.md)
-1. ▶ **Audio via the SM7150 reference** (B16/B23; survey 2026-10-29: xorbidden/hakios-sm7150 runs speaker+mic on our SoC): FastRPC/audio buffer address = IOVA | SID<<32 through a translating bank, pd-mapper `tms/pdr_enabled` root_pd, root PD attach first; then APR speaker path + speaker guard (oosexgang/hakios-xnu-kernel, APSL). Old line: **share memory with the DSP via the hypervisor**: read-only research of the SCM mem-assign
-   call in the background now (while phone tests run); phone steps only once it's understood, as baby steps: a
-   no-op assign on one page, a shared page the CPU still uses, then the FastRPC attach. `adspboot --rpc` needs
-   `--unsafe`. (audio.md)
-3. **Zero-copy scanout** (O2; the user liked ios-s9's smoothness): MDP pipe scans backboardd's surface directly instead of our GPU blit (their xnu 0096/0097, MIT); first a read-only MDP layout dump. (smoothness.md)
+1. ▶ **Audio via the SM7150 reference** (B16/B23): DSP addresses carry the SMMU stream (IOVA | 3<<32), pd-mapper adsp
+   domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Steps 1-5 on the phone now;
+   then listener/init2, sensors PD, APR speaker path + guard (oosexgang/hakios-xnu-kernel, APSL). (audio.md)
+2. **Screen rotation** (B20): SpringBoard sizes the app host view landscape but the window stays portrait, no
+   transform; Calculator never relayouts. Next: read the app scene settings (iOS 16 accessor). (display.md)
+3. **Zero-copy scanout** (O2; the user liked ios-s9's smoothness): an MDP pipe scans backboardd's surface directly
+   instead of our GPU blit (ios-s9 xnu 0096/0097, MIT); first a read-only MDP layout dump. (smoothness.md)
 
 Done 2026-10-29: r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
