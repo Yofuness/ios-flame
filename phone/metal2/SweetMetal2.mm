@@ -385,7 +385,7 @@ __attribute__((constructor)) static void sm2_torch_init(void)
  * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
  * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock; "D N [S]" = method D, in backboardd:
  * BKOrientationManager updateDeviceOrientation:N changeSource:S; "P" = read-only scene/host probe in SpringBoard;
- * "S N [f]" = write the front app scenes' settings orientation (f: also swap the frame). Delete the file to turn it off.
+ * "S N [f]" = write the front app scenes' settings orientation (f: also swap the frame); "R N" = D N 0 + E N + S N, kept for new apps. Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -706,7 +706,7 @@ static void sm2_probe_views(id v, int *count)
 
 /* iOS 16.7 front app scenes (rotation-ios16.md): SBMainDisplaySceneManager's foreground app scene handles, else
  * SBSceneManager sceneIdentityForApplication: -> existingSceneHandleForSceneIdentity: for the front app. */
-static NSArray *sm2_front_scenes(id fa, bool verbose)
+static NSArray *sm2_front_scenes(id fa, bool verbose, NSMutableArray *hout = nil)
 {
 	NSMutableArray *out = [NSMutableArray array];
 	id mgr = nil, handles = nil;
@@ -735,8 +735,10 @@ static NSArray *sm2_front_scenes(id fa, bool verbose)
 				    sm2_desc(sm2_get(h, "currentInterfaceOrientation")),
 				    sm2_desc(sm2_get(h, "_mainSceneSupportedInterfaceOrientations")));
 			id sc = sm2_get(h, "sceneIfExists");
-			if (sc)
+			if (sc) {
 				[out addObject:sc];
+				[hout addObject:h];
+			}
 		} @catch (id ex) {
 			sm2_log("orient: handle exception %s", [[ex description] UTF8String]);
 		}
@@ -829,6 +831,60 @@ static void sm2_orient_s(long n, bool swap)
 	}
 }
 
+/* "R N" (patch B20, rotation for daily use; delete /var/local/sweet-orient to turn off): backboardd does "D N 0",
+ * SpringBoard does "E N" and then writes N into the front app scenes (frame kept portrait). The last R is remembered:
+ * the 1 s timer re-applies it to new front scenes whose supported mask has N. "R 1" restores portrait and stops. */
+static long sm2_r_orient;
+
+static void sm2_orient_r_apply(long n, bool reapply)
+{
+	Class ac = objc_getClass("UIApplication");
+	id app = [ac respondsToSelector:@selector(sharedApplication)] ? [ac performSelector:@selector(sharedApplication)] : nil;
+	NSMutableArray *hs = [NSMutableArray array];
+	NSArray *scenes = sm2_front_scenes(sm2_get(app, "_accessibilityFrontMostApplication"), false, hs);
+	SEL ub = sel_registerName("updateSettingsWithBlock:");
+	for (NSUInteger i = 0; i < scenes.count; i++) {
+		id sc = scenes[i], h = hs[i];
+		const char *ident = sm2_desc(sm2_get(sc, "identifier"));
+		if (![sc respondsToSelector:ub])
+			continue;
+		id cur = sm2_get(sm2_get(sc, "settings"), "interfaceOrientation");
+		if (reapply && [cur longLongValue] == n)
+			continue;
+		id mask = [h respondsToSelector:sel_registerName("_mainSceneSupportedInterfaceOrientations")] ?
+		    [h valueForKey:@"_mainSceneSupportedInterfaceOrientations"] : nil;
+		if (n != 1 && mask && !([mask unsignedLongLongValue] & (1ull << n))) {
+			if (!reapply)
+				sm2_log("orient: R %ld: %s does not support it (mask %s)", n, ident, sm2_desc(mask));
+			continue;
+		}
+		__block bool fixed = false;
+		((void (*)(id, SEL, void (^)(id)))objc_msgSend)(sc, ub, ^(id s) {
+			SEL so = sel_registerName("setInterfaceOrientation:"), sd = sel_registerName("setDeviceOrientation:");
+			SEL sf = sel_registerName("setFrame:"), gf = sel_registerName("frame");
+			if ([s respondsToSelector:so])
+				((void (*)(id, SEL, long long))objc_msgSend)(s, so, (long long)n);
+			if ([s respondsToSelector:sd])
+				((void (*)(id, SEL, long long))objc_msgSend)(s, sd, (long long)n);
+			/* rot3: only the portrait-shaped frame works; undo an earlier "S N f" swap */
+			if ([s respondsToSelector:sf] && [s respondsToSelector:gf]) {
+				sm2_rect r = ((sm2_rect (*)(id, SEL))objc_msgSend)(s, gf);
+				if (r.w > r.h) {
+					sm2_rect q = { r.x, r.y, r.h, r.w };
+					((void (*)(id, SEL, sm2_rect))objc_msgSend)(s, sf, q);
+					fixed = true;
+				}
+			}
+		});
+		if (reapply)
+			sm2_log("orient: R re-applied to %s", ident);
+		else
+			sm2_log("orient: R %ld: applied to %s%s", n, ident, fixed ? " (frame back to portrait)" : "");
+	}
+	if (!reapply && !scenes.count)
+		sm2_log("orient: R %ld: no front scene", n);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
@@ -851,6 +907,13 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 	dispatch_source_set_event_handler(t, ^{
 		static struct timespec last;
 		struct stat st;
+		if (!bbd && sm2_r_orient > 1) {	/* B20 "R": re-apply to new front apps */
+			@try {
+				sm2_orient_r_apply(sm2_r_orient, true);
+			} @catch (id ex) {
+				sm2_log("orient: R re-apply exception %s", [[ex description] UTF8String]);
+			}
+		}
 		if (stat("/var/local/sweet-orient", &st) != 0 || (st.st_mtimespec.tv_sec == last.tv_sec &&
 		    st.st_mtimespec.tv_nsec == last.tv_nsec))
 			return;
@@ -869,6 +932,24 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 				} @catch (id ex) {
 					sm2_log("orient: P exception %s", [[ex description] UTF8String]);
 				}
+			}
+			return;
+		}
+		if (buf[0] == 'R') {	/* "R N": D N 0 in backboardd; E N + front scenes in SpringBoard */
+			long rn = strtol(buf + 1, NULL, 10);
+			if (rn < 1 || rn > 4)
+				return;
+			@try {
+				if (bbd) {
+					sm2_orient_d(rn, 0);
+				} else {
+					sm2_log("orient: R %ld: E + front scenes%s", rn, rn == 1 ? ", re-apply off" : "");
+					sm2_r_orient = rn;
+					sm2_orient_e(rn);
+					sm2_orient_r_apply(rn, false);
+				}
+			} @catch (id ex) {
+				sm2_log("orient: R exception %s", [[ex description] UTF8String]);
 			}
 			return;
 		}
