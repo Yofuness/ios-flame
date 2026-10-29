@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** 🟡 Bluetooth ON in iOS Settings, discoverable as "iPhone", bluetoothd stable (kernel105 btbridge=1 + btbridge, 2026-10-30); LE scan not working in iOS yet (legacy scan commands rejected). **Updated:** 2026-10-30.
+**State:** ✅🟡 Bluetooth works in iOS Settings: on, discoverable, nearby devices listed (bt7, kernel105+, btbridge=1 default + btbridge). Pairing, audio, speed (115200 baud, polled UART) untested/open. **Updated:** 2026-10-30. **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,13 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 10:40 DEVICES LISTED in Settings > Bluetooth (bt7, kernel105 btbridge=1; btbridge e739ed8)
+- Legacy -> extended LE translation (from iOSPlus10 0338, MIT; phone/wifi/bt_lext.c, host test tools/bt-shim-test 41/41): bt6 showed bluetoothd had sent 0x204a (an extended command) before 0x200b, so the chip rejected legacy scans. Now 0x200b/0x200c -> 0x2041/0x2042, answers delivered as legacy; extended reports -> legacy reports.
+- Settings > Bluetooth: 0 devices at 20 s, 1 device (a TV) at 40 s. 23 lext lines, all status 0; bluetoothd one pid (302), no restarts. Only error: 0x2007 (read adv TX power) 0x0c -> shim 0 dBm. No reset; 4455 mV.
+- Stats: cmd 159, evt 120, local 92; uart dropped 56 bytes, 2 FIFO overruns (polled UART at 115200: open item).
+- `btbridge=1` is now a sunfish-boot.sh default.
+- Open: pairing (headset/keyboard/phone), audio profiles (A2DP: redfin 1016 Skywalk privilege), higher baud (QCA 0xfc48 to 3 Mbaud) or interrupt RX to stop the drops, boot-time firmware load (~52 s).
 
 ### 2026-10-30 10:10 BLUETOOTH ON IN SETTINGS (bt6, kernel105 btbridge=1; btbridge 629d50c)
 - bt5b root cause: btbridge's poll() on /dev/btbridge never reported POLLIN, so bluetoothd's HCI_Reset/Read_Local_Version sat unread in the kernel ring (kernel "unread by the bridge" grew) -> timeouts, restart every ~21 s. Fix: read the device every pass (O_NONBLOCK).

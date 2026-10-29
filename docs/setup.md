@@ -43,6 +43,7 @@ img2simg ../restore/ios16-root.img ../restore/ios16-root.simg
 tools/vm-build-xnu.sh NN            # work/kernelNN (applies xnu/patches/ in order)
 tools/sunfish-livelog.sh ../logs/usb-live.log &    # live log + USB network (phone 192.168.7.2)
 tools/sunfish-boot.sh first work/kernelNN/kernel.development.sweet   # RAM-only, nothing flashed
+# the Bluetooth device-tree node comes from tools/mkadt.py (work/boot/sunfish-hi.adt; rebuild it with mkadt.py --highmem)
 ```
 The first boot takes a few minutes; the lock screen appears. Boot args and defaults: [methods.md](methods.md).
 
@@ -72,6 +73,8 @@ tools/build-metal2-linux.sh && tools/sunfish-metal2-install.sh work/metal2-linux
 tools/build-cocoatop-linux.sh
 tools/sunfish-setup-phone.sh           # launchd job drops, CA_FORCE_TIMER, phone tools, CocoaTop, timezone, flag files
 tools/sunfish-install-adsp.sh          # audio (unfinished feature)
+tools/sunfish-install-bt.sh            # Bluetooth firmware (crbtfw21.tlv, crnv21.bin from the factory vendor image) + btup
+tools/sunfish-install-btbridge.sh      # Bluetooth for iOS: btbridge + BlueTool stand-in + bluetoothd transport (kernel105+, boot-arg btbridge=1, default)
 ```
 Reboot after these (launchd reads its job list at boot).
 

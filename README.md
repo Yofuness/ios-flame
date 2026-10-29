@@ -48,7 +48,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
-| [Bluetooth](docs/features/bluetooth.md) | 🟡 | ON in iOS Settings, discoverable, bluetoothd stable (kernel bridge, boot-arg btbridge=1); device list empty (LE scan translation next) |
+| [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: on, discoverable, nearby devices listed (kernel105+, btbridge); pairing and audio untested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ⬜ | not started; all sensors sit behind the audio DSP, so they wait for it |
 
