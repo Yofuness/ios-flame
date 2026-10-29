@@ -666,6 +666,13 @@ int firmware(const char *dir)
 	if (download("nvm", nv, nsz, 0))
 		goto out;
 	delay_ms(50);
+	{	/* bt4: the chip's debug log (ACL handle 0xedc) floods the polled UART; at boot (busy CPU) bytes got
+		 * lost mid-packet and H4 framing slipped. Turn it off as Linux btqca (qca_disable_soc_logging) and
+		 * iOSPlus10 (step 16) do: 0xfc17 {0x14, 0x00}; a failure is only logged (may be WCN3991+ only). */
+		uint8_t lp[2] = { 0x14, 0x00 }, lev[32];
+		unsigned lg = cmd(0xfc17, lp, 2, lev, sizeof(lev), 1000);
+		hex("logging-off reply", lev, lg);
+	}
 	if (hci_reset())
 		goto out;
 	drain(500);				/* bt3: let the post-reset burst (vendor events, debug log ACL) pass */
