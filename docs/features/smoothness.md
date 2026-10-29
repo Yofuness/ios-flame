@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 00:10 xnu 0223 zero-copy E3a/E3b built (kernel101 = 98 + 0222 + 0223; untested)
+- E3a (boot-arg `sweetfb_zerocopy=1`): backboardd's first 1125x2436 BGRA surface (allocSize ≤ 0xA90000) is backed by the carveout slot PA 0x9cb00000 (withPhysicalAddress, write-combined, bzero_phys); logs "sweet zc: create ..." for every create with width ≥ 1000 (cap 20) and "sweet zc: slot1 surface id ...".
+- E3b: `kern.sweet_zc_scan` 1 = VIG0 scans the slot with the full 1125x2436 -> 1080x2340 downscale (steps 0x215555/0x215015), 0 = ABL values. EPERM without the boot-arg, EBUSY without a slot surface. Registered late (~10 s), skipped with sweetmdpdump=0.
+- Risk: the full-size fetch can underflow the MDP (reset). Design: research/notes/zero-copy-e3.md.
+
 ### 2026-10-29 23:00 E1 WORKS: QSEED3LITE scales VIG0 (e1a, e1b; kernel98, pmem from userland)
 - Recipe from the Pixel 4/4a msm-4.14 SDE source: research/notes/qseed3lite.md; scripts research/notes/e1-on.sh / e1-off.sh (pmem writes, one CTL0 flush 0x20001).
 - e1a read-only dump (ABL state): QS+0 = 0x2004 is the scaler VERSION (not "unused"); QS OP_MODE 0, steps 0x200000, preload 0x03040304; SSPP SRC_SIZE/OUT_SIZE 0x09240438, SRC0 0x9c000000, ystride 0x1100, fmt 0x237ff; REQ_PIXELS (+0x108/118/128) 0x09240438; CTL0 flush 0.

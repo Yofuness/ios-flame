@@ -1,0 +1,292 @@
+From fc9881d4f5a47054812c85630aaee96a7ee868cd Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 14:36:34 -0400
+Subject: [PATCH] sunfish: zero-copy E3a/E3b: carveout slot surface +
+ kern.sweet_zc_scan (0223)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_mdpdump.c           | 100 ++++++++++++++++++++++++++++++
+ iokit/Kernel/arm/SweetSurface.cpp | 100 +++++++++++++++++++++++++++++-
+ iokit/Kernel/arm/SweetSurface.h   |   1 +
+ 3 files changed, 200 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
+index 935e05c..f559d09 100644
+--- a/bsd/dev/sweet_mdpdump.c
++++ b/bsd/dev/sweet_mdpdump.c
+@@ -14,6 +14,10 @@
+  * ENOMEM if neither); 1 copies the splash frame into it, inverts its top 300 rows,
+  * cleans it to PoC; 2 points VIG0 at it; 0 points VIG0 back at 0x9c000000 (the buffer is
+  * kept). A read returns the buffer PA (0 if none). Also skipped by sweetmdpdump=0.
++ * 0223: kern.sweet_zc_scan (zero-copy E3b, writes need sweetfb_zerocopy=1): 1 points
++ * VIG0 at the E3a carveout slot surface (1125x2436, QSEED3LITE downscale to 1080x2340,
++ * order as the tested e1-on.sh); 0 restores the ABL values (e1-off.sh + ystride/src).
++ * EBUSY if no slot surface. A read returns the current state.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <stdarg.h>
+@@ -351,6 +355,101 @@ SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdp_e2,
+     CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
+     0, 0, sysctl_sweet_mdp_e2, "QU", "sunfish E2 VIG0 buffer outside the carveout (0222)");
+ 
++/* 0223: VIG0 (0x5000) and its QSEED3LITE block (+0xa00); never 0x0ae44000. */
++#define VIG0_BASE       0x5000u
++#define VIG0_QS         (VIG0_BASE + 0xa00u)
++static int zc_scan_state;
++
++/* 1 = scan the slot surface at pa (row pitch bpr), 0 = ABL layout. 0 or EIO. */
++int sweet_mdp_zc_scan(int on, uint32_t pa, uint32_t bpr);
++int
++sweet_mdp_zc_scan(int on, uint32_t pa, uint32_t bpr)
++{
++	if (md_rd(CTL0_FLUSH) == 0xffffffffu) {
++		return EIO;
++	}
++	if (on) {
++		for (uint32_t a = 0x90; a <= 0x9c; a += 4) {
++			md_wr(VIG0_QS + a, 0);
++		}
++		md_wr(VIG0_QS + 0x10, 0x215555); md_wr(VIG0_QS + 0x18, 0x215555);
++		md_wr(VIG0_QS + 0x14, 0x215015); md_wr(VIG0_QS + 0x1c, 0x215015);
++		md_wr(VIG0_QS + 0x40, 0x09840465); md_wr(VIG0_QS + 0x44, 0x09840465);
++		md_wr(VIG0_QS + 0x48, 0x09240438);
++		md_wr(VIG0_BASE + 0x00, 0x09840465);
++		md_wr(VIG0_BASE + 0x08, 0);
++		md_wr(VIG0_BASE + 0x24, bpr);
++		md_wr(VIG0_BASE + 0x108, 0x09840465);
++		md_wr(VIG0_BASE + 0x118, 0x09840465);
++		md_wr(VIG0_BASE + 0x128, 0x09840465);
++		md_wr(VIG0_SRC0_ADDR, pa);
++		md_wr(VIG0_QS + 0x04, 0xa0034401);
++	} else {
++		md_wr(VIG0_QS + 0x04, 0);
++		for (uint32_t a = 0x10; a <= 0x1c; a += 4) {
++			md_wr(VIG0_QS + a, 0x200000);
++		}
++		md_wr(VIG0_QS + 0x40, 0); md_wr(VIG0_QS + 0x44, 0); md_wr(VIG0_QS + 0x48, 0);
++		md_wr(VIG0_BASE + 0x00, 0x09240438);
++		md_wr(VIG0_BASE + 0x08, 0);
++		md_wr(VIG0_BASE + 0x108, 0x09240438);
++		md_wr(VIG0_BASE + 0x118, 0x09240438);
++		md_wr(VIG0_BASE + 0x128, 0x09240438);
++		md_wr(VIG0_BASE + 0x24, 0x1100);
++		md_wr(VIG0_SRC0_ADDR, (uint32_t)SPLASH_PA);
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	md_wr(CTL0_FLUSH, CTL0_FLUSH_BITS);
++	zc_scan_state = on ? 1 : 0;
++	printf("SWEET MDP: zc scan %d src %#x bpr %u (flush %#x)\n", zc_scan_state,
++	    on ? pa : (uint32_t)SPLASH_PA, on ? bpr : 0x1100u, CTL0_FLUSH_BITS);
++	return 0;
++}
++
++extern int sweet_surface_zc_slot(uint32_t *pa, uint32_t *bpr);
++
++static int
++sysctl_sweet_zc_scan SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int v = zc_scan_state, zc = 0;
++	uint32_t pa = 0, bpr = 0;
++	int err = SYSCTL_OUT(req, &v, sizeof(v));
++	if (err || !req->newptr) {
++		return err;
++	}
++	err = SYSCTL_IN(req, &v, sizeof(v));
++	if (err) {
++		return err;
++	}
++	(void)PE_parse_boot_argn("sweetfb_zerocopy", &zc, sizeof(zc));
++	if (!zc) {
++		return EPERM;
++	}
++	if (v != 0 && v != 1) {
++		return EINVAL;
++	}
++	if (v == 1 && !sweet_surface_zc_slot(&pa, &bpr)) {
++		return EBUSY;
++	}
++	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
++		return EBUSY;
++	}
++	dump_len = 0;
++	err = sweet_mdp_zc_scan(v, pa, bpr);
++	if (!err) {
++		delay_for_interval(20, NSEC_PER_MSEC);
++		printf("SWEET MDP: zc after 20 ms src %#x flush %#x\n",
++		    md_rd(VIG0_SRC0_ADDR), md_rd(CTL0_FLUSH));
++	}
++	dump_busy = 0;
++	return err;
++}
++
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_zc_scan,
++    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_zc_scan, "I", "sunfish zero-copy E3b: VIG0 scans the slot surface (0223)");
++
+ static void
+ md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ {
+@@ -358,6 +457,7 @@ md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p
+ 	sysctl_register_oid(&sysctl__kern_sweet_mdp_src);	/* 0221 */
+ 	md_e2_alloc_early();	/* 0222 */
+ 	sysctl_register_oid(&sysctl__kern_sweet_mdp_e2);	/* 0222 */
++	sysctl_register_oid(&sysctl__kern_sweet_zc_scan);	/* 0223 */
+ 	printf("SWEET MDP: kern.sweet_mdpdump, kern.sweet_mdp_src, kern.sweet_mdp_e2 ready\n");
+ }
+ 
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index e563316..8e2d6d5 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -39,6 +39,7 @@
+ #include <libkern/c++/OSNumber.h>
+ #include <libkern/c++/OSUnserialize.h>
+ #include <sys/proc.h>
++#include <pexpert/pexpert.h>
+ 
+ enum {
+ 	kSweetSurfaceCreate             = 0,
+@@ -75,6 +76,20 @@ static uint32_t      sweet_surface_creates_logged;
+ static uint64_t      sweet_surface_wired;       /* bytes of buffer surfaces */
+ #define SWEET_SURFACE_WIRED_MAX         (1536ull << 20)
+ 
++/*
++ * 0223 zero-copy E3a (sweetfb_zerocopy=1, off by default): the first backboardd
++ * 1125x2436 BGRA surface is backed by the splash carveout slot at 0x9c000000 +
++ * 0xB00000 (past the fb, so the fb stays valid) instead of wired memory, so VIG0
++ * can scan it (kern.sweet_zc_scan, sweet_mdpdump.c). Any failure: normal path.
++ */
++#define SWEET_ZC_SLOT_PA                (0x9c000000ull + 0xB00000ull)
++#define SWEET_ZC_SLOT_LEN               0xA90000u
++#define SWEET_ZC_FORMAT_BGRA            0x42475241
++extern "C" void bzero_phys(addr64_t src64, vm_size_t bytes);
++static int           sweet_zc_on = -1;          /* boot-arg, parsed on first create */
++static SweetSurface *sweet_zc_slot_surface;     /* not retained; cleared in free() */
++static uint32_t      sweet_zc_logged;
++
+ OSDefineMetaClassAndStructors(SweetSurface, OSObject);
+ 
+ void
+@@ -83,6 +98,14 @@ SweetSurface::free()
+ 	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
++	if (zcSlot) {   /* 0223 */
++		IOLockLock(sweet_surface_lock);
++		if (sweet_zc_slot_surface == this) {
++			sweet_zc_slot_surface = NULL;
++		}
++		IOLockUnlock(sweet_surface_lock);
++		IOLog("sweet zc: slot1 released (surface id %u)\n", id);
++	}
+ 	OSSafeReleaseNULL(kernelMap);
+ 	OSSafeReleaseNULL(memory);
+ 	OSSafeReleaseNULL(state);
+@@ -248,6 +271,74 @@ sweet_surface_create_physical(uint64_t phys, uint32_t width, uint32_t height,
+ 	return s;
+ }
+ 
++/* 0223: slot surface PA and bytesPerRow for kern.sweet_zc_scan; 0 if none. */
++extern "C" int
++sweet_surface_zc_slot(uint32_t *pa, uint32_t *bpr)
++{
++	int found = 0;
++	IOLockLock(sweet_surface_lock);
++	if (sweet_zc_slot_surface != NULL) {
++		*pa = (uint32_t)SWEET_ZC_SLOT_PA;
++		*bpr = sweet_zc_slot_surface->bytesPerRow;
++		found = 1;
++	}
++	IOLockUnlock(sweet_surface_lock);
++	return found;
++}
++
++/*
++ * 0223: back s with the carveout slot if it is the first backboardd 1125x2436
++ * BGRA single-plane surface that fits; logs wide creates (cap 20). True if done.
++ */
++static bool
++sweet_zc_try_slot(SweetSurface *s)
++{
++	char name[32];
++	if (sweet_zc_on < 0) {
++		int on = 0;
++		(void)PE_parse_boot_argn("sweetfb_zerocopy", &on, sizeof(on));
++		sweet_zc_on = on;
++	}
++	if (!sweet_zc_on) {
++		return false;
++	}
++	proc_selfname(name, sizeof(name));
++	if (s->width >= 1000 && sweet_zc_logged < 20) {
++		sweet_zc_logged++;
++		IOLog("sweet zc: create %s %ux%u fmt 0x%x bpr %u planes %u offset %u size 0x%x\n",
++		    name, s->width, s->height, s->pixelFormat, s->bytesPerRow,
++		    s->planeCount, s->offset, s->allocSize);
++	}
++	if (strcmp(name, "backboardd") != 0 || s->width != 1125 || s->height != 2436 ||
++	    s->pixelFormat != SWEET_ZC_FORMAT_BGRA || s->planeCount > 1 || s->offset != 0 ||
++	    s->allocSize > SWEET_ZC_SLOT_LEN) {
++		return false;
++	}
++	IOLockLock(sweet_surface_lock);
++	bool taken = sweet_zc_slot_surface != NULL;
++	if (!taken) {
++		sweet_zc_slot_surface = s;      /* reserve before the slow part */
++	}
++	IOLockUnlock(sweet_surface_lock);
++	if (taken) {
++		return false;
++	}
++	uint32_t len = (uint32_t)round_page(s->allocSize);
++	s->memory = IOMemoryDescriptor::withPhysicalAddress(SWEET_ZC_SLOT_PA, len, kIODirectionInOut);
++	if (s->memory == NULL || len > SWEET_ZC_SLOT_LEN) {
++		OSSafeReleaseNULL(s->memory);
++		IOLockLock(sweet_surface_lock);
++		sweet_zc_slot_surface = NULL;
++		IOLockUnlock(sweet_surface_lock);
++		IOLog("sweet zc: slot1 descriptor failed, normal allocation\n");
++		return false;
++	}
++	bzero_phys(SWEET_ZC_SLOT_PA, len);
++	s->mapCache = kIOMapWriteCombineCache;
++	s->zcSlot = 1;
++	return true;
++}
++
+ mach_port_name_t
+ sweet_surface_port_in_task(SweetSurface *s, task_t task)
+ {
+@@ -752,7 +843,14 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 	}
+ 	s->parentID = args->scalarInputCount > 0 ? (uint32_t)args->scalarInput[0] : 0;
+ 	ret = sweet_surface_layout(s, props);
+-	if (ret == kIOReturnSuccess) {
++	if (ret == kIOReturnSuccess && sweet_zc_try_slot(s)) {    /* 0223 */
++		if (!sweet_surface_publish(s)) {
++			ret = kIOReturnNoResources;     /* free() releases the slot */
++		} else {
++			IOLog("sweet zc: slot1 surface id %u %ux%u bpr %u size 0x%x\n",
++			    s->id, s->width, s->height, s->bytesPerRow, s->allocSize);
++		}
++	} else if (ret == kIOReturnSuccess) {
+ 		IOBufferMemoryDescriptor *mem = NULL;
+ 		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+ 		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
+diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
+index fbcdfac..b6336e8 100644
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -39,6 +39,7 @@ public:
+ 	IOOptionBits              mapCache;     /* cache mode for user mappings */
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
++	uint32_t                  zcSlot;       /* 0223: 1 = backed by the carveout slot at 0xB00000 */
+ 
+ 	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+-- 
+2.56.0
+
