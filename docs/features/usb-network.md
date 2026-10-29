@@ -17,6 +17,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 05:17 vb1/vb2: boot to SSH after the bridge pin (kernel94, default args)
+- vb1 4457 mV: SSH 29 s after fastboot boot; vb2 4456 mV: 24 s. 0 SSH probe failures in both (was 24-41 s, the slow ones losing the first session).
+- VMware still logs `userif-19: sent link down/up event` (16 in 15 min): userif19 sits on hub8.0 = vmnet8 (NAT), not the bridge; the bridge (bridge11) is on wlan0 only. Not proof yet with 2 boots; watch the next boots' times.
+- Lock screen up at 05:17, brightness key 0x1 (the iOS minimum) on the webcam.
 ### 2026-10-29 05:08 VMware's bridge pinned to wlan0 (U6, the user's go)
 - /etc/vmware/networking: `add_bridge_mapping wlan0 0` appended (backup /etc/vmware/networking.bak-2026-10-29), `systemctl restart vmware-networks`. /proc/vmnet/bridge11 now reads `dev wlan0`: vmnet0 no longer follows new adapters such as the phone's enp0s20f0u1. vmnet-bridge still runs as `-n 0` (it reads the mapping itself).
 - Check pending: boot-to-SSH times on the next boots (were 24-41 s; expect ~25 s every time).
