@@ -17,6 +17,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 20:40 a ~10-15 s window of lost packets shortly after link-up
+- Seen in the boot-to-SSH analysis: ~10-15 s after the USB link comes up, packets from the phone stop reaching the PC for ~10-15 s (PC ARP every 1 s, phone answers each, PC keeps asking; NCM rx 94 -> 109, tx 137 -> 288 frames between 10 and 20 s). Causes the 36-41 s boots-to-SSH. Not yet known whether the phone's NCM TX or the host side drops them. Next: tcpdump on the PC's USB interface during one boot + a SWEET USB tx-error counter.
+
 ### 2026-10-27 ~19:00-20:07 plan steps 1-4 checks (ck1-ck3, kernel60 defaults) (step 4 USB part)
 - Battery 4456 mV in fastboot before each boot.
 - Step 4 USB: ck1/ck2/ck3, 5 min each, SSH probe every 10 s: 0 failures, one `=== link up` per boot, boot to SSH 29 s (ck2) / 43 s (ck3). Done.

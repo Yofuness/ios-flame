@@ -40,8 +40,10 @@ T0=$(date +%s) tboot=0 tssh=0
 say() { echo "$(date +%T) test $TAG: $*"; }
 mark() { echo "=== $TAG $* $(date '+%F %T')" >> "$LOG"; }
 # sunfish-ssh puts its own options first; a 2 s connect timeout needs ssh directly.
+# Each probe is bounded: a first session that connects and then loses packets used to hang ~13 s (2026-10-28).
 sshok() {
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 \
+	timeout 3 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=2 \
+		-o ServerAliveInterval=1 -o ServerAliveCountMax=2 \
 		-o BatchMode=yes -i "$ROOT/work/userland/ssh/id_ed25519" root@192.168.7.2 true </dev/null >/dev/null 2>&1
 }
 infb() { fastboot devices 2>/dev/null | grep -q fastboot; }

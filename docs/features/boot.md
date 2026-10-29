@@ -31,6 +31,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 20:40 boot-to-SSH spread: the phone is ready at the same time; the first session gets lost
+- Log analysis of 8 boots (investigator): fast and slow boots alike reach dropbear at 25-37 s and the first SSH session's `exec dash` at ~33.5 s kernel time. In slow boots (36-41 s) that first session never completes on the PC; the next one lands ~12.7 s later (~46 s). No gaps > 2 s in the kernel log. During the lost window the PC re-sends unicast ARP every 1 s and the phone answers each, i.e. packets from the phone get lost for ~10-15 s about 10-15 s after the link comes up.
+- tools/sunfish-test.sh sshok now bounds each probe (`timeout 3`, ServerAliveInterval 1). bta/btb/btc: 36 / 25 / 24 s: the bounded probe helps, but bta shows the loss window itself (USB NCM) still costs ~10 s sometimes.
+
 ### 2026-10-28 18:52 serial console A/B (kernel94, plan D2): no effect
 - NOSERIAL=1 (tools/sunfish-boot.sh drops `serial=3 -enable_kprintf_spam`): ns1a/ns1b boot to SSH 37 / 41 s; with them sr1a/sr1b 24 / 40 s. Within the noise (24-41 s); the serial console is not the slow part. NOSERIAL stays as a switch; the variance is later (launchd / dropbear order).
 
