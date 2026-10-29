@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 21:00 FastRPC listener: protocol spec done; blocked on the apps SMMU (needs the user's decision)
+- Spec (from the sunfish downstream adsprpc.c, quic/fastrpc and recon/live.dts:4246-4345; source excerpts kept in the session scratchpad, not in git): 40-byte smq_msg over glink `fastrpcglink-apps-dsp`, a contiguous metadata buffer (remote_arg64 + page lists), sensorspd = static PD 2, attach = handle 1 method 0 (in: tgid); then remotectl_open("adsp_default_listener"), adsp_listener_init2 (handle 3 mid 3), loop next2 (mid 4) answering apps_std fopen/fread/fclose/opendir/readdir/stat for /vendor/etc/sensors (+ a scratch persist registry dir). Effort ~3-5 days.
+- Blocker (read-only pmem dump of the apps SMMU at 0x15000000): sCR0 0x002d0406 (USFCFG = 1: unmatched streams fault), IDR0 0x4c017e4f (79 SMRs), valid SMRs 0-6 and 117-127, none matching the ADSP FastRPC SIDs 0x1b23-0x1b28. So any AP buffer handed to the DSP would fault: a stream entry + pass-through context bank must be added first. That SMMU also carries UFS/USB DMA, so this change is held for the user's OK (plan U7); not started.
+
 ### 2026-10-28 18:45 why the ADSP dies (read-only, strings in adsp.b13/b18/b04 + the .jsn files)
 - The ~10 s is `chre::SeeHelper::findSuidSync` (b13 0xf7615; b18 0x2ac2 "Waited %lu ms for %s (found %zu, required %hhu)") waiting for sensor SUIDs: the SAR module (sar.cc) needs them, gets none, "Failed to initialize ASH SEE helper" -> fatal. svc 400 (SNS client, published) is local, so the QMI side works.
 - No sensor driver registers because the SEE registry reads /vendor/etc/sensors/sns_reg_config, sensors_list.txt and /vendor/etc/sensors/config/*.json from the AP through reverse FastRPC (apps_std via adsp_listener, HAP_rfs_wait; b13 0x13f8e0/0x115b5f/0xf91a3). On Android that is `adsprpcd sensorspd`. Nobody serves it here, which fits "no FastRPC data".
