@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 15:15 zero-copy design (research/notes/zero-copy-design.md)
+- Chosen: backboardd keeps 1125x2436; its display IOSurfaces allocated physically contiguous (SweetSurface.cpp:759, fallback normal); swap() (SweetFramebuffer.cpp:868) points VIG0 at the swapped surface (SRC_SIZE 1125x2436, OUT 1080x2340, QSEED3LITE scaling) + CTL0 flush; real SwapWait polls the flush bits (1 ms, 33 ms cap). Rejected: 1080x2340 canvas (360x780 pt: red rdar status bar, would need an iPhone 13 mini identity), carveout slots (2 x 11.1 MB fill the 24.1 MB carveout). Rounded-corner mattes lost at first.
+- Experiments: E2 (MDP reads contiguous memory outside the carveout? SMMU stream 0x800) first, E1 (QSEED3LITE scale test), E3 (flip + SwapWait behind sweetfb_zerocopy, fpsbench).
+
 ### 2026-10-29 15:00 zero-copy step A: VIG0 source switch works (zc1, kernel98 = 97 + xnu 0221)
 - 0221: `kern.sweet_mdp_src` (quad RW): write = VIG0 SRC0_ADDR (validated inside the splash carveout) + CTL0 flush 0x20001 (VIG0 | CTL bit 17, as ios-s9). sctl now writes hex / 64-bit values.
 - zc1: src 0x9c000000 -> 0x9c06a400 (+100 rows): picture moved toward the top, garbage strip at the bottom (webcam zc1-b); back to 0x9c000000: identical to the baseline (zc1-c). Log: `VIG0 src 0x9c06a400 (flush 0x20001)`, `after 20 ms ... flush 0` (latched within 20 ms). No reset; ssh 17 s; 4438 mV.
