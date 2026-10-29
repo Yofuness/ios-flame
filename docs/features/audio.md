@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 15:50 sp12/sp13: shared memory is right; the gap is inside the DSP routing (suspected)
+- sp12 (pin sampling with pmem during playback): all 600 reads of the LPI in/out bits were 0, timing vs the tone unconfirmed; inconclusive (the amp's PLL locks on BCLK, so BCLK does arrive).
+- sp13: record buffers pre-filled with 0xA5 before each READ_V2: after READ_DONE, 0 samples still A5A5, 468000 zero: the DSP writes into OUR pages, so the shared-memory mapping is right (playback reads our tone from the same mapping). The TX zeros just mean nothing drives SD1 (stock tx-lines = 0).
+- So: PCM reaches the ADSP, the amp is fine, but no sound: suspect ASM -> ADM matrix -> AFE routing/config. Next: diff our APR payloads against ios-redfin's working sequence (research/notes/apr-diff.md, in progress).
+
 ### 2026-10-30 15:30 sp11: bottom amp 0x41 silent in every recipe (mic beside the bottom speaker; kernel107)
 - The user confirmed the EM-01 mic sits right beside the phone's bottom speaker. sp11a --amp-boost, sp11b --amp-invert-clk, sp11c both, sp11d --amp-no-clk --amp-no-unmute (old recipe): 0 TONE windows each (1 kHz bin at the noise floor, e.g. 0.14 vs neighbours 0.06-0.23); amp PUP_DONE 1-3 ms, on ~3.03-3.05 s, IRQ1 status clean, no faults; rc 0, no reset.
 - So the amp side looks right and the data is the suspect. Hypothesis: the DSP plays a different (zero) memory page than our PCM buffer (consistent with sp8's loopback reading exact zeros); next: sample the I2S pins (BCLK/WS/SD0 levels) during playback (sp12).

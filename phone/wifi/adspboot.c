@@ -1386,9 +1386,17 @@ static void pcm_write(unsigned p)
 static void afe_next(int ok, uint32_t status);
 
 /* sp7: queue READ_V2 into rec buffer b (pages after the playback ones) */
+static unsigned long rec_untouched, rec_zero, rec_other;	/* sp13: A5-pattern check */
+
 static void rec_read(unsigned b)
 {
 	uint64_t a = pcm_dsp + PCM_BUF + (uint64_t)REC_BYTES * b;
+	/* sp13: pre-fill with 0xA5 so READ_DONE shows whether the DSP wrote into OUR pages at all (still A5 = it writes
+	 * somewhere else: the shared-memory mapping is wrong; zeros = it really records silence) */
+	static uint8_t pat[REC_BYTES];
+	if (!pat[0])
+		memset(pat, 0xa5, sizeof(pat));
+	pm_wr(pcm_pa + PCM_BUF + (uint64_t)REC_BYTES * b, pat, sizeof(pat));
 	/* asm_data_cmd_read_v2: buf addr lsw/msw, mem_map_handle, buf_size, seq_id */
 	uint32_t r[5] = { (uint32_t)a, (uint32_t)(a >> 32), pcm_handle, REC_BYTES, b };
 	pcm_tx(APR_SVC_ASM, REC_STREAM_PORT, REC_RTOKEN | b, ASM_DATA_CMD_READ_V2, r, sizeof(r));
@@ -1420,6 +1428,14 @@ static void rec_back(unsigned b, const uint32_t *pl, uint32_t len)
 				hex32("rec: READ_DONE payload", (const uint8_t *)pl, len * 4);
 				hex32("rec: first data", (const uint8_t *)d, n < 64 ? n : 64);
 			}
+			for (uint32_t i = 0; i < n / 2; i++) {	/* sp13 */
+				if ((uint16_t)d[i] == 0xa5a5)
+					rec_untouched++;
+				else if (!d[i])
+					rec_zero++;
+				else
+					rec_other++;
+			}
 			int ph = rec_phase();
 			for (uint32_t i = 0; i + 1 < n / 2; i += 2)
 				for (int c = 0; c < 2; c++) {
@@ -1450,6 +1466,8 @@ static void rec_summary(void)
 {
 	static const char *nm[3] = { "baseline", "tone", "after" };
 	printf("rec: %u reads queued, %u errors\n", rec_reads, rec_errs);
+	printf("rec: sp13 pattern check: %lu samples still A5A5 (DSP did not write our pages), %lu zero, %lu other\n",
+	    rec_untouched, rec_zero, rec_other);
 	for (int p = 0; p < 3; p++)
 		printf("rec: %s %llu frames: ch0 (VMON) rms %d peak %u, ch1 (IMON) rms %d peak %u\n", nm[p],
 		       (unsigned long long)rec_ph_n[p],
