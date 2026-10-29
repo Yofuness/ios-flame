@@ -4,7 +4,7 @@
  * Wire format: sunfish downstream adsprpc.c (smq_msg, remote_arg64 + page lists in one DMA buffer); the
  * listener / apps_std argument layouts: quic/fastrpc (adsp_listener next2, qaic skel conventions).
  * Files: /vendor/etc/sensors -> /var/local/fw/sensors (read-only), /persist/sensors (and /mnt/vendor/persist/sensors)
- * -> /var/local/sensors-persist (the only writable place). Everything else is refused.
+ * -> /var/local/sensors-persist (the only writable place: write, mkdir, remove, rename). Everything else is refused.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,12 +191,48 @@ static int under(const char *p, const char *pre)
 	return !strncmp(p, pre, l) && (p[l] == 0 || p[l] == '/');
 }
 
-/* DSP path -> our path; *w = writable. 0 or an errno. */
-static int map_path(const char *in, char *out, size_t sz, int *w)
+/* sensors step 7: fold "." / ".." / "//" of an absolute DSP path (the registry asks for
+ * .../registry/registry/../temp.json); 0, or EACCES when ".." climbs above "/" */
+static int norm_path(const char *in, char *out, size_t sz)
 {
-	*w = 0;
-	if (strstr(in, ".."))
+	char b[256];
+	size_t n = 0;
+	if (in[0] != '/' || strlen(in) >= sizeof(b) || sz < 2)
 		return EACCES;
+	snprintf(b, sizeof(b), "%s", in);
+	out[0] = 0;
+	for (char *sv, *c = strtok_r(b, "/", &sv); c; c = strtok_r(NULL, "/", &sv)) {
+		if (!strcmp(c, "."))
+			continue;
+		if (!strcmp(c, "..")) {
+			if (!n)
+				return EACCES;
+			while (n && out[n] != '/')
+				n--;
+			out[n] = 0;
+			continue;
+		}
+		if (n + 1 + strlen(c) >= sz)
+			return ENAMETOOLONG;
+		n += (size_t)snprintf(out + n, sz - n, "/%s", c);
+	}
+	if (!n)
+		snprintf(out, sz, "/");
+	return 0;
+}
+
+/* DSP path -> our path; *w = writable. 0 or an errno. */
+static int map_path(const char *in0, char *out, size_t sz, int *w)
+{
+	char in[256];
+	*w = 0;
+	if (in0[0] == '/') {
+		if (norm_path(in0, in, sizeof(in)))
+			return EACCES;
+	} else if (strstr(in0, ".."))
+		return EACCES;
+	else
+		snprintf(in, sizeof(in), "%s", in0);
 	const char *rest;
 	if (under(in, VENDOR_SNS)) {
 		rest = in + strlen(VENDOR_SNS);
@@ -300,6 +336,8 @@ static int do_fopen(const char *name, const char *mode, struct rarg *ro)
 		return errno ? errno : AEE_EFAILED;
 	}
 	ftab[fd] = f;
+	if (wantw)
+		printf("rpc: persist write: fopen %s \"%s\"\n", path, mode);	/* sensors step 7 */
 	if (n_files < 32)
 		snprintf(files[n_files], sizeof(files[0]), "%s", name);
 	n_files++;
@@ -618,7 +656,32 @@ static int apps_std(uint32_t sc, struct rarg *a)
 		}
 		break;
 	}
-	case 24: case 30: case 33: case 32: {	/* fremove / rmdir / frename / ftrunc: refused (no deletes) */
+	case 24: case 33: {	/* sensors step 7: fremove in {len} name; frename in {oldLen, newLen} old new;
+				 * persist only (the registry writes temp.json, then renames it) */
+		const char *n = nin >= 2 ? str(&a[1]) : NULL, *n2 = mid == 33 && nin == 3 ? str(&a[2]) : NULL;
+		char path[256], path2[256];
+		int w = 0, w2 = 0;
+		snprintf(what, sizeof(what), "%s%s%s", n ? n : "?", n2 ? " -> " : "", n2 ? n2 : "");
+		if (!n || (mid == 33 && !n2)) {
+			r = AEE_EBADPARM;
+			break;
+		}
+		r = map_path(n, path, sizeof(path), &w);
+		if (!r && mid == 33)
+			r = map_path(n2, path2, sizeof(path2), &w2);
+		if (!r && (!w || (mid == 33 && !w2)))
+			r = EROFS;
+		if (r)
+			break;
+		if (mid == 24)
+			r = remove(path) ? errno : 0;
+		else
+			r = rename(path, path2) ? errno : 0;
+		printf("rpc: persist write: %s %s%s%s -> %d\n", mid == 24 ? "remove" : "rename", path,
+		       mid == 33 ? " -> " : "", mid == 33 ? path2 : "", r);
+		break;
+	}
+	case 30: case 32: {	/* rmdir / ftrunc: refused */
 		const char *n = nin >= 2 ? str(&a[1]) : NULL;
 		snprintf(what, sizeof(what), "%s refused", n ? n : "");
 		r = EROFS;
