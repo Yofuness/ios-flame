@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 03:50 B35 Location Services row: gate found, hook not loaded (b35, kernel98)
+- Gate (research/notes/b35-location-row.md, PrivacySettingsUI disassembly): -[PUIPrivacyController specifiers] removes the "LOCATION" row unless refreshLocationServicesAvailable cached YES; that method asks CoreTelephony getSubscriptionInfo, which fails without CommCenter (removed from launchd.plist since image v13) -> nil -> row hidden.
+- SweetMetal2 hook (Preferences: refreshLocationServicesAvailable -> cache @YES, via a dyld add-image callback): no "b35:" line at all in mtl2.log, so the SweetMetal2 bundle never loads in Preferences (it only loads in Metal clients). Row still missing.
+- Parked: cosmetic (Location Services itself is on). Needs a way to inject into Preferences (e.g. DYLD_INSERT_LIBRARIES for that app) or a CommCenter stub that answers getSubscriptionInfo with zero subscriptions.
+
 ### 2026-10-30 00:20 Auto-Lock Never; last Settings panes (tap4, kernel98)
 - Auto-Lock set to Never by fake taps (was 1 minute). Battery pane fine (100 %, graph); Wallpaper pane opens (previews washed out white); Privacy & Security opens but has NO Location Services row (list starts at Tracking) -> B35.
 - `openapp` was ignored twice with the phone unlocked and Settings in front (B34); earlier in a boot it works. Injected home swipes from Settings only scrolled the list (B33 stays open).

@@ -12,6 +12,7 @@
 #import <objc/runtime.h>
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <mach/mach_time.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -609,6 +610,39 @@ static void sm2_orient_e(long n)
 	}
 	((void (*)(id, SEL, id, long long))objc_msgSend)(pm, cb, acc, (long long)n);
 	sm2_log("orient: E %ld (accelerometer %p)", n, acc);
+}
+
+/* B35: Settings > Privacy hides the Location Services row when CoreTelephony's getSubscriptionInfo fails (no CommCenter
+ * on this port): -[PUIPrivacyController refreshLocationServicesAvailable] then leaves the cached value nil = NO
+ * (research/notes/b35-location-row.md). In Preferences, replace that method with one that caches @YES. PrivacySettingsUI
+ * loads late, so try on every image add until the class exists. */
+static void sm2_b35_refresh(id self, SEL _cmd)
+{
+	((void (*)(id, SEL, id))objc_msgSend)(self, sel_registerName("set_cachedLocationServicesAvailableValue:"), @YES);
+}
+
+static void sm2_b35_try(const struct mach_header *mh, intptr_t slide)
+{
+	static bool done;
+	if (done)
+		return;
+	Class c = objc_getClass("PUIPrivacyController");
+	if (!c)
+		return;
+	done = true;
+	Method m = class_getInstanceMethod(c, sel_registerName("refreshLocationServicesAvailable"));
+	bool setter = class_getInstanceMethod(c, sel_registerName("set_cachedLocationServicesAvailableValue:")) != NULL;
+	if (m && setter)
+		method_setImplementation(m, (IMP)sm2_b35_refresh);
+	sm2_log("b35: PUIPrivacyController refresh %p setter %d -> %s", m, setter, m && setter ? "hooked" : "not hooked");
+}
+
+__attribute__((constructor)) static void sm2_b35_init(void)
+{
+	if (strcmp(getprogname(), "Preferences") != 0)
+		return;
+	sm2_log("b35: loaded in Preferences");
+	_dyld_register_func_for_add_image(sm2_b35_try);
 }
 
 /* Rotation probe in app processes (MobileSafari etc.): after each change of /var/local/sweet-orient, log what the app's

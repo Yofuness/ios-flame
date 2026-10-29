@@ -14,7 +14,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 
 2. ▶ **Audio self-check without the user**: does the CS35L41 report what it plays (VMON/IMON or ASP TX feedback), so the
    speaker can be verified from SSH? Read-only research first. (audio.md)
-3. **B35 no Location Services row, B33 home swipe, B34 openapp ignored** (quick checks with fake taps).
+3. **B33 home swipe, B34 openapp ignored** (quick checks with fake taps; B35 parked).
 
 ## Questions for you (Claude took the recommended path meanwhile)
 - (none open)
