@@ -25,9 +25,8 @@ session scratchpad with absolute paths.
 Never read or write physical addresses with pmem except the exact addresses a spec lists (a stray `pmem r 0x0` blacked
 the screen on 2026-10-28; 0x0ae44000 hangs the bus).
 
-Screen: the phone is in the user's bedroom. At night, right after every boot, once SSH answers, run
-`tools/sunfish-dim.sh 10`, never set more than 50%, and go back to 10 after any brightness test. In the daytime
-the spec says so (DIM=100) and brighter is fine.
+Screen: don't dim after boot (the user, 2026-10-28: the brightness slider works now). Run `tools/sunfish-dim.sh N`
+only when the spec asks for it.
 
 Webcam frames: `ffmpeg -hide_banner -loglevel error -y -f v4l2 -i /dev/videoN -frames:v 1 OUT.jpg`. Find N for "Iriun"
 with `v4l2-ctl --list-devices`. Save frames in the session scratchpad and give their absolute paths.

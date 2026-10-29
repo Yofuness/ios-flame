@@ -1,5 +1,5 @@
 #!/bin/bash
-# One phone test from start to end: reboot to fastboot, battery check, boot, wait for SSH, dim, run CMD.
+# One phone test from start to end: reboot to fastboot, battery check, boot, wait for SSH, dim only if $DIM is set, run CMD.
 #   tools/sunfish-test.sh [-b BUNDLEDIR] [-k KERNEL_NN|PATH] [-n] TAG [bootargs...] [-- CMD...]
 #   -k  kernel number (work/kernelNN) or a kernel file; default: the newest work/kernelNN
 #   -b  install this Metal bundle (tools/sunfish-metal2-install.sh DIR --no-restart) before CMD
@@ -102,7 +102,7 @@ if [ $noreboot = 0 ]; then
 	waitssh || rescue
 	say "ssh up after $tssh s"
 	mark "ssh up $tssh s"
-	tools/sunfish-dim.sh ${DIM:-10} >/dev/null 2>&1 && mark "dim ${DIM:-10}"
+	[ -n "${DIM:-}" ] && tools/sunfish-dim.sh "$DIM" >/dev/null 2>&1 && mark "dim $DIM"
 else
 	sshok || { say "-n: no SSH"; rescue; }
 fi

@@ -9,7 +9,7 @@ Results live in the feature logs (`docs/features/`); the plan is `docs/plan.md`.
 cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet sweetpresentwait=1
 ```
 - RAM-only boots: `tools/sunfish-boot.sh NAME KERNEL [bootargs]`. Defaults and escape hatches: [features/boot.md](features/boot.md).
-- One-command test: `tools/sunfish-test.sh [-b BUNDLEDIR] [-k NN|PATH] [-n] TAG [bootargs] [-- CMD]` (reboot, battery check, boot, SSH wait, dim 10, optional bundle, CMD with $TAG; markers `=== TAG ...` in the live log; a lost phone gets a rescue boot TAG-r and logs/TAG-rescue.txt, exit 3). Soak: `tools/sunfish-test.sh -k 85 k85s sweetwifiev=1 -- tools/sunfish-appsoak.sh k85s 1800`.
+- One-command test: `tools/sunfish-test.sh [-b BUNDLEDIR] [-k NN|PATH] [-n] TAG [bootargs] [-- CMD]` (reboot, battery check, boot, SSH wait, optional bundle, dim only with DIM=N, CMD with $TAG; markers `=== TAG ...` in the live log; a lost phone gets a rescue boot TAG-r and logs/TAG-rescue.txt, exit 3). Soak: `tools/sunfish-test.sh -k 85 k85s sweetwifiev=1 -- tools/sunfish-appsoak.sh k85s 1800`.
 - Stop booting below 3600 mV (`fastboot getvar battery-voltage`). Start the live-log listener first (`pgrep -af sunfish-livelog`).
 - Tools (status.md): `flame-cmd.py reboot|swipe|tap` (and `key N [MS]`), `flame-files.py get|put`, `flame-shot OUT.png`,
   `sunfish-install-ssh.sh`, `sunfish-install-wifi.sh`, `sunfish-livelog.sh` (log → logs/usb-live.log).
