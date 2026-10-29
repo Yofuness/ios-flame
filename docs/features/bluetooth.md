@@ -23,6 +23,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:45 AirPods again: RX overruns crash bluetoothd (reason 607)
+- During the AirPods connection (0x0405 Create Connection unanswered, then 0x0c03): "uart dropped 3347, overruns 88"; the watchdog recovered the chip (recovery 1), but bluetoothd had already died: "CRASH bluetoothd ... Bluetooth fatal error - crashing { reason=607 }". Root cause: the polled UART at 115200 cannot keep up and our RTS is held ready, so the chip overruns the FIFO. Fix in progress: GENI automatic RFR (RX watermark), burst drain, quieter logging.
+
 ### 2026-10-30 19:30 AirPods retest (U9b, kernel108): the chip goes silent; watchdog re-armed on HCI_Reset
 - The user paired AirPods Pro 2 again on kernel108 (0231): no bluetoothd CRASH line this time; instead the chip stopped answering (btbridge watchdog: 0x0419 Remote Name Request, then 0x0c37 and 0x1001 unanswered); bluetoothd restarted 3 times. No recovery ran: the host HCI_Reset (0x0c03) came while 0x0c37 was the watched command, so the reset was never checked, and only 2 misses happened (threshold 3).
 - Fix (btbridge, installed, untested): a host HCI_Reset always re-arms the watchdog; WD_MISSES 3 -> 2. Why AirPods make the chip hang is still open (polled 115200-baud UART vs the AirPods' traffic / Apple-specific pairing).

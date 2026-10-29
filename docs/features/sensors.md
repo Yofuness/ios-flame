@@ -16,6 +16,9 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:45 Auto-rotate from the boot job confirmed by the user (u10h, kernel108 defaults)
+- Fresh boot with the new defaults (sweetmotion=0x37, launchd org.iosonpixel.sensors via tools/sunfish-install-sensors.sh): the feed starts by itself (adspboot pid 37, "SNS service 400 ... starting in 10 s", orientation posts). The user: Calculator auto-rotates just fine.
+
 ### 2026-10-30 19:15 AUTO-ROTATE WORKS (U10 by the user; kernel108 sweetmotion=0x37, adspboot --sns-motion --sns-rot)
 - Raw accel during the user's turns (u10c): upright y~9.2 -> orientation 1, landscape x~9.5 -> 3, posted at once and held: the sensor side was right all along.
 - iOS's own path (orientation HID service, sweetmotion=0x77): the oslog (u10e) shows backboardd -> SpringBoard rotating within 0.35 s (SBRotateScenesWorkspaceTransaction Prepare/Animate/Complete, Calculator "will change interface orientation"), plus GraphicsOrientation / display orientation changes, yet the panel only showed it at the next change (user) or not at all (mo3, webcam). Mach-time stamps (u10d) and re-posts (u10b) changed nothing.
