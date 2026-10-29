@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 01:15 xnu 0224 zero-copy E3c built (kernel103 = 102 + 0224; untested)
+- Two slots (slot1 0x9cb00000 first, slot0 0x9c000000 over the old fb) for backboardd's two 1125x2436 surfaces. `kern.sweet_zc_scan=2` = flip mode (EBUSY unless both slots owned): swap() decodes the SwapEnd record (mask rec+0x104, id rec+0x54+4*layer), writes VIG0 SRC0 + CTL0 flush and skips present; frames without a slot are dropped (logged). SwapWait polls the flush bits (1 ms, cap 33 ms). `=0` reverts and forces a redraw. `kern.sweet_zc_stats` string.
+- Open risks: with presents stopped, swap-complete/vsync pacing may throttle CA; leaving flip mode may show a wrong frame (slot0 = fb).
+
 ### 2026-10-30 00:55 E3b WORKS: VIG0 scans backboardd's own surface via the scaler (zc2, kernel102)
 - `sweetfb_zerocopy=1`: "sweet zc: slot1 surface id 2 1125x2436 bpr 4608 size 0xab8000" at 32.8 s (backboardd's 1st display surface; the 2nd stays in normal memory).
 - `sctl kern.sweet_zc_scan=1` -> "zc scan 1 src 0x9cb00000 bpr 4608": Calculator unchanged, sharp, full screen, not frozen; 10 s later same; a `T` tap changed "5" to "2" live while scanning. `=0` -> "src 0x9c000000 bpr 4352", normal. No reset, no underflow (full 1125x2436 downscale fetch is fine). 4455 mV.
