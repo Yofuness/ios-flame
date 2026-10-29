@@ -17,6 +17,14 @@ U7. [DONE 2026-10-29 05:15 (the user: go): userland, not a kernel patch: adspboo
 U8. [2026-10-29: (a) chosen and tried (rpc3): reset again; left: (b) the hypervisor, or hold] **Audio DSP: next step after the rpc2 reset (B16/B23):** the sensor PD needs a 32-bit address for our FastRPC buffer, and no iOS-managed RAM sits below 4 GB. Choose: (a) give the DSP stream a translating SMMU bank (32-bit address -> our buffer above 4 GB; no hypervisor call; recommended), (b) hand a buffer to the DSP via the hypervisor (SCM assign), or (c) hold audio. features/audio.md 05:40.
 U4. [ ] **Charging on a strong port (B14, optional):** plug the phone into the TB4 port with the 240 W cable for one boot so Claude can read the charger status registers on both sources. ~1 min.
 
+## Questions for you (answer when you have time; Claude took the recommended path meanwhile)
+Format: Q-number, date, the question, what Claude chose meanwhile.
+- (none open)
+
+## Later (reliability checks that need repeated 1 h+ tests; revisit once more works)
+- B21 GPU busy-hang recovery + pool growth.
+- B4 silent resets in long app soaks.
+
 ## Priority (at most 5; the one being worked is marked ▶)
 **Long tests (the user, 2026-10-28 18:55):** no more 1-2 h soaks by default. Get more things working first. A test that needs an hour or more is only worth it when the problem significantly harms usability or development speed; otherwise a short check (a boot, a few minutes of use) is enough. The GPU hang/pool work moved to the bottom of the Broken list (B21).
 1. [DONE 2026-10-28 cam2: IMX363 ID 0x0363 at 0x1a over CCI0 via camid; M2 (raw frames) is weeks, parked as a dream step] **Camera M1: camera PMIC + sensor ID** (was B17) [2026-10-28 cm1: PMIC answers with sweetcampmic=2 (PATN_ID 05 35 a9), no LDO on yet; next: read the 0x50-0x53 EEPROM, then LDO enables + MCLK + reset + CCI]: SE9 I2C works; `i2cprobe scan` on the current kernel, then kernel94 `sweetcampmic=1` (read the SLG51000 enable/cs GPIOs), then `=2` (lines high) and `i2cprobe 0x75 2 0x1105 3` (PATN_ID). Then the LDO rails and the IMX363 ID over CCI (features/camera.md).

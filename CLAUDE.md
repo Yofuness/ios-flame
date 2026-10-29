@@ -51,6 +51,11 @@
 - **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list and move on.
 - **Dev-speed optimizations:** anything slowing development down becomes priority. Give it at most about an hour;
   past that it's likely not worth it: note it and move on.
+- **Risky steps** (the user, 2026-10-29): where hardware damage is possible (e.g. PMIC charger writes), proceed with
+  caution: research how the system works first, then lots of baby steps. Steps that only risk a reset (hypervisor
+  calls, SMMU, DSP memory) are fine with the same care; a reset is logged (feature Log + journal), then work goes
+  on with a smaller step. Flash/relock/battery/factory-reset rules above stay absolute.
+- **Notifications:** anytime, also at night.
 - **Other optimization:** make systems usable, not fast. Once something works and could be faster, add it to the
   "Optimize (last)" list and move on.
 
