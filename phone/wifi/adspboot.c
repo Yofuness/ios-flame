@@ -20,6 +20,7 @@
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
+ *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
  *   [--no-reuse]  ap7: glink rx as before (RX_DONE + a new intent) instead of RX_DONE_W_REUSE (or ADSP_NO_REUSE=1)
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
@@ -519,13 +520,16 @@ struct chan {
 	char name[32];
 	uint16_t rcid, lcid;
 	uint32_t *r_iid, *r_isz;	/* ap7: NRINT each, allocated on the first INTENT */
-	int r_n, ndata, up;
+	uint8_t *r_use;	/* ap7: remote intent carries our tx, until the ADSP's RX_DONE[_W_REUSE] */
+	int r_n, r_busy, ndata, up;
+	uint32_t ndone, nreuse;	/* ap7: RX_DONE / RX_DONE_W_REUSE received */
 	int l_n;	/* ap7: our rx intents the remote still holds unused */
 	uint32_t nrx, nreq;	/* ap7: packets received, RX_INTENT_REQs sent */
 	uint8_t pend[NPEND][512];	/* (pd-mapper replies are ~150 bytes) */
 	uint32_t pend_len[NPEND];
 	int npend;
 };
+static int intent_once;	/* ap7: --intent-once / ADSP_INTENT_ONCE=1: a remote intent is gone after one tx (the old way) */
 static int no_reuse;	/* ap7: --no-reuse / ADSP_NO_REUSE=1: RX_DONE + a fresh intent per packet (the old way) */
 static struct chan ch[NCHAN];
 static struct chan *apr_chan;
@@ -585,7 +589,7 @@ static void give_intents(struct chan *c, int n, uint32_t sz)
 static void chan_send(struct chan *c, const void *pkt, size_t n)
 {
 	int i;
-	for (i = 0; i < c->r_n && c->r_isz[i] < n; i++)
+	for (i = 0; i < c->r_n && (c->r_isz[i] < n || c->r_use[i]); i++)
 		;
 	if (i >= c->r_n) {
 		if (c->npend < NPEND && n <= sizeof(c->pend[0])) {
@@ -602,10 +606,15 @@ static void chan_send(struct chan *c, const void *pkt, size_t n)
 	}
 	uint32_t iid = c->r_iid[i];
 	if (c == apr_chan)	/* ap5: which remote intent carried the APR packet */
-		printf("adsp: %s: tx %zu bytes on remote intent %u (%u bytes, %d left)\n", c->name, n, iid, c->r_isz[i],
-		       c->r_n - 1);
-	c->r_iid[i] = c->r_iid[--c->r_n];
-	c->r_isz[i] = c->r_isz[c->r_n];
+		printf("adsp: %s: tx %zu bytes on remote intent %u (%u bytes, %d free)\n", c->name, n, iid, c->r_isz[i],
+		       c->r_n - c->r_busy - 1);
+	if (intent_once) {
+		c->r_iid[i] = c->r_iid[--c->r_n];
+		c->r_isz[i] = c->r_isz[c->r_n];
+	} else {	/* ap7: held until the ADSP's RX_DONE (gone) or RX_DONE_W_REUSE (free again) */
+		c->r_use[i] = 1;
+		c->r_busy++;
+	}
 	uint8_t d[8 + sizeof(c->pend[0])];
 	if (n > sizeof(c->pend[0])) {
 		printf("adsp: %s: tx %zu bytes dropped (too big)\n", c->name, n);
@@ -1457,11 +1466,13 @@ static int pump_one(void)
 			if (!c->r_iid) {	/* ap7 */
 				c->r_iid = calloc(NRINT, sizeof(uint32_t));
 				c->r_isz = calloc(NRINT, sizeof(uint32_t));
-				if (!c->r_iid || !c->r_isz)
+				c->r_use = calloc(NRINT, 1);
+				if (!c->r_iid || !c->r_isz || !c->r_use)
 					return -1;
 			}
 			if (c->r_n < NRINT) {
 				c->r_isz[c->r_n] = e[0];
+				c->r_use[c->r_n] = 0;
 				c->r_iid[c->r_n++] = e[1];
 			} else {
 				printf("adsp: %s: remote intent %u (%u bytes) dropped, table full\n", c->name, e[1], e[0]);
@@ -1482,6 +1493,8 @@ static int pump_one(void)
 	case GLINK_CMD_RX_INTENT_REQ_ACK:
 		if (!p2)
 			printf("adsp: %s: intent request refused (%d queued)\n", c ? c->name : "?", c ? c->npend : 0);
+		else if (c && c->nreq <= 8)	/* ap7: granted: an INTENT should follow */
+			printf("adsp: %s: intent request granted (%d queued)\n", c->name, c->npend);
 		break;
 	case GLINK_CMD_TX_DATA:
 	case GLINK_CMD_TX_DATA_CONT: {
@@ -1532,7 +1545,30 @@ static int pump_one(void)
 		break;
 	}
 	case GLINK_CMD_RX_DONE:
-	case GLINK_CMD_RX_DONE_W_REUSE:
+	case GLINK_CMD_RX_DONE_W_REUSE: {	/* ap7: the ADSP consumed our tx on its intent p2 */
+		int i;
+		if (!c || !c->r_use)
+			break;
+		int re = h[0] == GLINK_CMD_RX_DONE_W_REUSE;
+		if (c->ndone + c->nreuse < 8)
+			printf("adsp: %s: remote %s intent %u\n", c->name, re ? "RX_DONE_W_REUSE" : "RX_DONE", p2);
+		re ? c->nreuse++ : c->ndone++;
+		for (i = 0; i < c->r_n && !(c->r_iid[i] == p2 && c->r_use[i]); i++)
+			;
+		if (i >= c->r_n)
+			break;	/* intent_once already dropped it */
+		c->r_busy--;
+		if (re) {
+			c->r_use[i] = 0;
+		} else {
+			c->r_n--;
+			c->r_iid[i] = c->r_iid[c->r_n];
+			c->r_isz[i] = c->r_isz[c->r_n];
+			c->r_use[i] = c->r_use[c->r_n];
+		}
+		flush_pend(c);
+		break;
+	}
 	case GLINK_CMD_SIGNALS:
 	case GLINK_CMD_READ_NOTIF:
 		break;
@@ -1606,8 +1642,9 @@ static void heartbeat(void)
 	       rpc_on ? b : "no rpc", np);
 	for (int i = 0; i < nch; i++)	/* ap7: intent accounting per channel */
 		if (ch[i].up)
-			printf("adsp:   %s: remote intents %d, local intents %d, tx queued %d, rx %u, intent reqs %u\n",
-			       ch[i].name, ch[i].r_n, ch[i].l_n, ch[i].npend, ch[i].nrx, ch[i].nreq);
+			printf("adsp:   %s: remote intents %d (in use %d), local intents %d, tx queued %d, rx %u, intent reqs %u, "
+			       "rx_done %u, rx_done_reuse %u\n", ch[i].name, ch[i].r_n, ch[i].r_busy, ch[i].l_n, ch[i].npend,
+			       ch[i].nrx, ch[i].nreq, ch[i].ndone, ch[i].nreuse);
 }
 
 static int edge_loop(int ms, int stop, uint64_t t0)
@@ -1625,6 +1662,8 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			}
 			exit(1);
 		}
+		if (pcm_running && beat > now_ms() + 1000)	/* ap7: the first beat was 10 s out, after the pcm run */
+			beat = now_ms() + 1000;
 		if (now_ms() >= beat) {
 			beat = now_ms() + (pcm_running ? 1000 : 10000);	/* ap7: 1 s while --pcm plays */
 			heartbeat();
@@ -1716,6 +1755,7 @@ int main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	run_t0 = now_ms();
 	no_reuse = getenv("ADSP_NO_REUSE") != NULL;	/* ap7 */
+	intent_once = getenv("ADSP_INTENT_ONCE") != NULL;
 	signal(SIGTERM, on_sig);
 	signal(SIGINT, on_sig);
 	if (smem_init())
@@ -1730,6 +1770,8 @@ int main(int argc, char **argv)
 			watch = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--no-reuse"))
 			no_reuse = 1;
+		else if (!strcmp(argv[i], "--intent-once"))
+			intent_once = 1;
 		else if (!strcmp(argv[i], "--no-early"))
 			early = 0;
 		else if (!strcmp(argv[i], "--no-sleepstate"))
