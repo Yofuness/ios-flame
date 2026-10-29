@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 DSP boots and stays up; FastRPC root + sensors PD served; APR works; the speaker's AFE port (SEC_MI2S_RX) starts; no sound yet (PCM + amps next). **Updated:** 2026-10-29.
+**State:** 🟡 DSP up; APR + AFE + PCM stream; the left CS35L41 amp powers up on the I2S clock (PLL lock, PUP_DONE) and plays at -30 dB; not yet heard by the PC mic. **Updated:** 2026-10-29.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 18:45 SPEAKER AMP RUNS: PLL lock + PUP_DONE, 3 s on, no errors (sp2a, sp3a, sp3b; kernel98 sweetse9=2 sweetampreset=1; adspboot dc872fb, 423b675)
+- sp2a: hw vote op 0x1027C -> status 3 (unsupported). 423b675: vote op 0x100F4 (block 2) -> ok, handle; LPI pins muxed only after DEVICE_START: gpio8 0x401->0xcc, gpio9 0x401->0xcc, gpio10 0x5c1->0xd0 (read back ok), restored before DEVICE_STOP; devote. All AFE steps status 0.
+- sp3b (--pcm --amp --amp-db -30, tone -20 dBFS, gain 0.5 dB, boost bypass): `PLL_LOCK first after 1 ms`, `PUP_DONE after 1 ms (STATUS1 01400000 STATUS3 2000002f)`, on 3028 ms (3 s cap), no error bits, normal power-down; PCM 388/388. Laptop mic: no tone (rms ~800, 1 kHz bin 1-18): the output was ~-50 dB below full scale. No reset; 4455 mV.
+- Next: -20 dB digital (the cap), then analog gain ~10 (10.5 dB) if still not heard.
 
 ### 2026-10-29 18:25 why no PUP_DONE: SEC MI2S pins never muxed, no LPASS hw vote (research/notes/amp-clock.md)
 - Amps are on SEC MI2S (dai_mi2s1, port 0x1002, SD0; live.dts:20326). Its pins are LPASS LPI TLMM @0x62b40000: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA (live.dts:23261-23340). sp1 never muxed them nor cast AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST 0x1027C (block 1) that the LPI registers need: the amp had no SCLK, so its PLL (ref = SCLK) can't lock -> no PUP_DONE. CS35L41 STATUS3 bit 1 = PLL_LOCK (to poll); STATUS1 bit 22 undefined in Linux.
