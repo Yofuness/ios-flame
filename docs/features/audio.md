@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 11:05 references from other ports (survey; research/notes/hackios-survey.md)
+- xorbidden/hakios-sm7150 (Mi 9T, SM7150, no licence: facts only): DSP buffers in kernel memory mapped by its own page tables in a free apps-SMMU bank; the address handed to the DSP is IOVA 0x10000000 | (stream SID low 4 bits) << 32 (audio SID 0x1b21 -> 1<<32, FastRPC 0x1b23 -> 3<<32); one SMR per stream. pd-mapper answers `tms/pdr_enabled` on msm/adsp/root_pd (instance 74); FastRPC attaches the root PD before the sensors PD. Linux fastrpc.c also adds sid << 32. Our rpc3 handed 0x80000000 without SID bits (guess: the DSP used a stream with no SMR -> reset).
+- oosexgang/hakios-xnu-kernel (APSL-2.0): APR ASM/ADM/AFE playback + software speaker guard; userland CoreAudio HAL plug-in (MIT). Not verified by us.
+
 ### 2026-10-29 07:50 notes moved out of the scratchpad
 - The FastRPC source excerpts (downstream adsprpc.c, upstream fastrpc.c, quic listener + apps_std) are now in research/notes/fastrpc/ (gitignored); the camx IMX363 decode is in research/notes/camx/.
 

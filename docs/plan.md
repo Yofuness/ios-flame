@@ -4,15 +4,14 @@ Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-br
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
-0. ▶ **r/hackios survey** (the user, 2026-10-29, priority): other iOS-on-non-Apple projects and their repos; what we can reuse (research/notes/hackios-survey.md).
-1. ▶ **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
+2. **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
    compositing side (backboardd display transform / our framebuffer). (display.md)
-2. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign
+1. ▶ **Audio via the SM7150 reference** (B16/B23; survey 2026-10-29: xorbidden/hakios-sm7150 runs speaker+mic on our SoC): FastRPC/audio buffer address = IOVA | SID<<32 through a translating bank, pd-mapper `tms/pdr_enabled` root_pd, root PD attach first; then APR speaker path + speaker guard (oosexgang/hakios-xnu-kernel, APSL). Old line: **share memory with the DSP via the hypervisor**: read-only research of the SCM mem-assign
    call in the background now (while phone tests run); phone steps only once it's understood, as baby steps: a
    no-op assign on one page, a shared page the CPU still uses, then the FastRPC attach. `adspboot --rpc` needs
    `--unsafe`. (audio.md)
 
-Done 2026-10-29: kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
+Done 2026-10-29: r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
 button, SE9 I2C + amps, boot-arg defaults.
 
