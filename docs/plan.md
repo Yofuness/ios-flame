@@ -4,16 +4,14 @@ Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-br
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
-1. ▶ **Quick backlog items:** B28 AegirPoster
-   (listing it garbles the clock; find why); re-check on kernel95 what the sandbox-extension fix may also cure (B28 AegirPoster uncaught exception, B8 PhotosFileProvider, B27 App Store). (Parked: B29 noisy lock buttons.)
-2. **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
+1. ▶ **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
    compositing side (backboardd display transform / our framebuffer). (display.md)
-3. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign
+2. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign
    call in the background now (while phone tests run); phone steps only once it's understood, as baby steps: a
    no-op assign on one page, a shared page the CPU still uses, then the FastRPC attach. `adspboot --rpc` needs
    `--unsafe`. (audio.md)
 
-Done 2026-10-29: Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
+Done 2026-10-29: kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
 button, SE9 I2C + amps, boot-arg defaults.
 

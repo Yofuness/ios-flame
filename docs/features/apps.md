@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications; 16 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music, Photos fixed/confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
+**State:** ✅ 32 staged apps installed in /Applications; 17 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music, Photos, App Store fixed/confirmed 2026-10-29); only Camera (no camera stack), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -33,7 +33,7 @@ from the backup with plistlib.
 |---|---|---|---|
 | assetsd | SIGABRT at start (`reason ns 2 code 0x6`) | 88 / 30 min | disabled; Photos needs it for a real library. Backtrace in the live log (`CRASH assetsd bt ...`) |
 | *SpotlightIndexExtension (Tips, PassKit, Contacts, MobileSMS, Music, Maps, iBooks, TV, Reminders) | SIGABRT ~40 ms after exec | ~85 / 30 min before searchd was dropped, 0 after (dd2) | launched via searchd (now disabled); why they abort is unknown |
-| AegirPoster | crash loop | 487 in the long log | lock-screen poster (wallpaper) extension; lock screen still draws, left enabled |
+| AegirPoster | crash loop (fixed 2026-10-29 by kernel95 sandbox extensions: 0 in an 11 min idle soak) | 487 in the long log | lock-screen poster (wallpaper) extension |
 | FitnessWidget, com.apple.VoiceMemos, com.apple.podcasts (widget/extension) | crash loop | 9-10 / 30 min each in dd1, 0 in dd2 (15 min, searchd off), 160 in the long log | probably Spotlight-launched too (gone with searchd) |
 | PhotosFileProvider, fileproviderd | occasional crash | 1 / 30 min each | |
 | wifid | `apple80211: wifid gets 103 (CURRENT_NETWORK) ... error 6` | ~270 / h | ioctl not implemented in our Wi-Fi shim |
@@ -47,6 +47,12 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 10:20 kernel95 idle soak: 0 crashes, AegirPoster and App Store fixed (k95idle; ssh up 18 s, 4455 mV)
+- 11 min untouched, whole boot (to 719 s): 0 CRASH lines (kernel94 boots today: 33-66, mostly AegirPoster). AegirPoster exec'd at 387.9 s ("not listed ... no Metal device") and did not abort.
+- Lock screen: clock and date clean; the two buttons still noisy (B29).
+- App Store: "Welcome to the App Store" with Continue (was "LOADING" forever). Weather: opens, "Turn On Location Services" dialog.
+- Sandbox issues logged (cap 16): com.apple.app-sandbox.read-write x11, kTCCServiceAddressBook x4, StreamingUnzipService x1. 5 "Failed to send exception EXC_CORPSE_NOTIFY" (ReportCrash disabled).
 
 ### 2026-10-29 10:10 Photos works: assetsd re-enabled on kernel95 (ph1)
 - Job cache: assetsd entry copied back from launchd.plist.pre-drop (+ StandardErrorPath /var/local/assetsd.err); nebulad stays dropped. Backup: phone /System/Library/xpc/launchd.plist.pre-photos, local work/userland/launchd.plist.pre-photos; new: work/userland/launchd.plist.photos.

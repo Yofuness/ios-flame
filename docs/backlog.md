@@ -7,10 +7,8 @@ history in the feature Logs.
 ## Broken (cheapest first; [phone] = needs the phone)
 - Camera black (no camera stack, B17).
 - B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
-- B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
-- B27 App Store stuck on "LOADING" (network/account; may need iCloud).
-- B8 PhotosFileProvider crashes (re-check on kernel95: may share the sandbox-extension cause) (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
+- B8 PhotosFileProvider crashes: 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.
 - B12 Sensors: all behind the ADSP's SSC; wait for audio. Fallback: a sysctl that injects rotation events.
@@ -24,6 +22,7 @@ history in the feature Logs.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B31 oslog (/var/local/bin/oslog) crashes with SIGSEGV (far 0x10/0x20) on some captures; low priority tool bug.
+- B32 Location Services off (Maps/Weather ask to turn it on): check the Settings toggle and locationd (no GPS driver yet; Wi-Fi location needs Apple servers).
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)
