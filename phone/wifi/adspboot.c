@@ -7,6 +7,7 @@
  *   adspboot [boot]   votes, load adsp.mdt + .bNN, PAS init / mem setup / auth-and-reset, SMP2P ready, glink
  *   adspboot status   read-only: SMP2P state, glink items, crash reason
  *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
+ *                     and --no-pdmap (no service locator for the ADSP)
  *   adspboot boot --rpc [--watch 120]  also serve FastRPC (fastrpc.c): attach to the sensors PD on
  *                     fastrpcglink-apps-dsp, run adsp_default_listener and answer its apps_std file calls
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
@@ -34,6 +35,7 @@
 #include "glink.h"
 #include "smmu.h"
 #include "fastrpc.h"
+#include "pdmapper.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -444,7 +446,7 @@ struct chan {
 	uint16_t rcid, lcid;
 	uint32_t r_iid[16], r_isz[16];
 	int r_n, ndata, up;
-	uint8_t pend[NPEND][64];
+	uint8_t pend[NPEND][512];	/* (pd-mapper replies are ~150 bytes) */
 	uint32_t pend_len[NPEND];
 	int npend;
 };
@@ -508,7 +510,11 @@ static void chan_send(struct chan *c, const void *pkt, size_t n)
 	uint32_t iid = c->r_iid[i];
 	c->r_iid[i] = c->r_iid[--c->r_n];
 	c->r_isz[i] = c->r_isz[c->r_n];
-	uint8_t d[8 + 64];
+	uint8_t d[8 + sizeof(c->pend[0])];
+	if (n > sizeof(c->pend[0])) {
+		printf("adsp: %s: tx %zu bytes dropped (too big)\n", c->name, n);
+		return;
+	}
 	uint32_t cl[2] = { (uint32_t)n, 0 };
 	memcpy(d, cl, 8);
 	memcpy(d + 8, pkt, n);
@@ -528,6 +534,37 @@ static const char *qrtr_type(uint32_t t)
 	static const char *n[] = { "?0", "DATA", "HELLO", "BYE", "NEW_SERVER", "DEL_SERVER", "DEL_CLIENT",
 				   "RESUME_TX", "EXIT", "PING", "NEW_LOOKUP", "DEL_LOOKUP" };
 	return t < 12 ? n[t] : "?";
+}
+
+/*
+ * audio pd-mapper: pdmapper.c (wland's locator, which also has the msm/adsp PDs at instance 74) answers the ADSP's
+ * servreg-locator requests here too: HELLO is followed by NEW_SERVER 64 v1 i1 at 1:PDMAPPER_PORT (as the SM7150
+ * reference does), a NEW_LOOKUP for 64 gets it again, DATA to that port goes to pdmapper_handle. Separate edge from
+ * wland's (modem), so the two never meet. `--no-pdmap` = the old empty lookups.
+ */
+static int pdmap = 1;
+static struct chan *ipcrtr;
+static uint32_t ipcrtr_peer = 5;	/* the ADSP's node; set from its HELLO */
+
+/* pdmapper.c's transport: QRTR v1 from us (node 1) on the IPCRTR channel. */
+int qrtr_send(uint32_t type, uint32_t src_port, uint32_t dst_node, uint32_t dst_port, const void *payload, uint32_t len)
+{
+	uint8_t p[512];
+	uint32_t h[8] = { 1, type, QRTR_NODE_AP, src_port, 0, len, dst_node, dst_port };
+	if (!ipcrtr || 32 + ((len + 3) & ~3u) > sizeof(p))
+		return -1;
+	memset(p, 0, sizeof(p));
+	memcpy(p, h, 32);
+	memcpy(p + 32, payload, len);
+	chan_send(ipcrtr, p, 32 + ((len + 3) & ~3u));
+	return 0;
+}
+
+int qrtr_new_server(uint32_t service, uint32_t version, uint32_t instance, uint32_t port)
+{
+	uint32_t k[5] = { QRTR_TYPE_NEW_SERVER, service, version | instance << 8, QRTR_NODE_AP, port };
+	printf("adsp: qrtr tx NEW_SERVER svc %u at %u:%x\n", service, QRTR_NODE_AP, port);
+	return qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, ipcrtr_peer, QRTR_PORT_CTRL, k, sizeof(k));
 }
 
 /* QRTR v1 control packet from us (node 1, ctrl port) to dst. */
@@ -562,11 +599,30 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 	printf("\n");
 	if (h[0] != 1)
 		return;
-	if (ty == 2)
+	ipcrtr = c;
+	if (ty == 2) {
 		qrtr_ctrl(c, 2, h[2], QRTR_PORT_CTRL);
-	else if (ty == 10)
-		qrtr_ctrl(c, 4, h[2], h[3]);	/* all-zero NEW_SERVER = end of lookup, no servers */
-	else if (ty == 1)
+		ipcrtr_peer = h[2];
+		if (pdmap)
+			qrtr_new_server(PDMAPPER_SERVICE, 1, 1, PDMAPPER_PORT);
+	} else if (ty == 10) {
+		uint32_t svc = 0;
+		if (blen >= 8)
+			memcpy(&svc, body + 4, 4);
+		if (pdmap && svc == PDMAPPER_SERVICE) {
+			uint32_t k[5] = { QRTR_TYPE_NEW_SERVER, PDMAPPER_SERVICE, 1 | 1 << 8, QRTR_NODE_AP, PDMAPPER_PORT };
+			printf("adsp: pd-mapper: lookup for 64 answered with 1:%x\n", PDMAPPER_PORT);
+			qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
+		}
+		qrtr_ctrl(c, 4, h[2], h[3]);	/* all-zero NEW_SERVER = end of lookup */
+	} else if (ty == 1 && pdmap && h[7] == PDMAPPER_PORT) {
+		struct qrtr_hdr qh = { h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7] };
+		if (h[4]) {			/* confirm_rx: RESUME_TX names our port, so the sender goes on */
+			uint32_t k[5] = { QRTR_TYPE_RESUME_TX, QRTR_NODE_AP, h[7], 0, 0 };
+			qrtr_send(QRTR_TYPE_RESUME_TX, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
+		}
+		pdmapper_handle(&qh, body, (uint32_t)blen);
+	} else if (ty == 1)
 		hex32("qrtr data to unserved port, dropped:", body, blen);
 }
 
@@ -819,6 +875,8 @@ int main(int argc, char **argv)
 			watch = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--no-early"))
 			early = 0;
+		else if (!strcmp(argv[i], "--no-pdmap"))
+			pdmap = 0;
 		else if (!strcmp(argv[i], "--smmu"))
 			smmu = 1;
 		else if (!strcmp(argv[i], "--unsafe"))
@@ -859,7 +917,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--rpc [--root]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
