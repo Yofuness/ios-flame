@@ -5,6 +5,8 @@
  *   --sns-stream TYPE [--sns-rate HZ] [--sns-secs N]   stream one sensor, a line per 0.5 s
  *   --sns-motion [--sns-motion-dev PATH] [--sns-secs N]  every sensor into the kernel's motion device, at the
  *                                       rates iOS asks for (MOTION_GET_WANT), as redfin's sensd --daemon
+ *   --sns-one-port (sns2 off: all streams on client port 0x40), --sns-unregistered (sns2 off: also stream sensors
+ *   whose kernel service is not registered)
  * Common: --sns-delay S (wait after svc 400 appears, default 10), --sns-dump (every QMI message in hex).
  */
 #ifndef SNS_RUN_H

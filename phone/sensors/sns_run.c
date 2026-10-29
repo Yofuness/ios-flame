@@ -15,7 +15,7 @@
 #include "sns_run.h"
 
 enum { M_NONE, M_LIST, M_STREAM, M_MOTION };
-static int mode, secs, delay_s = 10, dump, done, tries;
+static int mode, secs, delay_s = 10, dump, done, tries, one_port, unregistered;
 static float rate;
 static const char *stream_type, *motion_dev = MOTION_DEV;
 static uint32_t svc_node, svc_port;
@@ -56,6 +56,10 @@ int sns_opt(int argc, char **argv, int *i)
 		mode = M_MOTION;
 	else if (!strcmp(a, "--sns-dump"))
 		dump = 1;
+	else if (!strcmp(a, "--sns-one-port"))		/* sns2: off switch: every stream on port 0x40 (sns1) */
+		one_port = 1;
+	else if (!strcmp(a, "--sns-unregistered"))	/* sns2: off switch: stream to unregistered services too */
+		unregistered = 1;
 	else if (!strncmp(a, "--sns-", 6) && !val)
 		return -1;
 	else if (!strcmp(a, "--sns-stream")) {
@@ -91,9 +95,10 @@ void sns_service(uint32_t node, uint32_t port)
 		printf("sns: SNS service %u at %u:%x; starting in %d s\n", SNS_QMI_SERVICE, node, port, delay_s);
 }
 
-static int setup(struct sensor *s, const struct sensor_kind *k)
+/* sns2: stream index -> its own client port (sns_link: SNS_LINK_PORT0 + index), as redfin's socket per sensor. */
+static int setup(struct sensor *s, const struct sensor_kind *k, int index)
 {
-	sensor_init(s, k, -1, svc_node, svc_port);
+	sensor_init(s, k, one_port ? 0 : index, svc_node, svc_port);
 	if (sensor_lookup(&env, s))
 		return -1;
 	if (sensor_get_attrs(&env, s))
@@ -109,7 +114,7 @@ static int start(void)
 	nss = 0;
 	if (mode == M_LIST) {
 		for (int i = 0; i < sensor_nkinds; i++)
-			if (setup(&ss[nss], &sensor_kinds[i]) == 0)
+			if (setup(&ss[nss], &sensor_kinds[i], nss) == 0)
 				nss++;
 		printf("sns: list: %d of %d sensor types found\n", nss, sensor_nkinds);
 		if (nss)
@@ -123,7 +128,7 @@ static int start(void)
 			done = 1;
 			return 0;
 		}
-		if (setup(&ss[0], k))
+		if (setup(&ss[0], k, 0))
 			return -1;
 		if (sensor_start(&env, &ss[0], rate)) {
 			done = 1;
@@ -137,7 +142,7 @@ static int start(void)
 	if (motion_fd < 0)
 		printf("sns: %s: %s (samples not posted)\n", motion_dev, strerror(errno));
 	for (int i = 0; i < sensor_nkinds; i++)
-		if (setup(&ss[nss], &sensor_kinds[i]) == 0)
+		if (setup(&ss[nss], &sensor_kinds[i], nss) == 0)
 			nss++;
 	printf("sns: motion: %d sensors\n", nss);
 	env.orient = 1;
@@ -174,10 +179,19 @@ static int follow(void)
 				hz = hz < 1 ? 1 : (hz > 200 ? 200 : hz);
 			}
 		}
+		/*
+		 * sns2: no service for it (sweetmotion's default 0x77 leaves prox out): the kernel would reject every
+		 * sample (mo1: "4 rejected" were prox), so don't stream it. --sns-unregistered: as sns1.
+		 */
+		if (have && !unregistered && !(w.present & (1u << idx)))
+			on = 0;
 		if (!on && orient_want && idx == MOTION_ACCEL) {
 			on = orient_only = 1;
 			hz = ORIENT_HZ;
 		}
+		if (s->orient_only != orient_only)	/* as redfin's sensd */
+			printf("sns: %s: %s\n", s->k->alias, orient_only ?
+			    "iOS wants none: kept for orientation only (samples not posted)" : "posting samples again");
 		s->orient_only = orient_only;
 		if (on && (!s->active || (!s->k->on_change && (s->hz < hz * 0.9f || s->hz > hz * 1.1f)))) {
 			printf("sns: %s: start%s %.1f Hz\n", s->k->alias, s->active ? " (new rate)" : "",
@@ -185,7 +199,8 @@ static int follow(void)
 			if (sensor_start(&env, s, hz))
 				return -1;
 		} else if (!on && s->active) {
-			printf("sns: %s: stop (iOS set ReportInterval 0)\n", s->k->alias);
+			printf("sns: %s: stop (%s)\n", s->k->alias, have && !(w.present & (1u << idx)) ?
+			    "service not registered" : "iOS set ReportInterval 0");
 			if (sensor_stop(&env, s))
 				return -1;
 		}

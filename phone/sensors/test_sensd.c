@@ -358,6 +358,42 @@ static void test_exchange(void)
 	}
 }
 
+/* sunfish sns2: per-port routing in sns_link (adspboot's hooks): each stream's queue gets only its port's DATA. */
+static uint32_t rt_lport;
+static int rt_step;
+static int rt_send(uint32_t lport, uint32_t node, uint32_t port, const void *d, size_t n)
+{
+	rt_lport = lport;
+	return 0;
+}
+static int rt_pump(void)
+{
+	static const uint8_t a = 'a', b = 'b', c = 'c';
+	switch (rt_step++) {	/* stream 1's message first, as als/prox indications landed in accel's wait */
+	case 0: return sns_link_push(SNS_LINK_PORT0 + 1, 5, 14, &b, 1) == 0;
+	case 1: return sns_link_push(SNS_LINK_PORT0 + 2, 5, 14, &c, 1) == 0;
+	case 2: return sns_link_push(SNS_LINK_PORT0, 5, 14, &a, 1) == 0;
+	default: return 0;
+	}
+}
+
+static void test_routing(void)
+{
+	static const struct sns_link_ops ops = { rt_send, rt_pump };
+	uint8_t d[8];
+	uint32_t node, port;
+	sns_link_set(&ops);
+	CHECK(rqrtr_send(1, 5, 14, "x", 1) == 0 && rt_lport == SNS_LINK_PORT0 + 1);
+	CHECK(rqrtr_send(SNS_LINK_NPORTS, 5, 14, "x", 1) == -1);
+	CHECK(sns_link_push(0x11, 5, 14, d, 1) == -1 && !sns_link_is_port(SNS_LINK_PORT0 + SNS_LINK_NPORTS));
+	CHECK(rqrtr_recv(0, &node, &port, d, sizeof(d), 100) == 1 && d[0] == 'a' && node == 5 && port == 14);
+	CHECK(rqrtr_recv(0, &node, &port, d, sizeof(d), 0) == 0);	/* nothing else for stream 0 */
+	CHECK(rqrtr_recv(1, &node, &port, d, sizeof(d), 0) == 1 && d[0] == 'b');
+	CHECK(rqrtr_recv(2, &node, &port, d, sizeof(d), 0) == 1 && d[0] == 'c');
+	CHECK(rqrtr_recv(1, &node, &port, d, sizeof(d), 0) == 0);
+	sns_link_set(NULL);
+}
+
 int main(void)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -365,6 +401,7 @@ int main(void)
 	test_encoders();
 	test_decoders();
 	test_exchange();
+	test_routing();
 	printf("%s (%d failures)\n", failures ? "FAILED" : "all sensd host tests passed", failures);
 	return failures ? 1 : 0;
 }
