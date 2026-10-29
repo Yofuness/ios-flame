@@ -384,7 +384,8 @@ __attribute__((constructor)) static void sm2_torch_init(void)
  * UIDeviceOrientation (1 portrait, 2 upside down, 3 landscape left, 4 landscape right). "N" = method A, AX
  * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
  * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock; "D N [S]" = method D, in backboardd:
- * BKOrientationManager updateDeviceOrientation:N changeSource:S; "P" = read-only scene/host probe in SpringBoard. Delete the file to turn it off.
+ * BKOrientationManager updateDeviceOrientation:N changeSource:S; "P" = read-only scene/host probe in SpringBoard;
+ * "S N [f]" = write the front app scenes' settings orientation (f: also swap the frame). Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -703,6 +704,46 @@ static void sm2_probe_views(id v, int *count)
 		sm2_probe_views(sv, count);
 }
 
+/* iOS 16.7 front app scenes (rotation-ios16.md): SBMainDisplaySceneManager's foreground app scene handles, else
+ * SBSceneManager sceneIdentityForApplication: -> existingSceneHandleForSceneIdentity: for the front app. */
+static NSArray *sm2_front_scenes(id fa, bool verbose)
+{
+	NSMutableArray *out = [NSMutableArray array];
+	id mgr = nil, handles = nil;
+	@try {
+		Class k = objc_getClass("SBSceneManagerCoordinator");
+		SEL md = sel_registerName("mainDisplaySceneManager");
+		mgr = [k respondsToSelector:md] ? ((id (*)(id, SEL))objc_msgSend)(k, md) : nil;
+		handles = sm2_get(mgr, "externalForegroundApplicationSceneHandles");
+		if (![handles count] && fa) {
+			SEL si = sel_registerName("sceneIdentityForApplication:"), eh = sel_registerName("existingSceneHandleForSceneIdentity:");
+			id ident = [mgr respondsToSelector:si] ? ((id (*)(id, SEL, id))objc_msgSend)(mgr, si, fa) : nil;
+			id h = ident && [mgr respondsToSelector:eh] ? ((id (*)(id, SEL, id))objc_msgSend)(mgr, eh, ident) : nil;
+			if (verbose)
+				sm2_log("orient: P fallback identity %s handle %p", sm2_desc(ident), h);
+			handles = h ? @[ h ] : nil;
+		}
+	} @catch (id ex) {
+		sm2_log("orient: scene lookup exception %s", [[ex description] UTF8String]);
+	}
+	if (verbose)
+		sm2_log("orient: P scene manager %p, %lu foreground handles", mgr, (unsigned long)[handles count]);
+	for (id h in handles) {
+		@try {
+			if (verbose)
+				sm2_log("orient: P handle %s currentInterfaceOrientation %s supported %s", class_getName(object_getClass(h)),
+				    sm2_desc(sm2_get(h, "currentInterfaceOrientation")),
+				    sm2_desc(sm2_get(h, "_mainSceneSupportedInterfaceOrientations")));
+			id sc = sm2_get(h, "sceneIfExists");
+			if (sc)
+				[out addObject:sc];
+		} @catch (id ex) {
+			sm2_log("orient: handle exception %s", [[ex description] UTF8String]);
+		}
+	}
+	return out;
+}
+
 static void sm2_orient_p(void)
 {
 	Class ac = objc_getClass("UIApplication");
@@ -711,18 +752,7 @@ static void sm2_orient_p(void)
 	/* 1. front app and its scene */
 	id fa = sm2_get(app, "_accessibilityFrontMostApplication");
 	sm2_log("orient: P front app %s %s", fa ? class_getName(object_getClass(fa)) : "nil", sm2_desc(sm2_get(fa, "bundleIdentifier")));
-	id sc = sm2_get(sm2_get(fa, "sceneHandle"), "sceneIfExists");
-	if (!sc && fa) {
-		Class fm = objc_getClass("FBSceneManager");
-		id mgr = [fm respondsToSelector:@selector(sharedInstance)] ? [fm performSelector:@selector(sharedInstance)] : nil;
-		id ident = sm2_get(sm2_get(fa, "sceneHandle"), "sceneIdentifier");
-		SEL sw = sel_registerName("sceneWithIdentifier:");
-		if (ident && [mgr respondsToSelector:sw])
-			sc = ((id (*)(id, SEL, id))objc_msgSend)(mgr, sw, ident);
-		else
-			sm2_log("orient: P no scene lookup (manager %p, identifier %s)", mgr, sm2_desc(ident));
-	}
-	if (sc) {
+	for (id sc in sm2_front_scenes(fa, true)) {
 		id set = sm2_get(sc, "settings"), cs = sm2_get(sc, "clientSettings");
 		sm2_log("orient: P scene %s settings %s orientation %s frame %s deviceOrientation %s",
 		    sm2_desc(sm2_get(sc, "identifier")), set ? class_getName(object_getClass(set)) : "nil",
@@ -743,6 +773,60 @@ static void sm2_orient_p(void)
 	for (id w in ws)
 		sm2_probe_views(w, &count);
 	sm2_log("orient: P done, %d scene host views", count);
+}
+
+/* "S N [f]" (SpringBoard, patch B20 experiment): write interfaceOrientation (+ deviceOrientation) straight into the front
+ * app scenes' settings, optionally swapping the frame, then re-read at 0.5 s and 2 s to see if SpringBoard reverts it. */
+struct sm2_rect { double x, y, w, h; };
+
+static void sm2_orient_s(long n, bool swap)
+{
+	Class ac = objc_getClass("UIApplication");
+	id app = [ac respondsToSelector:@selector(sharedApplication)] ? [ac performSelector:@selector(sharedApplication)] : nil;
+	id fa = sm2_get(app, "_accessibilityFrontMostApplication");
+	NSArray *scenes = sm2_front_scenes(fa, false);
+	if (!scenes.count)
+		sm2_log("orient: S %ld: no front scene", n);
+	SEL ub = sel_registerName("updateSettingsWithBlock:");
+	for (id sc in scenes) {
+		const char *ident = sm2_desc(sm2_get(sc, "identifier"));
+		if (![sc respondsToSelector:ub]) {
+			sm2_log("orient: S %s missing updateSettingsWithBlock:", ident);
+			continue;
+		}
+		__block bool dev = false, fr = false;
+		__block sm2_rect r = {0, 0, 0, 0};
+		((void (*)(id, SEL, void (^)(id)))objc_msgSend)(sc, ub, ^(id s) {
+			SEL so = sel_registerName("setInterfaceOrientation:"), sd = sel_registerName("setDeviceOrientation:");
+			SEL sf = sel_registerName("setFrame:"), gf = sel_registerName("frame");
+			if ([s respondsToSelector:so])
+				((void (*)(id, SEL, long long))objc_msgSend)(s, so, (long long)n);
+			if ((dev = [s respondsToSelector:sd]))
+				((void (*)(id, SEL, long long))objc_msgSend)(s, sd, (long long)n);
+			if (swap && [s respondsToSelector:sf] && [s respondsToSelector:gf]) {
+				r = ((sm2_rect (*)(id, SEL))objc_msgSend)(s, gf);
+				sm2_rect q = { r.x, r.y, r.h, r.w };
+				((void (*)(id, SEL, sm2_rect))objc_msgSend)(s, sf, q);
+				fr = true;
+			}
+		});
+		sm2_log("orient: S %ld applied to %s (deviceOrientation %d)", n, ident, dev);
+		if (fr)
+			sm2_log("orient: S frame swapped from %gx%g to %gx%g", r.w, r.h, r.h, r.w);
+		static const int delays[] = { 500, 2000 };
+		for (int ms : delays)
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+				@try {
+					id set = sm2_get(sc, "settings");
+					sm2_log("orient: S after %d ms %s: orientation %s frame %s deviceOrientation %s", ms,
+					    sm2_desc(sm2_get(sc, "identifier")), sm2_desc(sm2_get(set, "interfaceOrientation")),
+					    sm2_desc(sm2_get(set, "frame")),
+					    [set respondsToSelector:sel_registerName("deviceOrientation")] ? sm2_desc([set valueForKey:@"deviceOrientation"]) : "n/a");
+				} @catch (id ex) {
+					sm2_log("orient: S recheck exception %s", [[ex description] UTF8String]);
+				}
+			});
+	}
 }
 
 __attribute__((constructor)) static void sm2_orient_init(void)
@@ -784,6 +868,18 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 					sm2_orient_p();
 				} @catch (id ex) {
 					sm2_log("orient: P exception %s", [[ex description] UTF8String]);
+				}
+			}
+			return;
+		}
+		if (buf[0] == 'S') {	/* "S N [f]": write the front scenes' orientation directly (SpringBoard) */
+			char *se = NULL;
+			long sn = strtol(buf + 1, &se, 10);
+			if (!bbd && sn >= 1 && sn <= 4) {
+				@try {
+					sm2_orient_s(sn, se && strchr(se, 'f'));
+				} @catch (id ex) {
+					sm2_log("orient: S exception %s", [[ex description] UTF8String]);
 				}
 			}
 			return;
