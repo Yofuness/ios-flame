@@ -50,7 +50,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: on, discoverable, nearby devices listed (kernel105+, btbridge); pairing and audio untested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
-| [Sensors](docs/features/sensors.md) | ⬜ | not started; all sensors sit behind the audio DSP, so they wait for it |
+| [Sensors](docs/features/sensors.md) | 🟡 | all 6 sensors answer on the audio DSP, accelerometer streams at 54 Hz; iOS side (auto-rotate) under test |
 
 ## Quick start
 
