@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 15:30 sp11: bottom amp 0x41 silent in every recipe (mic beside the bottom speaker; kernel107)
+- The user confirmed the EM-01 mic sits right beside the phone's bottom speaker. sp11a --amp-boost, sp11b --amp-invert-clk, sp11c both, sp11d --amp-no-clk --amp-no-unmute (old recipe): 0 TONE windows each (1 kHz bin at the noise floor, e.g. 0.14 vs neighbours 0.06-0.23); amp PUP_DONE 1-3 ms, on ~3.03-3.05 s, IRQ1 status clean, no faults; rc 0, no reset.
+- So the amp side looks right and the data is the suspect. Hypothesis: the DSP plays a different (zero) memory page than our PCM buffer (consistent with sp8's loopback reading exact zeros); next: sample the I2S pins (BCLK/WS/SD0 levels) during playback (sp12).
+
 ### 2026-10-30 14:50 0x40 is the TOP (earpiece) amp; bottom amp 0x41 now driven (ep1, sp10; kernel107)
 - research/notes/speaker-silent.md: DT cs35l41@40 uses reset_pin_top (pm6150l gpio8) + irq_pin_top (gpio64); cs35l41@41 (prefix "R") reset_pin_bottom (gpio11) + irq_pin_bottom (gpio65). So all earlier tests drove the earpiece amp while the user listened at the bottom grille. Routing, gate, mute, rails, LPI pins and the SEC_MI2S_RX backend all match the DT; the sp8 SD1 loopback zeros prove nothing (stock tx-lines = 0).
 - New USB measurement mic (EM-01, analog profile; laptop tone ~150x): ep1 (0x40, boost, -20 dB) and sp10 (0x41 bypass, -20 dB, `--amp-addr 0x41`: DEVID 0x35a40, PUP_DONE 3 ms, PLL_LOCK, on 3026 ms, no fault): mic 0 tone windows both times (mic placement relative to the phone unknown).
