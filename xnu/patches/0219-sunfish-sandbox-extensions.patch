@@ -1,0 +1,178 @@
+From 2033786a087c56f81ccde2f6dce83a1870d34154 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 09:59:28 -0400
+Subject: [PATCH] sunfish: Sandbox extension issue/consume return tokens and
+ handles; sweetsbext=0 restores ENOENT (0219)
+
+---
+ bsd/kern/sweet_amfi.c | 131 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 126 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index 5e7a0b4..de26e29 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -23,10 +23,14 @@
+  * panic with a clear message instead of being NULL.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <kern/clock.h>
+ #include <kern/debug.h>
++#include <kern/kalloc.h>
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
++#include <machine/atomic.h>
+ #include <mach/kern_return.h>
++#include <pexpert/pexpert.h>
+ #include <sys/codesign.h>
+ #include <sys/mount.h>
+ #include <sys/priv.h>
+@@ -283,13 +287,128 @@ sweet_amfi_vnode_check_signature(struct vnode *vp, __unused struct label *label,
+  * (backboardd cannot reach mobilegestalt or iohideventsystem; tccd:
+  * "profile not found"). SWEET runs without a sandbox: operations succeed
+  * (checks allow, profile init is accepted); the few that must return
+- * data (container paths, extension tokens) fail with ENOENT. The first
+- * use of each operation number is logged.
++ * data (container paths) fail with ENOENT. The first use of each
++ * operation number is logged.
++ *
++ * 0219: extension issue (op 5) writes a token string in the userland
++ * format and consume (op 6) returns a handle, so tccd's grants reach
++ * Music and assetsd. sweetsbext=0 makes both fail with ENOENT again.
+  */
+ static uint64_t sweet_sandbox_seen;
++static uint64_t sweet_sbext_count;     /* issue counter (token hex) */
++static int64_t sweet_sbext_handle;     /* consume handle counter */
++
++#define SWEET_SBEXT_TOKEN_MAX   0x800   /* userland buffer at out_token */
++#define SWEET_SBEXT_CLASS_MAX   256
++#define SWEET_SBEXT_DATA_MAX    1024
++#define SWEET_SBEXT_LOG_MAX     16
++
++static int
++sweet_sbext_enabled(void)
++{
++	static int enabled = -1;
++	if (enabled < 0) {
++		int v = 1;
++		(void)PE_parse_boot_argn("sweetsbext", &v, sizeof(v));
++		enabled = v != 0;
++	}
++	return enabled;
++}
++
++/* op 5: arg -> { ext_class, type, data, flags, out_token, pid, pidversion } */
++static int
++sweet_sbext_issue(struct proc *p, user_addr_t arg)
++{
++	struct {
++		uint64_t ext_class;
++		uint64_t type;
++		uint64_t data;
++		uint64_t flags;
++		uint64_t out_token;
++		int64_t pid;
++		uint64_t pidversion;
++	} req;
++	char *cls, *data, *tok;
++	size_t len;
++	uint64_t n;
++	int err;
++
++	if (!proc_is64bit(p) || arg == USER_ADDR_NULL) {
++		return EFAULT;
++	}
++	if (copyin(arg, &req, sizeof(req))) {
++		return EFAULT;
++	}
++	cls = kalloc_data(SWEET_SBEXT_CLASS_MAX, Z_WAITOK | Z_ZERO);
++	data = kalloc_data(SWEET_SBEXT_DATA_MAX, Z_WAITOK | Z_ZERO);
++	tok = kalloc_data(SWEET_SBEXT_TOKEN_MAX, Z_WAITOK | Z_ZERO);
++	if (cls == NULL || data == NULL || tok == NULL) {
++		err = ENOMEM;
++		goto out;
++	}
++	err = EFAULT;
++	if (copyinstr((user_addr_t)req.ext_class, cls, SWEET_SBEXT_CLASS_MAX, &len)) {
++		goto out;
++	}
++	if (req.data != 0 &&
++	    copyinstr((user_addr_t)req.data, data, SWEET_SBEXT_DATA_MAX, &len)) {
++		goto out;
++	}
++	n = os_atomic_inc(&sweet_sbext_count, relaxed);
++	/* snprintf truncates the data path if the token would pass 0x7ff */
++	(void)snprintf(tok, SWEET_SBEXT_TOKEN_MAX,
++	    "%016llx%016llx%016llx%016llx;00;00000000;00000000;00000000;"
++	    "000000000000001a;%s;01;00000000;0000000000000000;%s",
++	    n, req.type, (uint64_t)proc_pid(p), mach_absolute_time(), cls, data);
++	if (copyout(tok, (user_addr_t)req.out_token, strlen(tok) + 1)) {
++		goto out;
++	}
++	if (n <= SWEET_SBEXT_LOG_MAX) {
++		char name[32];
++		proc_name(proc_pid(p), name, sizeof(name));
++		printf("SWEET Sandbox: issue %s type %llu class %.64s\n",
++		    name, req.type, cls);
++	}
++	err = 0;
++out:
++	if (cls) {
++		kfree_data(cls, SWEET_SBEXT_CLASS_MAX);
++	}
++	if (data) {
++		kfree_data(data, SWEET_SBEXT_DATA_MAX);
++	}
++	if (tok) {
++		kfree_data(tok, SWEET_SBEXT_TOKEN_MAX);
++	}
++	return err;
++}
++
++/* op 6: arg -> { token, token_len, handle_out }; the token is not parsed */
++static int
++sweet_sbext_consume(struct proc *p, user_addr_t arg)
++{
++	struct {
++		uint64_t token;
++		uint64_t token_len;
++		uint64_t handle_out;
++	} req;
++	int64_t handle;
++
++	if (!proc_is64bit(p) || arg == USER_ADDR_NULL) {
++		return EFAULT;
++	}
++	if (copyin(arg, &req, sizeof(req))) {
++		return EFAULT;
++	}
++	handle = os_atomic_inc(&sweet_sbext_handle, relaxed);
++	if (copyout(&handle, (user_addr_t)req.handle_out, sizeof(handle))) {
++		return EFAULT;
++	}
++	return 0;
++}
+ 
+ static int
+-sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
++sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+ {
+ 	if (call >= 0 && call < 64 && !(sweet_sandbox_seen & (1ULL << call))) {
+ 		sweet_sandbox_seen |= 1ULL << call;
+@@ -298,9 +417,11 @@ sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
+ 		printf("SWEET Sandbox: %s op %d\n", name, call);
+ 	}
+ 	switch (call) {
++	case 5:         /* extension issue (0219) */
++		return sweet_sbext_enabled() ? sweet_sbext_issue(p, arg) : ENOENT;
++	case 6:         /* extension consume (0219) */
++		return sweet_sbext_enabled() ? sweet_sbext_consume(p, arg) : ENOENT;
+ 	case 4:         /* container path (audit token / pid) */
+-	case 5:         /* extension issue */
+-	case 6:         /* extension consume */
+ 	case 0x43:      /* container expected */
+ 		return ENOENT;
+ 	default:
+-- 
+2.56.0
+
