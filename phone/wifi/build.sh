@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 mkdir -p out
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/wland wland.c smem.c pmem.c glink.c link.c qmi.c rmtfs.c pdmapper.c tftp.c scm.c wlfw.c radio.c smmu.c ipnet.c bridge.c
 ../../tools/linux-ios-sign out/wland 2>/dev/null
-../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/adspboot adspboot.c fastrpc.c smem.c pmem.c glink.c smmu.c pdmapper.c qmi.c geni_i2c.c cs35l41.c -lm
+../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/adspboot adspboot.c fastrpc.c smem.c pmem.c glink.c smmu.c pdmapper.c qmi.c geni_i2c.c cs35l41.c ../sensors/sns_run.c ../sensors/sensor.c ../sensors/sns.c ../sensors/pb.c ../sensors/sns_link.c -lm
 ../../tools/linux-ios-sign out/adspboot 2>/dev/null
 ../../work/userland/bin/ios-cc -O2 -Wall -Wextra -Wno-unused-parameter -o out/aprtest aprtest.c smem.c pmem.c glink.c
 ../../tools/linux-ios-sign out/aprtest 2>/dev/null

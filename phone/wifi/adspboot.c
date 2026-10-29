@@ -29,6 +29,9 @@
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
  *                     CLOSEd at exit only with ADSP_CLOSE=1 (apr3: closing the FastRPC channel crashed the ADSP: fastrpc_port_s.c:176)
+ *   adspboot boot --rpc --root --sensors --unsafe --sns-list | --sns-stream TYPE [--sns-rate HZ] [--sns-secs N] |
+ *                     --sns-motion [--sns-motion-dev PATH]  sns1: SNS (QMI svc 400, SEE) client on our QRTR
+ *                     (../sensors/sns_run.h); without these options nothing changes
  *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
  *                 [--dump]  + the bank's registers and the table walk for 0x80000000 and 0x380000000
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
@@ -56,6 +59,7 @@
 #include "qmi.h"
 #include "geni_i2c.h"
 #include "cs35l41.h"
+#include "../sensors/sns_run.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -719,6 +723,36 @@ static void stub_rx(const uint32_t *h, const uint8_t *body, size_t blen)
 	free(q);
 }
 
+/*
+ * sns1: the SNS client's QRTR port. Its messages are queued here by qrtr_rx and taken by sns_recv (below), which
+ * pumps the edge itself while sensor.c waits for a response (FastRPC keeps being served meanwhile).
+ */
+#define SNS_PORT	0x40
+#define SNS_QLEN	128
+static struct { uint8_t *d; uint32_t n, node, port; } snsq[SNS_QLEN];
+static int snsq_head, snsq_n;
+static uint64_t snsq_drop;
+
+static void sns_push(uint32_t node, uint32_t port, const uint8_t *d, size_t n)
+{
+	uint8_t *c = malloc(n ? n : 1);
+	if (!c)
+		return;
+	if (snsq_n == SNS_QLEN) {	/* full: drop the oldest */
+		free(snsq[snsq_head].d);
+		snsq_head = (snsq_head + 1) % SNS_QLEN;
+		snsq_n--;
+		if (snsq_drop++ < 5)
+			printf("adsp: sns queue full: oldest dropped\n");
+	}
+	int i = (snsq_head + snsq_n++) % SNS_QLEN;
+	memcpy(c, d, n);
+	snsq[i].d = c;
+	snsq[i].n = (uint32_t)n;
+	snsq[i].node = node;
+	snsq[i].port = port;
+}
+
 /* QRTR v1 control packet from us (node 1, ctrl port) to dst. */
 static void qrtr_ctrl(struct chan *c, uint32_t type, uint32_t dnode, uint32_t dport)
 {
@@ -780,6 +814,17 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 				qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
 			}
 		qrtr_ctrl(c, 4, h[2], h[3]);	/* all-zero NEW_SERVER = end of lookup */
+	} else if (ty == 4 && blen >= 20 && sns_wanted()) {	/* sns1: the ADSP's SNS service */
+		uint32_t k[5];
+		memcpy(k, body, 20);
+		if (k[1] == SNS_QMI_SERVICE && (k[3] || k[4]))
+			sns_service(k[3], k[4]);
+	} else if (ty == 1 && h[7] == SNS_PORT && sns_wanted()) {	/* sns1 */
+		if (h[4]) {
+			uint32_t k[5] = { QRTR_TYPE_RESUME_TX, QRTR_NODE_AP, h[7], 0, 0 };
+			qrtr_send(QRTR_TYPE_RESUME_TX, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
+		}
+		sns_push(h[2], h[3], body, blen);
 	} else if (ty == 1 && pdmap && h[7] == PDMAPPER_PORT) {
 		struct qrtr_hdr qh = { h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7] };
 		if (h[4]) {			/* confirm_rx: RESUME_TX names our port, so the sender goes on */
@@ -2103,6 +2148,42 @@ static void heartbeat(void)
 			       ch[i].nrx, ch[i].nreq, ch[i].ndone, ch[i].nreuse);
 }
 
+/* sns1: sns_link's hooks over our QRTR. */
+static int sns_send(uint32_t node, uint32_t port, const void *d, size_t n)
+{
+	return qrtr_send(QRTR_TYPE_DATA, SNS_PORT, node, port, d, (uint32_t)n);
+}
+
+static int sns_recv(uint32_t *node, uint32_t *port, uint8_t *d, size_t cap, int timeout_ms)
+{
+	uint64_t end = now_ms() + (uint64_t)(timeout_ms > 0 ? timeout_ms : 0);
+	for (;;) {
+		if (snsq_n) {
+			int i = snsq_head;
+			size_t n = snsq[i].n < cap ? snsq[i].n : cap;
+			memcpy(d, snsq[i].d, n);
+			*node = snsq[i].node;
+			*port = snsq[i].port;
+			free(snsq[i].d);
+			snsq_head = (snsq_head + 1) % SNS_QLEN;
+			snsq_n--;
+			return (int)n;
+		}
+		int r;
+		while ((r = pump_one()) > 0 && !snsq_n)
+			;
+		if (r < 0)
+			return -1;
+		if (snsq_n)
+			continue;
+		if (now_ms() >= end)
+			return 0;
+		usleep(2000);
+	}
+}
+
+static const struct sns_link_ops sns_ops = { sns_send, sns_recv };
+
 static int edge_loop(int ms, int stop, uint64_t t0)
 {
 	uint64_t end = now_ms() + (uint64_t)ms, next = 0, beat = now_ms() + 10000;
@@ -2113,6 +2194,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			printf("adsp: signal %d: stopping\n", (int)got_sig);
 			amp_off();	/* sp1 */
 			heartbeat();
+			sns_summary();	/* sns1 */
 			if (rpc_on) {
 				fastrpc_summary();
 				rpc_faults();
@@ -2135,6 +2217,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 		rpc_poll();
 		apr_poll();
 		amp_poll();	/* sp1 */
+		sns_tick(&sns_ops);	/* sns1 */
 		if (stop && now_ms() >= next) {
 			next = now_ms() + 1000;
 			uint32_t v;
@@ -2307,7 +2390,12 @@ int main(int argc, char **argv)
 			stub[nstub].inst = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 0;
 			nstub++;
 		}
-		else if (!strcmp(argv[i], "--dry"))
+		else if (!strncmp(argv[i], "--sns-", 6)) {	/* sns1 */
+			if (sns_opt(argc, argv, &i) != 1) {
+				fprintf(stderr, "adspboot: %s: unknown or missing its value\n", argv[i]);
+				return 2;
+			}
+		} else if (!strcmp(argv[i], "--dry"))
 			smmu_dry = 1;
 		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
 			sid = (uint32_t)strtoul(argv[++i], NULL, 0);
@@ -2322,6 +2410,10 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	fastrpc_sensors(sensors);
+	if (sns_wanted() && !sensors) {	/* sns1: the SNS service lives in the sensors PD */
+		fprintf(stderr, "adspboot: --sns-* needs --rpc --root --sensors\n");
+		return 2;
+	}
 	if (rec_on && (!pcm_on || !amp_on)) {	/* sp7 */
 		fprintf(stderr, "adspboot: --rec needs --pcm --amp\n");
 		return 2;
@@ -2369,7 +2461,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
@@ -2429,6 +2521,7 @@ int main(int argc, char **argv)
 		}
 	}
 	int rc = glink_watch(rpc_on || apr_on ? watch : 10) ? 1 : 0;
+	sns_summary();	/* sns1 */
 	if (rpc_on) {
 		fastrpc_summary();
 		rpc_faults();
