@@ -38,6 +38,7 @@ install recreates by itself.
 | 22 | TCC MediaLibrary row for Music (B25; did not fix Music, kernel95 did) | /var/mobile/Library/TCC/TCC.db, backup /var/local/tcc-pre-b25 | not reproduced (no effect) | dead end |
 | 23 | locationd plist `LocationServicesEnabledIn7.0` (B32 loc1; no effect) | /var/root/Library/Preferences/com.apple.locationd.plist, backup .bak-b32 | not reproduced (no effect) | dead end |
 | 24 | Bluetooth: btup + BT firmware (crbtfw21.tlv, crnv21.bin from the factory vendor.img) | /var/local/bin/btup, /var/local/fw/bt | `tools/sunfish-install-bt.sh` | scripted (feature unfinished) |
+| 25 | Bluetooth for iOS: btbridge + bluetool-stub; launchd: com.apple.BlueTool runs bluetool-stub, bluetoothd env BT_HCI_TRANSPORT=H4 + BT_BAUDRATE=115200, job org.iosonpixel.btbridge; backup launchd.plist.pre-btbridge; at runtime /dev/cu.bluetooth symlink, /var/local/btbridge.log, bluetool-stub.log | /var/local/bin, launchd.plist | `tools/sunfish-install-btbridge.sh` (`--undo` restores the plist) | feature under work |
 
 Backups and leftovers on the phone (not needed for a fresh install): /System/Library/xpc/launchd.plist.{orig,pre-*},
 /private/etc/launchd.plist.pre-early, /var/local/launchd.plist.pre-*, /var/local/mtl2-clients.pre-*, mtl2-env.pre-*,
@@ -47,6 +48,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-30 Bluetooth for iOS (feature under work): btbridge, bluetool-stub, launchd edits for BlueTool/bluetoothd/org.iosonpixel.btbridge (tools/sunfish-install-btbridge.sh; not yet installed).
 - 2026-10-30 Bluetooth: btup + crbtfw21.tlv/crnv21.bin in /var/local/bin, /var/local/fw/bt (tools/sunfish-install-bt.sh; not yet installed).
 
 - 2026-10-30 audit: table above written from the phone vs the Oct 22 image; added tools/sunfish-setup-phone.sh for rows 9, 10, 12, 15-18.

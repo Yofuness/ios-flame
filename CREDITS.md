@@ -36,6 +36,8 @@ what you need to fetch yourself.
   SMP2P, GLINK, QRTR and remoteproc drivers (GPL-2.0). It also follows Bjorn Andersson's rmtfs, pd-mapper and
   tqftpserv for those protocols. The FTS touch driver (patch 0085) was written from Google's `fts_touch`
   module (GPL-2.0) and the phone's device tree.
+- **akshaynexus/iOSPlus10** (<https://github.com/akshaynexus/iOSPlus10>, MIT): `phone/wifi/bluetool_stub.c` is adapted
+  from their `negroni-bluetool.c`; btbridge's H4 shim rules follow their bluetoothd findings (patches 0333/0336/0337).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)

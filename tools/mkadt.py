@@ -201,6 +201,16 @@ def build(seed=None, qemu=False, highmem=False):
             ('device_type', cstr('wlan')),
             ('compatible', cstr('flame,wcn3990')),
         ]),
+        # bluetoothd (20H392) exits "No bluetooth on this device" unless the registry has an entry named
+        # bluetooth with a non-zero local-mac-address (iOSPlus10 README-bluetooth.md, MIT). Same locally
+        # administered address as mac-address-bluetooth0 (not the chip's); transport-encoding 3 = H4BC, but
+        # the bluetoothd job's BT_HCI_TRANSPORT=H4 overrides it (btbridge pty). Off: SUNFISH_ADT_BT=0.
+        ] + ([] if os.environ.get('SUNFISH_ADT_BT') == '0' else [node('bluetooth', [
+            ph(),
+            ('local-mac-address', bytes([0x02, 0x50, 0x49, 0x58, 0x45, 0x4d])),
+            ('transport-encoding', u32(3)),
+            ('transport-speed', u32(115200)),
+        ])]) + [
         node('disp0', [
             ph(),
             ('device_type', cstr('display-subsystem')),
