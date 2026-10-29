@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 19:05 louder runs, PC mic hears nothing (sp4, sp5; adspboot 6016dce, e2e60a5)
+- sp4: -20 dB digital (cap), tone -20 dBFS, gain 0.5 dB: PLL lock + PUP_DONE 1 ms, 3057 ms on, no errors; laptop mic: no 1 kHz (an rms rise 7-23 s was room noise, not in the amp window).
+- 6016dce `--amp-gain N` (0x6C04 [9:5], clamp 0..10 = 10.5 dB, verified, reset value restored); e2e60a5 `--pcm-dbfs N` (clamp -40..-6).
+- sp5: tone -6 dBFS, digital -20 dB, gain 10.5 dB (~15 dB below stock maximum): PLL lock + PUP_DONE 1 ms, 3038 ms on, no IRQ errors, PCM 388/388; laptop mic flat (rms ~800, 1 kHz bin 0.5-16.5): no tone. No reset; 4455 mV.
+- Either the amp gets silence (slot/line) or the closed-lid laptop mic can't hear the phone. Next: the user listens during one run (U5).
+
 ### 2026-10-29 18:45 SPEAKER AMP RUNS: PLL lock + PUP_DONE, 3 s on, no errors (sp2a, sp3a, sp3b; kernel98 sweetse9=2 sweetampreset=1; adspboot dc872fb, 423b675)
 - sp2a: hw vote op 0x1027C -> status 3 (unsupported). 423b675: vote op 0x100F4 (block 2) -> ok, handle; LPI pins muxed only after DEVICE_START: gpio8 0x401->0xcc, gpio9 0x401->0xcc, gpio10 0x5c1->0xd0 (read back ok), restored before DEVICE_STOP; devote. All AFE steps status 0.
 - sp3b (--pcm --amp --amp-db -30, tone -20 dBFS, gain 0.5 dB, boost bypass): `PLL_LOCK first after 1 ms`, `PUP_DONE after 1 ms (STATUS1 01400000 STATUS3 2000002f)`, on 3028 ms (3 s cap), no error bits, normal power-down; PCM 388/388. Laptop mic: no tone (rms ~800, 1 kHz bin 1-18): the output was ~-50 dB below full scale. No reset; 4455 mV.
