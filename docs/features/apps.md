@@ -23,6 +23,9 @@ from the backup with plistlib.
 | com.apple.driverkitd | 2026-10-27 | crash loop (58 in the long log) | no DriverKit drivers (none used) |
 | com.apple.spotlight.IndexAgent | 2026-10-27 | thought to launch the Spotlight index extensions (it did not) | none seen |
 | com.apple.corespotlightservice | 2026-10-27 | same | none seen |
+| com.apple.lskdd | 2026-10-29 | respawn every 1 s from ~400 s (215 per 10 min), exits without a crash | none seen |
+| com.apple.fairplayd.H2 | 2026-10-29 | KeepAlive, exits every 10 s (59 per 10 min) | App Store / DRM media (did not work anyway) |
+| com.apple.wifip2pd | 2026-10-29 | respawn every 10 s after the Wi-Fi join (48 per 10 min) | no AirDrop / AWDL; Wi-Fi join still works |
 | com.apple.searchd | 2026-10-27 | launched ~0.4 s before every Spotlight index extension (21 times in 30 min) | Spotlight screen still opens (Siri Suggestions + search field); search results not checked. dd2: 0 Spotlight extension launches, 0 of their crashes |
 
 ### Broken services to look at later
@@ -44,6 +47,12 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 09:05 B19: three looping jobs dropped (b19a, kernel94, default args)
+- Analysis (mc1 boot, ~620 s): lskdd 215 execs (1 s, from 400 s, ThrottleInterval 0), fairplayd.H2 59 (10 s, KeepAlive), bluetoothd 54 (10 s, no controller), wifip2pd 48 (10 s, from the Wi-Fi join), xpcproxy 633. None crash; they exit on their own (no exit status in the kernel log).
+- Dropped lskdd, fairplayd.H2, wifip2pd (tools/sunfish-launchd-drop.sh). Backup: phone /System/Library/xpc/launchd.plist.pre-b19, local work/userland/launchd.plist.pre-b19. bluetoothd kept (Settings BT pane, BT audio HAL plugin; re-check with B15).
+- b19a (first 620 s): lskdd 0, fairplayd.H2 0, wifip2pd 0, bluetoothd 60, xpcproxy 314 (was 633). ssh up 17 s, 4455 mV. Wi-Fi joined (87.5 s wland link up). Settings and Safari draw (webcam).
+- Crashes: AegirPoster sig 6 x66 from 305.8 s (known intermittent loop, 4427 in the archived logs, 0 in mc1); MusicWidgets sig 11 x5; IntentsExtension, MobileTimerInten, WeatherIntents sig 6 x1 each. Not linked to the drops (guess; AegirPoster predates them).
 
 ### 2026-10-29 08:45 Black apps vs mtl2-clients (mc1, mc2; kernel94, default args)
 - Process names: MobileNotes, MobileSlideShow, Camera, Passbook, Maps. mtl2.log before: `MTL2[277 Maps]: not listed (/var/local/mtl2-clients): no Metal device`; no lines at all for the other four.
