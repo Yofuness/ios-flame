@@ -1151,6 +1151,26 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 				sm2_log("touch: bad command '%.20s'", buf);
 			return;
 		}
+		if (buf[0] == 'H' || buf[0] == 'K') {	/* B33 "H": home button, "K": lock button (SpringBoard's own test hooks;
+							 * injected bottom-edge swipes never went home, b33) */
+			if (!bbd) {
+				@try {
+					id app = [objc_getClass("UIApplication") performSelector:@selector(sharedApplication)];
+					SEL h = sel_registerName("_simulateHomeButtonPressWithCompletion:");
+					SEL k = sel_registerName("_simulateLockButtonPress");
+					bool home = buf[0] == 'H';
+					bool ok = [app respondsToSelector:home ? h : k];
+					if (ok && home)
+						((void (*)(id, SEL, id))objc_msgSend)(app, h, nil);
+					else if (ok)
+						((void (*)(id, SEL))objc_msgSend)(app, k);
+					sm2_log("orient: %s button: %s", home ? "home" : "lock", ok ? "sent" : "no selector");
+				} @catch (id ex) {
+					sm2_log("orient: H/K exception %s", [[ex description] UTF8String]);
+				}
+			}
+			return;
+		}
 		if (buf[0] == 'L') {	/* B32 "L 0|1": Location Services off/on as Settings does it (plist edit had no effect) */
 			if (!bbd) {
 				@try {

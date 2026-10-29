@@ -24,6 +24,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U1 flashlight button by hand: tap on/off, long-press for a lower level. ~2 min.
 - U3 battery % while discharging: phone off the charger 30 min. (B13)
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
+- U8 home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 speaker beep: listen next to the phone for a 3 s 1 kHz tone (amp powers up cleanly; the PC mic hears nothing). Ready now.
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
