@@ -23,6 +23,14 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:30 bt4: bluetoothd has no plain H4 driver; bridge bring-up fails at boot (kernel98, ADT bluetooth node)
+- Installed (sunfish-install-btbridge.sh): BlueTool job -> bluetool-stub, bluetoothd env BT_HCI_TRANSPORT=H4 BT_BAUDRATE=115200, job org.iosonpixel.btbridge; backup launchd.plist.pre-btbridge. ADT /arm-io/bluetooth (work/boot/sunfish-hi.adt; old one .pre-bt).
+- bluetoothd (oslog): "DeviceTree transport = 0x00000003" (ADT node seen), "Searching for driver: H4" -> "FATAL ERROR - HCI Driver H4 could not be matched" -> "Transport layer initialization failed" -> crash reason=102, restart every ~10-20 s. So 16.7 bluetoothd has no plain-tty H4 driver: the pty route is dead; it needs the kernel control com.apple.uart.bluetooth (H4BC:POSIX:..., iOSPlus10 0332 / redfin 1015).
+- bluetool-stub: gets RunBuiltinScript boot + init with btaddress (from the ADT), answers result 0 / crbtfw21 / 29 per bluetoothd pid. Works.
+- btbridge at boot: version OK, patch 100 %, then H4 resyncs (166 bytes dropped), Read_Local_Version: none -> bring-up 1 failed; retry got no reply at all. The same code works when run by hand later (bt3). Timing at boot (Wi-Fi bring-up, clocks) is the suspect. /dev/cu.bluetooth never created.
+- Settings: Bluetooth row "Off". No reset; 4455 mV. Install left in place (bluetoothd crash-loops as before B15; undo: sunfish-install-btbridge.sh --undo).
+- Next: port redfin 0982 (nubs) + 1010 (kernel bridge char device) + 1015 (kernel control com.apple.uart.bluetooth), our btbridge as the userland side; investigate the boot-time bring-up failure.
+
 ### 2026-10-30 07:45 iOSPlus10 (MIT) has iOS Bluetooth on 20H392: we can reuse it
 - github.com/akshaynexus/iOSPlus10 (OnePlus 10 Pro, QCA6490): bluetoothd reaches STACK_READY, Settings switch on, nearby devices listed. MIT licence, so code can be adapted with attribution (CREDITS.md).
 - Their key facts for us: bluetoothd needs an IORegistry `bluetooth` entry with a non-zero local-mac-address (ADT /arm-io/bluetooth) or it exits "No bluetooth on this device"; transport via env BT_HCI_TRANSPORT (they use a kernel control socket; /dev/cu.bluetooth also works); BlueTool stand-in answers result 0; every Apple VSC (OGF 0x3f) needs Command Complete status 0 with >= 2 (they send 8) data bytes or bluetoothd times out and restarts (_BCM_ByteStreamEventParser); 0x2007 and 0x0c6d need rewrites.
