@@ -1,14 +1,15 @@
-From 18daf92 Mon Sep 17 00:00:00 2001
+From e377e3d Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
-Date: Thu, 29 Oct 2026 12:00:00 -0400
+Date: Thu, 29 Oct 2026 12:30:00 -0400
 Subject: [PATCH] sunfish: read-only kern.sweet_mdpdump dumps MDP
- SSPP/CTL/LM/INTF/PP; maps MDSS on first read only; sweetmdpdump=0 skips (0220)
+ SSPP/CTL/LM/INTF/PP; maps only the pages read on first read, never
+ 0x0ae44000; sweetmdpdump=0 skips (0220)
 
 ---
  bsd/conf/files                    |   1 +
- bsd/dev/sweet_mdpdump.c           | 163 ++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_mdpdump.c           | 183 ++++++++++++++++++++++++++++++++++++++
  iokit/Kernel/arm/SweetBattery.cpp |   2 +
- 3 files changed, 166 insertions(+)
+ 3 files changed, 186 insertions(+)
 
 diff --git a/bsd/conf/files b/bsd/conf/files
 index d68d1a1..6457cfe 100644
@@ -24,17 +25,17 @@ index d68d1a1..6457cfe 100644
  bsd/dev/redwood_net.c		standard
 diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
 new file mode 100644
-index 0000000..f514296
+index 0000000..7d3e583
 --- /dev/null
 +++ b/bsd/dev/sweet_mdpdump.c
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,183 @@
 +/*
 + * 0220: read-only MDP state dump (zero-copy plan step 0). kern.sweet_mdpdump
 + * returns the SSPP, CTL, LM, INTF and PP registers of MDSS (0x0ae00000). 32-bit loads only,
 + * no writes; MDSS is clocked while the panel scans out. No boot-arg: on demand.
 + * Revised after kernel96 hung (md1): registration maps nothing; the first read
-+ * maps MDSS only (ml_io_map, as SweetFramebuffer); SMMU part dropped (adspboot
-+ * reads it). The range covers 0x0ae44000 but nothing there is read.
++ * maps only the 4 KB MDSS pages it reads, one ml_io_map each (as SweetFramebuffer),
++ * never 0x0ae44000 (hangs the bus); SMMU part dropped (adspboot reads it).
 + * sweetmdpdump=0 skips registration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
@@ -53,22 +54,49 @@ index 0000000..f514296
 +
 +#define MDP_PA      0x0ae00000u
 +#define MDP_LEN     0x84208u
++#define MDP_BAD_PG  0x44000u	/* 0x0ae44000: never mapped */
++#define MDP_NPG     16
 +#define DUMP_MAX    8192
 +
-+static vm_offset_t mdp;
++static struct { uint32_t pg; vm_offset_t va; } md_pg[MDP_NPG];
++static unsigned md_npg;
 +static char dump_buf[DUMP_MAX];
 +static int dump_len, dump_busy;
 +
++static void md_out(const char *fmt, ...) __printflike(1, 2);
++
++/* Maps the page of off on its first use; 0xffffffff for the bad page or a failed map. */
 +static uint32_t
-+md_rd(vm_offset_t b, uint32_t off)
++md_rd(uint32_t off)
 +{
-+	uint32_t v = *(volatile uint32_t *)(b + off);
++	uint32_t pg = off & ~0xfffu;
++	vm_offset_t va = 0;
++	if (pg == MDP_BAD_PG || off >= MDP_LEN) {
++		md_out("[skipped %#x]", off);
++		return 0xffffffffu;
++	}
++	for (unsigned i = 0; i < md_npg; i++) {
++		if (md_pg[i].pg == pg) {
++			va = md_pg[i].va;
++			break;
++		}
++	}
++	if (!va && md_npg < MDP_NPG) {
++		va = ml_io_map(MDP_PA + pg, 0x1000);
++		if (va) {
++			md_pg[md_npg].pg = pg;
++			md_pg[md_npg++].va = va;
++			printf("SWEET MDP: mapped %#x\n", MDP_PA + pg);
++		}
++	}
++	if (!va) {
++		md_out("[unmapped %#x]", off);
++		return 0xffffffffu;
++	}
++	uint32_t v = *(volatile uint32_t *)(va + (off & 0xfffu));
 +	__asm__ volatile("dmb oshld" ::: "memory");
 +	return v;
 +}
-+
-+static void
-+md_out(const char *fmt, ...) __printflike(1, 2);
 +
 +static void
 +md_out(const char *fmt, ...)
@@ -94,7 +122,7 @@ index 0000000..f514296
 +{
 +	md_out("%s@%#x:", name, off);
 +	for (unsigned i = 0; i < count; i++) {
-+		md_out(" %08x", md_rd(mdp, off + 4 * i));
++		md_out(" %08x", md_rd(off + 4 * i));
 +	}
 +	md_out("\n");
 +}
@@ -112,9 +140,9 @@ index 0000000..f514296
 +		uint32_t b = sspp[i].off;
 +		md_out("%s src_size %08x src_xy %08x out_size %08x out_xy %08x addr0 %08x"
 +		    " ystride0 %08x fmt %08x op %08x\n", sspp[i].name,
-+		    md_rd(mdp, b + 0x00), md_rd(mdp, b + 0x08), md_rd(mdp, b + 0x0c),
-+		    md_rd(mdp, b + 0x10), md_rd(mdp, b + 0x14), md_rd(mdp, b + 0x24),
-+		    md_rd(mdp, b + 0x30), md_rd(mdp, b + 0x38));
++		    md_rd(b + 0x00), md_rd(b + 0x08), md_rd(b + 0x0c),
++		    md_rd(b + 0x10), md_rd(b + 0x14), md_rd(b + 0x24),
++		    md_rd(b + 0x30), md_rd(b + 0x38));
 +		if (sspp[i].vig) {
 +			md_words(" qseed", b + 0xa00, 8);
 +		}
@@ -122,7 +150,7 @@ index 0000000..f514296
 +	for (unsigned n = 0; n < 3; n++) {
 +		uint32_t b = 0x2000 + 0x200 * n;
 +		md_out("CTL%u layer0 %08x top %08x flush %08x\n", n,
-+		    md_rd(mdp, b + 0x0), md_rd(mdp, b + 0x14), md_rd(mdp, b + 0x18));
++		    md_rd(b + 0x0), md_rd(b + 0x14), md_rd(b + 0x18));
 +		md_words(" ctl", b, 16);
 +	}
 +	md_words("LM0", 0x45000, 4);
@@ -131,7 +159,7 @@ index 0000000..f514296
 +	md_words("INTF1", 0x6b800, 4);
 +	md_words("INTF2", 0x6c000, 4);
 +	md_words("INTF3", 0x6c800, 4);
-+	md_out("INTF1 autorefresh(+0x2b4) %08x\n", md_rd(mdp, 0x6bab4));
++	md_out("INTF1 autorefresh(+0x2b4) %08x\n", md_rd(0x6bab4));
 +	md_words("PP0", 0x71000, 4);
 +	md_words("PP1", 0x71800, 4);
 +
@@ -146,13 +174,6 @@ index 0000000..f514296
 +	}
 +	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
 +		return EBUSY;
-+	}
-+	if (!mdp) {
-+		mdp = ml_io_map(MDP_PA, round_page(MDP_LEN)); /* first read only */
-+	}
-+	if (!mdp) {
-+		dump_busy = 0;
-+		return ENOMEM;
 +	}
 +	md_dump();
 +	int err = SYSCTL_OUT(req, dump_buf, dump_len + 1);
