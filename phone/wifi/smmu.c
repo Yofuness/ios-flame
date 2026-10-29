@@ -88,3 +88,150 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 	       mask, cb, slot, smr, s2cr, rd32(cbp), rd32(gr1 + 4 * cb), ok ? "ok" : "NOT as written");
 	return ok ? 0 : -1;
 }
+
+/*
+ * SIDS through one new translating bank: AArch64 stage 1, 4 KB pages, a 32-bit input space (T0SZ 32, walk from
+ * level 1), [IOVA, IOVA+LEN) -> [PA, PA+LEN), normal non-cacheable, read/write, faults terminate (no stall). The
+ * three tables come from pm_alloc. For DMA masters that only take 32-bit addresses while all XNU RAM is above 4 GB
+ * (the ADSP FastRPC streams). A SID that already has an SMR (e.g. smmu_identity's) is repointed; else a free SMR.
+ * This SMMU has no address translation ops (ID0.ATOSNS), so the check is a read-back of the tables and registers.
+ * 0 = ok.
+ */
+#define T_SCTLR		0x00000061u	/* M | CFRE | CFIE; CFCFG 0: terminate on fault */
+#define T_TCR		(32u | (1u << 23))	/* T0SZ 32, EPD1; walks non-cacheable, 4 KB granule */
+#define T_TCR2		0x00000002u	/* PASize 40 bits */
+#define T_MAIR0		0x00000044u	/* attr 0: normal non-cacheable */
+#define T_PAGE		((1ull << 10) | (1ull << 6) | 3)	/* AF | AP 01 (EL0/EL1 RW) | page */
+
+int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t iova, uint64_t pa, uint64_t len)
+{
+	uint64_t s = SMMU_PA;
+	uint32_t id0 = rd32(s + 0x20), id1 = rd32(s + 0x24);
+	uint32_t nsmr = id0 & 0xff, ncb = id1 & 0xff;
+	uint32_t psize = (id1 >> 31) ? 0x10000 : 0x1000, npage = 1u << (((id1 >> 28) & 7) + 1);
+	uint64_t used[4] = { 0 };
+	int cb = -1, slot[16];
+
+	if (n > 16 || !len || (iova | pa | len) & 0xfff || iova + len > (1ull << 32) || ((iova ^ (iova + len - 1)) >> 21)) {
+		printf("smmu: %s: bad range %llx+%llx (one 2 MB block, 4 KB aligned, below 4 GB)\n", name,
+		       (unsigned long long)iova, (unsigned long long)len);
+		return -1;
+	}
+	for (uint32_t i = 0; i < nsmr && i < 128; i++) {
+		uint32_t smr = rd32(s + 0x800 + 4 * i), s2cr = rd32(s + 0xc00 + 4 * i);
+		if ((smr >> 31) && ((s2cr >> 16) & 3) == 0)
+			used[(s2cr & 0xff) / 64] |= 1ull << ((s2cr & 0xff) % 64);
+	}
+	for (uint32_t c = 0; c < ncb && c < 256; c++) {
+		uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)c * psize;
+		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbp) & 1) && rd32(s + psize + 4 * c) == 0) {
+			cb = (int)c;
+			break;
+		}
+	}
+	for (unsigned k = 0; k < n; k++) {
+		slot[k] = -1;
+		for (uint32_t i = 0; i < nsmr && i < 128 && slot[k] < 0; i++)
+			if ((rd32(s + 0x800 + 4 * i) & 0x80007fffu) == (0x80000000u | sids[k]))
+				slot[k] = (int)i;	/* an exact SMR for this SID already */
+		for (uint32_t i = 0; i < nsmr && i < 128 && slot[k] < 0; i++) {
+			int taken = 0;
+			for (unsigned j = 0; j < k; j++)
+				taken |= slot[j] == (int)i;
+			if (!(rd32(s + 0x800 + 4 * i) >> 31) && !taken)
+				slot[k] = (int)i;
+		}
+		if (slot[k] < 0) {
+			printf("smmu: %s: no SMR for %#x\n", name, sids[k]);
+			return -1;
+		}
+	}
+	if (cb < 0 || (uint64_t)(npage + cb + 1) * psize > SMMU_SIZE) {
+		printf("smmu: %s: no free bank\n", name);
+		return -1;
+	}
+	if (smmu_dry) {
+		printf("smmu: %s: would map %llx+%llx -> %llx through CB%d (SCTLR %08x TCR %08x TCR2 %08x MAIR0 %08x),"
+		       " %u SIDs:", name, (unsigned long long)iova, (unsigned long long)len, (unsigned long long)pa, cb,
+		       T_SCTLR, T_TCR, T_TCR2, T_MAIR0, n);
+		for (unsigned k = 0; k < n; k++)
+			printf(" %#x->SMR%d", sids[k], slot[k]);
+		printf(" (dry run: nothing written)\n");
+		return 0;
+	}
+	uint64_t tbl = pm_alloc(3 * 0x1000, 0x1000);
+	if (!tbl) {
+		printf("smmu: %s: no memory for the tables\n", name);
+		return -1;
+	}
+	uint64_t l1 = tbl, l2 = tbl + 0x1000, l3 = tbl + 0x2000, d;
+	d = l2 | 3;
+	pm_wr(l1 + 8 * ((iova >> 30) & 3), &d, 8);
+	d = l3 | 3;
+	pm_wr(l2 + 8 * ((iova >> 21) & 0x1ff), &d, 8);
+	for (uint64_t o = 0; o < len; o += 0x1000) {
+		d = (pa + o) | T_PAGE;
+		pm_wr(l3 + 8 * (((iova + o) >> 12) & 0x1ff), &d, 8);
+	}
+	uint64_t gr1 = s + psize, cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
+	wr32(cbp, 0);
+	wr32(cbp + 0x58, 0xffffffff);			/* FSR: clear */
+	wr64(cbp + 0x20, l1);				/* TTBR0, ASID 0 */
+	wr64(cbp + 0x28, 0);				/* TTBR1 */
+	wr32(cbp + 0x30, T_TCR);
+	wr32(cbp + 0x10, T_TCR2);
+	wr32(cbp + 0x38, T_MAIR0);
+	wr32(cbp + 0x3c, 0);
+	wr32(gr1 + 0x800 + 4 * cb, CB_CBA2R);
+	wr32(gr1 + 4 * cb, CB_CBAR);
+	wr32(cbp + 0x618, 0);				/* TLBIALL */
+	wr32(cbp + 0x7f0, 0);				/* TLBSYNC */
+	for (int i = 0; i < 1000 && (rd32(cbp + 0x7f4) & 1); i++)
+		delay_ms(1);
+	wr32(cbp, T_SCTLR);				/* SCTLR last */
+	uint64_t r1 = 0, r2 = 0, r3a = 0, r3b = 0;
+	pm_rd(l1 + 8 * ((iova >> 30) & 3), &r1, 8);
+	pm_rd(l2 + 8 * ((iova >> 21) & 0x1ff), &r2, 8);
+	pm_rd(l3 + 8 * ((iova >> 12) & 0x1ff), &r3a, 8);
+	pm_rd(l3 + 8 * (((iova + len - 1) >> 12) & 0x1ff), &r3b, 8);
+	uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
+	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | T_PAGE) && r3b == ((pa + len - 0x1000) | T_PAGE) &&
+		 ttbr == l1 && rd32(cbp + 0x30) == T_TCR && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
+		 rd32(gr1 + 4 * cb) == CB_CBAR;
+	printf("smmu: %s: CB%d tables %llx: TTBR0 %llx TCR %08x TCR2 %08x SCTLR %08x CBAR %08x; L3 first %llx last %llx"
+	       " -> %s\n", name, cb, (unsigned long long)tbl, (unsigned long long)ttbr, rd32(cbp + 0x30),
+	       rd32(cbp + 0x10), rd32(cbp), rd32(gr1 + 4 * cb), (unsigned long long)r3a, (unsigned long long)r3b,
+	       ok ? "ok" : "NOT as written");
+	if (!ok) {
+		printf("smmu: %s: not routing any SID to CB%d\n", name, cb);
+		return -1;
+	}
+	for (unsigned k = 0; k < n; k++) {
+		wr32(s + 0xc00 + 4 * slot[k], (uint32_t)cb);	/* S2CR: translate through the new bank */
+		wr32(s + 0x800 + 4 * slot[k], 0x80000000u | sids[k]);
+	}
+	wr32(s + 0x70, 0);				/* sTLBGSYNC */
+	for (int i = 0; i < 1000 && (rd32(s + 0x74) & 1); i++)
+		delay_ms(1);
+	for (unsigned k = 0; k < n; k++)
+		printf("smmu: %s %#x -> CB%d via SMR%d: SMR %08x S2CR %08x\n", name, sids[k], cb, slot[k],
+		       rd32(s + 0x800 + 4 * slot[k]), rd32(s + 0xc00 + 4 * slot[k]));
+	return 0;
+}
+
+void smmu_faults(const char *name, uint32_t sid)
+{
+	uint64_t s = SMMU_PA;
+	uint32_t id0 = rd32(s + 0x20), id1 = rd32(s + 0x24), nsmr = id0 & 0xff;
+	uint32_t psize = (id1 >> 31) ? 0x10000 : 0x1000, npage = 1u << (((id1 >> 28) & 7) + 1);
+	for (uint32_t i = 0; i < nsmr && i < 128; i++) {
+		if ((rd32(s + 0x800 + 4 * i) & 0x80007fffu) != (0x80000000u | sid))
+			continue;
+		uint32_t cb = rd32(s + 0xc00 + 4 * i) & 0xff;
+		uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
+		printf("smmu: %s %#x CB%u: FSR %08x FAR %08x%08x FSYNR0 %08x\n", name, sid, cb, rd32(cbp + 0x58),
+		       rd32(cbp + 0x64), rd32(cbp + 0x60), rd32(cbp + 0x68));
+		return;
+	}
+	printf("smmu: %s %#x: no SMR\n", name, sid);
+}

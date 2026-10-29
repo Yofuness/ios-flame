@@ -10,7 +10,8 @@
  *   adspboot boot --rpc [--watch 120]  also serve FastRPC (fastrpc.c): attach to the sensors PD on
  *                     fastrpcglink-apps-dsp, run adsp_default_listener and answer its apps_std file calls
  *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
- *                     summary at the end. Implies --smmu.
+ *                     summary at the end. Implies --smmu; the FastRPC streams then go through a translating bank
+ *                     (32-bit IOVA 0x80000000 -> a pm_alloc buffer). `adspboot smmu --rpc --dry` shows that plan.
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
  *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
@@ -49,14 +50,36 @@
  * (0x1b20/0xf) reads back 0 (the write is dropped), single SIDs stick. */
 static const uint16_t adsp_sids[] = { 0x1b21, 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x1b27, 0x1b28, 0x1b2f };
 
+/* rpc1/rpc2: the sensor PD takes 32-bit FastRPC addresses and XNU has no RAM below 4 GB, so with --rpc the six
+ * FastRPC streams go through a translating bank: RPC_IOVA (32-bit, the start of downstream's compute-cb pool)
+ * -> a pm_alloc buffer. 0x1b21 and 0x1b2f stay identity. */
+#define RPC_IOVA	0x80000000ull
+static const uint16_t rpc_sids[] = { 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x1b27, 0x1b28 };
+static int rpc_on;
+
 static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
 {
 	if (one)
 		return smmu_identity("ADSP", sid, mask);
 	int bad = 0;
 	for (unsigned i = 0; i < sizeof(adsp_sids) / sizeof(adsp_sids[0]); i++)
-		bad |= smmu_identity("ADSP", adsp_sids[i], 0);
+		if (!rpc_on || adsp_sids[i] == 0x1b21 || adsp_sids[i] == 0x1b2f)
+			bad |= smmu_identity("ADSP", adsp_sids[i], 0);
+	if (rpc_on && !bad) {
+		uint64_t pa = smmu_dry ? 0x100000000ull : pm_alloc(FASTRPC_DMA_SIZE, 0x1000);
+		if (!pa)
+			return 1;
+		bad |= smmu_translate("ADSP rpc", rpc_sids, 6, RPC_IOVA, pa, FASTRPC_DMA_SIZE);
+		if (!bad && !smmu_dry)
+			fastrpc_buffer(pa, RPC_IOVA);
+	}
 	return bad;
+}
+
+static void rpc_faults(void)
+{
+	for (unsigned i = 0; i < sizeof(rpc_sids) / sizeof(rpc_sids[0]); i++)
+		smmu_faults("ADSP rpc", rpc_sids[i]);
 }
 
 static void kick(unsigned bit)
@@ -420,7 +443,7 @@ struct chan {
 };
 static struct chan ch[NCHAN];
 static int nch, edge_up, ver_seen, our_iid = 100;
-static int rpc_on, rpc_started, ready_seen;
+static int rpc_started, ready_seen;
 static struct chan *rpc_chan;
 static uint8_t rxbuf[16384];
 static size_t rx_have;
@@ -780,7 +803,7 @@ int main(int argc, char **argv)
 	if (smem_init())
 		return 1;
 	printf("adsp: smem ok\n");
-	int watch = 20, early = 1, smmu = 0, i;
+	int watch = 20, early = 1, smmu = 0, unsafe = 0, i;
 	uint32_t sid = 0, mask = 0;
 	int one = 0;
 	const char *cmd = "boot";
@@ -791,6 +814,8 @@ int main(int argc, char **argv)
 			early = 0;
 		else if (!strcmp(argv[i], "--smmu"))
 			smmu = 1;
+		else if (!strcmp(argv[i], "--unsafe"))
+			unsafe = 1;
 		else if (!strcmp(argv[i], "--rpc"))
 			rpc_on = smmu = 1;
 		else if (!strcmp(argv[i], "--dry"))
@@ -808,6 +833,13 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "shutdown")) {
 		pas_shutdown();
 		return 0;
+	}
+	if (rpc_on && !unsafe && strcmp(cmd, "smmu")) {
+		/* rpc2 (buffer at 0xe0f80000, identity) and rpc3 (pm_alloc buffer at 32-bit IOVA 0x80000000) both reset
+		 * the SoC right after the attach: the DSP reaching any HLOS buffer is fatal until the memory is shared
+		 * with its VM. */
+		fprintf(stderr, "adspboot: --rpc resets the phone (rpc2, rpc3, docs/features/audio.md); add --unsafe\n");
+		return 2;
 	}
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
@@ -838,8 +870,10 @@ int main(int argc, char **argv)
 			printf("adsp: early watch: %s, %d channels\n", st == 1 ? "ready" : st == 2 ? "crash" : "time up",
 			       nch);
 			if (st == 2) {
-				if (rpc_on)
+				if (rpc_on) {
 					fastrpc_summary();
+					rpc_faults();
+				}
 				return 1;
 			}
 		}
@@ -867,7 +901,9 @@ int main(int argc, char **argv)
 		}
 	}
 	int rc = glink_watch(rpc_on ? watch : 10) ? 1 : 0;
-	if (rpc_on)
+	if (rpc_on) {
 		fastrpc_summary();
+		rpc_faults();
+	}
 	return rc;
 }

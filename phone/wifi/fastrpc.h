@@ -6,9 +6,14 @@
 #ifndef FASTRPC_H
 #define FASTRPC_H
 #include <stddef.h>
+#include <stdint.h>
+
+#define FASTRPC_DMA_SIZE	0x80000u
 
 typedef void (*fastrpc_send_fn)(const void *pkt, size_t n);
 
+/* Use this buffer (PA for the CPU, DSP its address on the DSP side) instead of a pm_alloc one at PA. */
+void fastrpc_buffer(uint64_t pa, uint64_t dsp);
 /* Allocate the DMA buffer and send the sensors-PD attach; 0 = started. */
 int fastrpc_start(fastrpc_send_fn send);
 /* One received message (smq_invoke_rsp). */

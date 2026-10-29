@@ -30,10 +30,12 @@
 #define M_FDLIST	16
 #define M_CRCLIST	64
 #define MAXARGS		16
-#define DMA_SIZE	0x80000u
+#define DMA_SIZE	FASTRPC_DMA_SIZE
 /* A pm_alloc buffer (rpc1: 0x1062a0000): the attach reached the sensor PD, which then died with
  * EX:sensor_process:frpck_0_0:0x93. rpc2 with the buffer at 0xe0f80000 (top of radio.c's unmanaged pool) reset the
- * whole SoC right after the attach was sent: never hand the DSP memory outside managed DRAM again. */
+ * whole SoC right after the attach was sent: never hand the DSP memory outside managed DRAM again. Since rpc3 the
+ * buffer is managed DRAM above 4 GB seen by the DSP at a 32-bit IOVA through a translating SMMU bank
+ * (adspboot --rpc, smmu_translate): dsp_base is that IOVA, dma_pa what the CPU uses. */
 #define BUFS_LEN	0x10000u	/* our next2 in-buffer for the DSP's packed in bufs + out lens */
 #define OBUF_MAX	0x20000u	/* our packed out bufs (prevbufs) */
 
@@ -62,7 +64,7 @@ struct rarg {
 };
 
 static fastrpc_send_fn tx;
-static uint64_t dma_pa;
+static uint64_t dma_pa, dsp_base;
 static uint8_t meta[DMA_SIZE];
 static uint32_t tgid, seq;
 static int state;	/* 0 off, 1 attach, 2 remotectl open, 3 register, 4 init2, 5 next2 loop, 6 dead */
@@ -120,7 +122,7 @@ static int invoke(uint32_t handle, uint32_t sc, struct rarg *a)
 			off = align(off, BALIGN);
 			if (off + a[i].len > DMA_SIZE)
 				return -1;
-			pv = dma_pa + off;	/* guess: downstream puts its kernel VA here; the DSP only needs the page offset */
+			pv = dsp_base + off;	/* guess: downstream puts its kernel VA here; the DSP only needs the page offset */
 			pp[0] = pv & ~0xfffull;
 			pp[1] = (((pv + len - 1) >> 12) - (pv >> 12) + 1) << 12;
 			if (i < SC_IN(sc))
@@ -142,7 +144,7 @@ static int invoke(uint32_t handle, uint32_t sc, struct rarg *a)
 	if (n)
 		memcpy(cur, a, n * sizeof(*a));
 	/* guess: downstream sends pid 0 for kernel-originated invokes (the attach); we use tgid for all user ones */
-	struct smq_msg m = { state == 1 ? 0 : tgid, tgid, cur_ctx | PD_SENSORS, handle, sc, dma_pa,
+	struct smq_msg m = { state == 1 ? 0 : tgid, tgid, cur_ctx | PD_SENSORS, handle, sc, dsp_base,
 			     align(off, 4096) };
 	printf("rpc: -> h %u m %u in %u out %u (sc %08x) ctx %llx, %u bytes\n", handle, SC_METHOD(sc), SC_IN(sc),
 	       SC_OUT(sc), sc, (unsigned long long)m.ctx, off);
@@ -771,6 +773,12 @@ void fastrpc_rx(const void *p, size_t n)
 	}
 }
 
+void fastrpc_buffer(uint64_t pa, uint64_t dsp)
+{
+	dma_pa = pa;
+	dsp_base = dsp;
+}
+
 int fastrpc_start(fastrpc_send_fn send)
 {
 	tx = send;
@@ -778,9 +786,11 @@ int fastrpc_start(fastrpc_send_fn send)
 		printf("rpc: no DMA buffer\n");
 		return -1;
 	}
+	if (!dsp_base)
+		dsp_base = dma_pa;
 	tgid = (uint32_t)getpid();
-	printf("rpc: DMA buffer %llx+%x, tgid %u, attaching to the sensors PD (pd %u)\n", (unsigned long long)dma_pa,
-	       DMA_SIZE, tgid, PD_SENSORS);
+	printf("rpc: DMA buffer %llx+%x (DSP sees %llx), tgid %u, attaching to the sensors PD (pd %u)\n",
+	       (unsigned long long)dma_pa, DMA_SIZE, (unsigned long long)dsp_base, tgid, PD_SENSORS);
 	state = 1;
 	static uint32_t t;
 	t = tgid;
