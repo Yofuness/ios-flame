@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <objc/message.h>
+#include <notify.h>
 #include <unistd.h>
 #include <string.h>
 #include "NativeBridgeMetalFrontend.h"
@@ -501,6 +502,36 @@ static void sm2_orient_d(long n, long src)
 	sm2_log("orient: D %ld source %ld -> effective %ld (CoreMotion hook %d)", n, src, e, cm != NULL);
 }
 
+/* Rotation probe (SpringBoard, on "D" lines): what SpringBoard sees ~1.5 s after backboardd changed the orientation. */
+static void sm2_orient_probe(long n)
+{
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+		uint64_t st[3] = { 0, 0, 0 };
+		const char *k[3] = { "com.apple.backboardd.orientation", "com.apple.backboardd.rawOrientation",
+			"com.apple.backboardd.orientationlock" };
+		for (int i = 0; i < 3; i++) {
+			int t = 0;
+			if (notify_register_check(k[i], &t) == NOTIFY_STATUS_OK) {
+				notify_get_state(t, &st[i]);
+				notify_cancel(t);
+			}
+		}
+		id dev = [objc_getClass("UIDevice") respondsToSelector:@selector(currentDevice)] ?
+		    [objc_getClass("UIDevice") performSelector:@selector(currentDevice)] : nil;
+		SEL os = sel_registerName("orientation"), ai = sel_registerName("activeInterfaceOrientation");
+		long dor = [dev respondsToSelector:os] ? ((long (*)(id, SEL))objc_msgSend)(dev, os) : -1;
+		Class ac = objc_getClass("UIApplication");
+		id app = [ac respondsToSelector:@selector(sharedApplication)] ? [ac performSelector:@selector(sharedApplication)] : nil;
+		long aio = [app respondsToSelector:ai] ? ((long (*)(id, SEL))objc_msgSend)(app, ai) : -1;
+		Class lc = objc_getClass("SBOrientationLockManager");
+		id lm = [lc respondsToSelector:@selector(sharedInstance)] ? [lc performSelector:@selector(sharedInstance)] : nil;
+		SEL il = sel_registerName("isUserLocked");
+		int locked = [lm respondsToSelector:il] ? ((BOOL (*)(id, SEL))objc_msgSend)(lm, il) : -1;
+		sm2_log("orient: SB probe after D %ld: notify orientation %llu raw %llu lock %llu, UIDevice %ld, app interface %ld, locked %d",
+		    n, st[0], st[1], st[2], dor, aio, locked);
+	});
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
@@ -534,7 +565,13 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 		bool b = buf[0] == 'B', c = buf[0] == 'C', d = buf[0] == 'D';
 		char *end = NULL;
 		long n = strtol(b || c || d ? buf + 1 : buf, &end, 10);
-		if (n < 1 || n > 4 || d != bbd)	/* "D" lines are backboardd's, the rest SpringBoard's */
+		if (n < 1 || n > 4)
+			return;
+		if (d && !bbd) {	/* "D" lines are backboardd's; SpringBoard only probes what it sees */
+			sm2_orient_probe(n);
+			return;
+		}
+		if (d != bbd)
 			return;
 		if (d) {
 			sm2_orient_d(n, strtol(end, NULL, 10));
