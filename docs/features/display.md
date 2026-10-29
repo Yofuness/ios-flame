@@ -20,6 +20,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 21:45 rotation method E (traits pipeline callback): called, still no rotation (parked)
+- RE (investigator, SpringBoard image in the shared cache): on iOS 16 app scenes follow the Traits arbiter, whose only device-orientation input is the BKSAccelerometer delegate callback `-[SBTraitsEmbeddedDisplayPipelineManager accelerometer:didChangeDeviceOrientation:]` (it rebuilds `_orientationInputs` via `_orientationInputsForDeviceOrientation:` and `_noteInputsDidChangeAnimated:reason:`); nothing calls it without an accelerometer. Orientation events are enabled only while `_isBacklightOn` (or prefersAlwaysOnOrientation).
+- SweetMetal2 method E (`E N`): swizzles `initWithArbiter:sceneDelegate:` to capture the manager (captured: `E pipeline manager 0x28...`) and calls the callback with its own `_accelerometer`. After `D 3 0` + `E 3`: logged `E 3 (accelerometer 0x28...)`, Safari still portrait (webcam e3). With `_isBacklightOn` forced YES (it already was 1) + `_updateOrientationEventsEnabledState`: still portrait (e3b).
+- Parked after methods A-E. Next would be reading SpringBoard's oslog (the "[EmbeddedPipeline][Accelerometer] did change device orientation" line and the arbiter's validator decisions); needs an oslog reader on the phone first.
+
 ### 2026-10-28 21:20 rotation probe: SpringBoard sees the orientation, Safari's scene doesn't follow
 - SweetMetal2 in SpringBoard now probes 1.5 s after each `D` line. After `D 3 0` (backboardd effective 3): notify com.apple.backboardd.orientation = 3, rawOrientation = 3, orientationlock = 0, `UIDevice.orientation` = 3, SpringBoard's `activeInterfaceOrientation` = 3, SBOrientationLockManager isUserLocked = 0. After `D 1 0` all back to 1.
 - Safari in front stays portrait (webcam p13, pb3), also after `B 3` (SBDeviceOrientationUpdateManager enqueue) on top.

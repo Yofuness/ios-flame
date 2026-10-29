@@ -532,6 +532,58 @@ static void sm2_orient_probe(long n)
 	});
 }
 
+/* Method E (SpringBoard): iOS 16 rotates app scenes only from the traits pipeline's BKSAccelerometer delegate callback,
+ * which never fires without an accelerometer. Capture SBTraitsEmbeddedDisplayPipelineManager at init and call
+ * -accelerometer:didChangeDeviceOrientation: ourselves ("E N"). */
+static id sm2_traits_pm;
+
+static void sm2_orient_e_hook(void)
+{
+	Class k = objc_getClass("SBTraitsEmbeddedDisplayPipelineManager");
+	SEL in = sel_registerName("initWithArbiter:sceneDelegate:");
+	Method m = k ? class_getInstanceMethod(k, in) : NULL;
+	if (!m) {
+		sm2_log("orient: E SBTraitsEmbeddedDisplayPipelineManager %s missing", k ? "-initWithArbiter:sceneDelegate:" : "class");
+		return;
+	}
+	IMP orig = method_getImplementation(m);
+	method_setImplementation(m, imp_implementationWithBlock(^id(id self, id arb, id del) {
+		id r = ((id (*)(id, SEL, id, id))orig)(self, in, arb, del);
+		sm2_traits_pm = r;
+		sm2_log("orient: E pipeline manager %p", r);
+		return r;
+	}));
+}
+
+static void sm2_orient_e(long n)
+{
+	id pm = sm2_traits_pm;
+	SEL cb = sel_registerName("accelerometer:didChangeDeviceOrientation:");
+	if (!pm || ![pm respondsToSelector:cb]) {
+		sm2_log("orient: E no pipeline manager (%p)", pm);
+		return;
+	}
+	/* gate 2: orientation events are only enabled while SpringBoard thinks the backlight is on */
+	static bool bl;
+	SEL ib = sel_registerName("_isBacklightOn"), up = sel_registerName("_updateOrientationEventsEnabledState");
+	Method bm = class_getInstanceMethod(object_getClass(pm), ib);
+	if (bm && !bl) {
+		bl = true;
+		BOOL was = ((BOOL (*)(id, SEL))objc_msgSend)(pm, ib);
+		method_setImplementation(bm, imp_implementationWithBlock(^BOOL(id self) { return YES; }));
+		sm2_log("orient: E _isBacklightOn was %d, now forced YES", was);
+	}
+	if ([pm respondsToSelector:up])
+		((void (*)(id, SEL))objc_msgSend)(pm, up);
+	id acc = nil;
+	@try {
+		acc = [pm valueForKey:@"_accelerometer"];
+	} @catch (id ex) {
+	}
+	((void (*)(id, SEL, id, long long))objc_msgSend)(pm, cb, acc, (long long)n);
+	sm2_log("orient: E %ld (accelerometer %p)", n, acc);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
@@ -542,6 +594,8 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 		sm2_log("orient: backboardd watcher: access %d errno %d", ok, ok ? errno : 0);
 	if (ok != 0)
 		return;
+	if (!bbd)
+		sm2_orient_e_hook();
 	if (!bbd && !dlopen("/System/Library/PrivateFrameworks/AccessibilityUtilities.framework/AccessibilityUtilities", RTLD_NOW))
 		sm2_log("orient: AccessibilityUtilities: %s", dlerror());
 	/* static: a local source was freed under ARC when the constructor returned (k90a: no orient lines at all). */
@@ -562,17 +616,21 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 			buf[0] = 0;
 		if (fd >= 0)
 			close(fd);
-		bool b = buf[0] == 'B', c = buf[0] == 'C', d = buf[0] == 'D';
+		bool b = buf[0] == 'B', c = buf[0] == 'C', d = buf[0] == 'D', e = buf[0] == 'E';
 		char *end = NULL;
-		long n = strtol(b || c || d ? buf + 1 : buf, &end, 10);
+		long n = strtol(b || c || d || e ? buf + 1 : buf, &end, 10);
 		if (n < 1 || n > 4)
 			return;
 		if (d && !bbd) {	/* "D" lines are backboardd's; SpringBoard only probes what it sees */
 			sm2_orient_probe(n);
 			return;
 		}
-		if (d != bbd)
+		if (d != bbd || (e && bbd))
 			return;
+		if (e) {
+			sm2_orient_e(n);
+			return;
+		}
 		if (d) {
 			sm2_orient_d(n, strtol(end, NULL, 10));
 			return;
