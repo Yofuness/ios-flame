@@ -1143,6 +1143,10 @@ static int pcm_dbfs = -20;	/* sp5: tone level, clamped to -40..-6 dBFS */
 static int amp_on, amp_check, amp_db = -30, amp_ready, amp_used;
 static struct cs_amp amp = { .addr = 0x40 };
 static uint64_t amp_t0, amp_next;
+/* sp6: snapshots at 0.5 / 2.5 s; --amp-pcm-stop-test then stops the PCM refills, reads again 300 ms later, powers
+ * down (the stalled stream then ends through the 1 s WRITE_DONE timeout) */
+static int amp_diag_n, amp_pcm_stop_test, pcm_stopped;
+static uint64_t amp_stop_t;
 
 static void amp_off(void)
 {
@@ -1193,6 +1197,27 @@ static void amp_poll(void)
 	if (!amp.up || now_ms() < amp_next)
 		return;
 	amp_next = now_ms() + 50;
+	uint64_t on = now_ms() - amp_t0;
+	if (amp_diag_n == 0 && on >= 500) {
+		amp_diag_n++;
+		cs_diag(&amp, "0.5s");
+	} else if (amp_diag_n == 1 && on >= 2500) {
+		amp_diag_n++;
+		cs_diag(&amp, "2.5s");
+		if (amp_pcm_stop_test) {
+			printf("amp: pcm stop test: no new periods from here (%u sent)\n", pcm_sent);
+			pcm_stopped = 1;
+			amp_stop_t = now_ms();
+		}
+	} else if (pcm_stopped && amp_diag_n == 2 && now_ms() - amp_stop_t >= 300) {
+		amp_diag_n++;
+		cs_diag(&amp, "stopped");
+		printf("amp: pcm stop test done: off\n");
+		amp_off();
+		return;
+	}
+	if (!amp.up)
+		return;
 	if (cs_check(&amp)) {
 		printf("amp: IRQ1 error: power down now\n");
 		amp_off();
@@ -1385,6 +1410,8 @@ static void pcm_back(unsigned p)
 		return;
 	if (pcm_done == 1)
 		amp_start();	/* sp1: stream running, BCLK present */
+	if (pcm_stopped)
+		return;	/* sp6: --amp-pcm-stop-test */
 	if (pcm_sent < pcm_tone_periods + PCM_PERIODS)
 		pcm_write(p % PCM_PERIODS);
 	else if (!pcm_out) {
@@ -1969,6 +1996,8 @@ int main(int argc, char **argv)
 			apr_on = afe_on = pcm_on = smmu = 1;
 		else if (!strcmp(argv[i], "--amp"))	/* sp1: left amp on for the --pcm tone; implies --pcm */
 			amp_on = apr_on = afe_on = pcm_on = smmu = 1;
+		else if (!strcmp(argv[i], "--amp-pcm-stop-test"))	/* sp6: let the ADSP underflow with the amp on */
+			amp_pcm_stop_test = 1;
 		else if (!strcmp(argv[i], "--amp-check"))	/* sp1: configure + read back only, no GLOBAL_EN, then exit */
 			amp_check = 1;
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
@@ -2050,7 +2079,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

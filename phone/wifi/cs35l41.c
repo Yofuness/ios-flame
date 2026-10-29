@@ -5,17 +5,20 @@
  * configured field is read back before GLOBAL_EN can be set; only amp 0x40 is ever written.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include "geni_i2c.h"
 #include "cs35l41.h"
 
 #define DEVID		0x00000000	/* 0x35a40 */
 #define REVID		0x00000004	/* [7:0] 0xb2 = B2 */
-#define OTPID		0x00000010	/* logged only; no OTP unpack (trims stay default) */
+#define OTPID		0x00000010	/* sp6: selects the OTP map for the trim unpack */
+#define OTP_MEM0	0x00000400	/* sp6: 32 words of packed trims */
+#define OTP_WORDS	32
 #define TEST_KEY_CTL	0x00000040	/* 0x55, 0xaa unlock; 0xcc, 0x33 lock */
 #define PWR_CTRL1	0x00002014	/* bit0 GLOBAL_EN */
 #define PWR_CTRL2	0x00002018	/* bit0 AMP_EN, [5:4] BST_EN 0 off / 1 bypass (FET on, VBST = VP) / 2 boost */
-#define PWR_CTRL3	0x00002028
+#define PWR_CTRL3	0x0000201c	/* sp6: was 0x2028 (wrong) */
 #define PROTECT_REL	0x00002034	/* error release bits */
 #define PUP_PDN_PATCH	0x00002084	/* 0x002f1aa0 before GLOBAL_EN, 0x002f1aa3 after power-down (unlocked) */
 #define PLL_CLK_CTRL	0x00002c04	/* [2:0] REFCLK_SEL 0 = BCLK, bit4 REFCLK_EN, [10:5] FREQ, bit11 OPEN_LOOP */
@@ -174,6 +177,92 @@ int cs_probe(struct cs_amp *a)
 	return 0;
 }
 
+/*
+ * sp6: OTP trim unpack (facts from Linux cs35l41-lib.c otp_map_1/otp_map_2 and cs35l41_otp_unpack): the fuses at
+ * OTP_MEM0 hold bit fields packed LSB-first from word 2 bit 16; each field goes into {reg, shift, size}; reg 0 =
+ * padding (skipped). Map 2 = map 1 with VMON_POL (0x4000 bit 11) in place of the padding bit. OTPID 1/8 -> map 1,
+ * 2/3/6 -> map 2; other ids: skipped. Runs unlocked, right after the B2 errata. CS35L41_NO_OTP=1 turns it off.
+ */
+struct otp_field {
+	uint32_t reg;
+	uint8_t shift, size;
+};
+
+static const struct otp_field otp_fields[] = {
+	{ 0x2030, 0, 4 }, { 0x2030, 7, 1 }, { 0x208c, 24, 6 }, { 0x2090, 14, 4 }, { 0x2090, 10, 4 },
+	{ 0x300c, 11, 4 }, { 0x394c, 23, 2 },
+	{ 0x3950, 0, 7 }, { 0x3950, 8, 7 }, { 0x3950, 16, 8 }, { 0x3950, 24, 8 },
+	{ 0x3954, 0, 7 }, { 0x3954, 8, 7 }, { 0x3954, 16, 8 }, { 0x3954, 24, 8 },
+	{ 0x3958, 0, 7 }, { 0x3958, 8, 7 }, { 0x3958, 16, 8 }, { 0x3958, 24, 8 },
+	{ 0x395c, 0, 7 }, { 0x395c, 8, 7 }, { 0x395c, 16, 8 }, { 0x395c, 24, 8 },
+	{ 0x416c, 0, 8 }, { 0x4160, 0, 7 }, { 0x416c, 8, 8 }, { 0x4160, 16, 10 }, { 0x416c, 16, 12 },
+	{ 0x416c, 28, 1 },
+	{ 0x4170, 0, 6 }, { 0x4170, 6, 1 }, { 0x4170, 8, 6 }, { 0x4170, 14, 1 }, { 0x4170, 16, 9 },
+	{ 0x4360, 0, 5 }, { 0x4360, 6, 9 },
+	{ 0x4448, 0, 8 }, { 0x4448, 8, 8 }, { 0x4448, 16, 8 }, { 0x4448, 24, 8 }, { 0x444c, 0, 3 },
+	{ 0x6e30, 0, 5 }, { 0x6e30, 8, 5 }, { 0x6e30, 16, 5 }, { 0x6e30, 24, 5 },
+	{ 0x6e34, 0, 5 }, { 0x6e34, 8, 5 }, { 0x6e34, 16, 5 }, { 0x6e34, 24, 5 },
+	{ 0x6e38, 0, 5 }, { 0x6e38, 8, 5 }, { 0x6e38, 16, 5 }, { 0x6e38, 24, 5 },
+	{ 0x6e3c, 0, 5 }, { 0x6e3c, 8, 5 }, { 0x6e3c, 16, 5 }, { 0x6e3c, 24, 5 },
+	{ 0x6e40, 0, 5 }, { 0x6e40, 8, 5 }, { 0x6e40, 16, 5 }, { 0x6e40, 24, 5 }, { 0x6e44, 0, 5 },
+	{ 0x6e48, 0, 10 }, { 0x6e48, 10, 10 }, { 0x6e48, 20, 10 }, { 0x6e4c, 0, 10 }, { 0x6e4c, 10, 10 },
+	{ 0x6e4c, 20, 10 }, { 0x6e50, 0, 10 }, { 0x6e50, 10, 10 }, { 0x6e50, 20, 10 }, { 0x6e54, 0, 10 },
+	{ 0x6e54, 10, 10 }, { 0x6e54, 20, 10 }, { 0x6e58, 0, 10 }, { 0x6e58, 10, 10 }, { 0x6e58, 20, 10 },
+	{ 0x6e5c, 0, 10 }, { 0x6e5c, 10, 10 }, { 0x6e5c, 20, 10 }, { 0x6e60, 0, 10 }, { 0x6e60, 10, 10 },
+	{ 0x6e60, 20, 10 }, { 0x6e64, 0, 10 },
+	{ 0x7418, 7, 5 }, { 0x741c, 0, 5 }, { 0x741c, 11, 4 }, { 0x741c, 19, 4 }, { 0x7434, 17, 1 },
+	{ 0x7434, 18, 7 }, { 0x7068, 0, 9 }, { 0x410c, 7, 1 }, { 0x400c, 0, 7 },
+	{ 0x0000, 0, 1 },	/* OTP_PAD: map 1 padding bit, map 2 VMON_POL */
+	{ 0x17040, 0, 8 }, { 0x17040, 8, 8 }, { 0x17040, 16, 8 }, { 0x17040, 24, 8 }, { 0x17044, 0, 24 },
+};
+#define OTP_PAD		93	/* index of the map 1 / map 2 difference */
+
+/* call unlocked; 0 = done or skipped (unknown id, CS35L41_NO_OTP), -1 = I2C error */
+static int otp_unpack(struct cs_amp *a)
+{
+	uint32_t id, mem[OTP_WORDS];
+	if (getenv("CS35L41_NO_OTP")) {
+		printf("cs35l41 %#x: otp: skipped (CS35L41_NO_OTP)\n", a->addr);
+		return 0;
+	}
+	if (rd(a, OTPID, &id))
+		return -1;
+	int map = id == 1 || id == 8 ? 1 : id == 2 || id == 3 || id == 6 ? 2 : 0;
+	if (!map) {
+		printf("cs35l41 %#x: otp: no map for OTPID %#x: skipped (trims stay default)\n", a->addr, id);
+		return 0;
+	}
+	for (int i = 0; i < OTP_WORDS; i++)
+		if (rd(a, OTP_MEM0 + 4 * i, &mem[i]))
+			return -1;
+	int n = sizeof(otp_fields) / sizeof(otp_fields[0]), nw = 0, err = 0;
+	printf("cs35l41 %#x: otp: OTPID %#x -> map %d (Linux otp_map_%d), %d fields\n", a->addr, id, map, map, n);
+	unsigned pos = 2 * 32 + 16;	/* word 2, bit 16 */
+	for (int i = 0; i < n; i++) {
+		struct otp_field f = otp_fields[i];
+		if (i == OTP_PAD && map == 2)
+			f = (struct otp_field){ 0x4000, 11, 1 };	/* VMON_POL */
+		unsigned w = pos / 32, b = pos % 32;
+		pos += f.size;
+		if (w >= OTP_WORDS || (b + f.size > 32 && w + 1 >= OTP_WORDS)) {
+			printf("cs35l41 %#x: otp: field %d past the end: stop\n", a->addr, i);
+			return -1;
+		}
+		uint64_t win = mem[w] | (b + f.size > 32 ? (uint64_t)mem[w + 1] << 32 : 0);
+		uint32_t fm = (uint32_t)((1ull << f.size) - 1);
+		uint32_t val = (uint32_t)(win >> b) & fm, mask = fm << f.shift, v;
+		if (!f.reg)
+			continue;	/* padding */
+		if (rd(a, f.reg, &v))
+			return -1;
+		printf("cs35l41 %#x: otp: trim %08x mask %08x val %08x\n", a->addr, f.reg, mask, val << f.shift);
+		err |= wr(a, f.reg, (v & ~mask) | (val << f.shift));
+		nw++;
+	}
+	printf("cs35l41 %#x: otp: %d trim fields written%s\n", a->addr, nw, err ? " (write errors)" : "");
+	return err ? -1 : 0;
+}
+
 int cs_config(struct cs_amp *a, int vol_db, int boost)
 {
 	if (!a->probed || a->addr != AMP_ADDR) {
@@ -200,6 +289,7 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 	err |= set(a, AMP_GAIN_CTRL, 0);
 	err |= set(a, 0x00004c28, 0);
 	err |= set(a, 0x00004c2c, 0);
+	err |= otp_unpack(a);	/* sp6: still unlocked, as Linux */
 	err |= lock(a);
 	/* sp3: analog PCM gain AMP_GAIN_CTRL[9:5] (Linux cs35l41.h AMP_GAIN_PCM_MASK 0x3e0), 0.5 dB + 1 dB per step,
 	 * hard clamp 0..10 (<= 10.5 dB; stock 19 = 19.5 dB) */
@@ -309,6 +399,27 @@ int cs_power_up(struct cs_amp *a)
 		printf("cs35l41 %#x: no PUP_DONE in 100 ms (STATUS1 %08x STATUS3 %08x, PLL_LOCK %s)\n", a->addr, s, s3,
 		       pll_ms ? "seen" : "never");
 	return dry ? 0 : -1;
+}
+
+/* sp6: on-window snapshot, read-only. RAW bit names from Linux cs35l41.h (it names no LRCLK/BCLK/FS error bits) */
+void cs_diag(struct cs_amp *a, const char *tag)
+{
+	static const struct { const char *n; uint32_t r; } regs[] = {
+		{ "raw1", 0x10090 }, { "raw2", 0x10094 }, { "raw3", 0x10098 }, { "raw4", 0x1009c },
+		{ "clock_detect_1", 0x14000 }, { "ng_cfg", 0x6808 }, { "mixer_ngate_ch1", 0x12004 },
+		{ "sp_enables", SP_ENABLES }, { "sp_format", SP_FORMAT }, { "sp_rx_wl", SP_RX_WL }, { "pwr_ctrl3", PWR_CTRL3 },
+	};
+	uint32_t v[sizeof(regs) / sizeof(regs[0])] = { 0 };
+	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++)
+		if (!rd(a, regs[i].r, &v[i]))
+			printf("cs35l41 %#x: diag %s %s %08x = %08x\n", a->addr, tag, regs[i].n, regs[i].r, v[i]);
+	printf("cs35l41 %#x: diag %s decode:%s%s%s%s%s%s%s%s%s%s%s\n", a->addr, tag,
+	       v[0] & IRQ_AMP_SHORT ? " AMP_SHORT" : "", v[0] & IRQ_TEMP_ERR ? " TEMP_ERR" : "",
+	       v[0] & IRQ_TEMP_WARN ? " TEMP_WARN" : "", v[0] & IRQ_BST_SHORT ? " BST_SHORT" : "",
+	       v[0] & IRQ_BST_UVP ? " BST_DCM_UVP" : "", v[0] & IRQ_BST_OVP ? " BST_OVP" : "",
+	       v[0] & IRQ_PUP_DONE ? " PUP_DONE" : "", v[0] & IRQ_PDN_DONE ? " PDN_DONE" : "",
+	       v[2] & IRQ3_PLL_LOCK ? " PLL_LOCK" : "", v[2] & 0x10 ? " PLL_UNLOCK" : "",
+	       v[3] & 0x80000000u ? " OTP_BOOT_ERR" : v[3] & 0x2 ? " OTP_BOOT_DONE" : "");
 }
 
 void cs_power_down(struct cs_amp *a)
