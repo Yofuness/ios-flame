@@ -94,6 +94,12 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 23:00 E1 WORKS: QSEED3LITE scales VIG0 (e1a, e1b; kernel98, pmem from userland)
+- Recipe from the Pixel 4/4a msm-4.14 SDE source: research/notes/qseed3lite.md; scripts research/notes/e1-on.sh / e1-off.sh (pmem writes, one CTL0 flush 0x20001).
+- e1a read-only dump (ABL state): QS+0 = 0x2004 is the scaler VERSION (not "unused"); QS OP_MODE 0, steps 0x200000, preload 0x03040304; SSPP SRC_SIZE/OUT_SIZE 0x09240438, SRC0 0x9c000000, ystride 0x1100, fmt 0x237ff; REQ_PIXELS (+0x108/118/128) 0x09240438; CTL0 flush 0.
+- e1b: crop 1037x2246 at (21,47), steps 0x1eb9d6/0x1eb6eb, OP_MODE written 0xa0034401 (reads 0x20034401: bit 31 not kept) -> image zoomed ~4%, edges cut, no garbage/stripes, stable 13 s; e1-off -> baseline. No reset, no MDP/underrun log lines.
+- So a 1125x2436 surface can be scanned and scaled to the panel by hardware. Next: E3 (display surfaces in 2 carveout slots below 4 GB, swap() flips SRC0_ADDR, SwapWait), first the full-size 1125x2436 downscale check (more fetch per line: underflow risk).
+
 ### 2026-10-29 16:00 E2: no contiguous 9.7 MB below 4 GB (e2b, kernel100 = 98 + revised 0222)
 - The 15:35 panic was `ml_io_map` of 10 MB (io_map submap is 8 MB, KMA_NOFAIL), not the contiguous allocation. Revised 0222: early non-panicking kmem_alloc_contig, copy via ml_phys_read.
 - e2b: `e2 alloc below 4 GB failed (3)`, `e2 alloc any PA ok, PA 0x1101dc000`; write 2 -> ERANGE (VIG0 SRC0_ADDR is 32-bit), VIG0 untouched; no hang. So display buffers must be below 4 GB: either reserved at boot (shim/ADT reserved-memory like the splash carveout) or carved from the splash carveout (24.1 MB: 2 x 1125x2436 frames). E2's DRAM-outside-carveout question stays open (only answerable with a buffer < 4 GB).
