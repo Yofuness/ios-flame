@@ -10,7 +10,7 @@ for f in SweetMetal2 libvulkan_freedreno.dylib Info.plist _CodeSignature/CodeRes
 done
 S=tools/sunfish-ssh
 $S 'rm -rf /var/local/tmp/m2 && mkdir -p /var/local/tmp/m2 && : >> /var/local/mtl2.log && chmod 666 /var/local/mtl2.log;
-	printf "SpringBoard\ncom.apple.WebKit.GPU\nMobileSafari\n" > /var/local/mtl2-clients'
+	printf "SpringBoard\ncom.apple.WebKit.GPU\nMobileSafari\nMaps\n" > /var/local/mtl2-clients'
 tar --owner=0 --group=0 -czf - -C "$1" SweetMetal2.bundle | $S 'toybox zcat | toybox tar -xpf - -C /var/local/tmp/m2'
 $S 'E=/System/Library/Extensions; rm -rf $E/SweetMetal2.bundle.old; [ -d $E/SweetMetal2.bundle ] &&
 	mv $E/SweetMetal2.bundle $E/SweetMetal2.bundle.old; mv /var/local/tmp/m2/SweetMetal2.bundle $E/ &&

@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications, plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-28.
+**State:** ✅ 32 staged apps installed in /Applications; 12 of 18 surveyed apps open fine (Maps since 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -47,6 +47,13 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 09:40 B24: Maps opens (b24a-c, kernel94; bridge 2250f8f, e1ab0a8, 91b7ee2)
+- b24a (Maps listed in mtl2-clients): device granted, then SIGABRT 0.1 s after the first draw right after `MISSING NBRenderEncoder -setDepthClipMode:`. No side effects (lock clock, Safari fine, 0 UIWDT/hangs).
+- Added to NativeBridgeMetalFrontend.mm: setDepthClipMode: (Clip = default, Clamp logged and ignored: no depth clamp in the runtime), useResources:/useHeap:/useHeaps:/memoryBarrierWithScope:afterStages:beforeStages: no-ops, setScissorRects:/setViewports: (first entry only).
+- b24b: next abort on `MISSING NBLibrary -newFunctionWithName:constantValues:pipelineLibrary:error:`. Added it (forward, pipelineLibrary ignored) plus newFunctionWithDescriptor:/newRenderPipelineStateWithDescriptor:/newComputePipelineStateWithFunction: completionHandler: forwards.
+- b24c (ssh up 17 s, 4455 mV): Maps runs, 0 crashes, 0 MISSING; draws "What's New in Maps" + "Turn On Location Services" alert (webcam b24c-3). One `native-metal: texture refused: texture: OutOfMemory(Device)`; one feature icon on the sheet is noise (like B29). Map tiles not seen yet (sheet in front, no taps).
+- Maps stays in mtl2-clients; tools/sunfish-metal2-install.sh now writes Maps too. Still missing selectors: setTessellationFactorBuffer, setVertexAmplificationCount:viewMappings:, setColorStoreAction:atIndex:, setDepthStoreAction:, newDynamicLibrary:.
 
 ### 2026-10-29 09:35 B29: shadow refresh switch, no change; parked (b29c, kernel94, bundle 561e6cd)
 - shadow.rs: every encoder starts with all shadows stale (new ShadowSync per encoder), so each encoder copies buffer -> shadow before first use; nothing CPU-side marks entries stale.

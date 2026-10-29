@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B24 Notes, Photos, Camera, Wallet black, Maps grey: not the mtl2-clients list (Notes/Photos never ask the bridge; listing all five stalled backboardd -> UIWDT kill). Next: Maps listed alone; for Notes, what draws its layer (CA remote layer / IOSurface errors in oslog). [phone]
+- B24 Notes, Photos, Camera, Wallet black: not the mtl2-clients list (Notes/Photos never ask the bridge). Maps fixed 2026-10-29 (listed + missing selectors); map tiles unverified (OutOfMemory texture refusal). [phone]
 - B25 Music SIGSEGV: MPMediaLibrary init says "app not authorized for access" -> nil library -> strlen(NULL). A TCC MediaLibrary row did not help; next: disassemble the authorization check (parked 2026-10-29).
 - B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
 - B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).

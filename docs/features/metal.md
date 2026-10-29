@@ -4,7 +4,7 @@
 ## How to use
 - Install a bundle: `tools/sunfish-metal2-install.sh <dir containing SweetMetal2.bundle> --no-restart` (after `gh run download ID -D DIR`). Pushing `phone/turnip/patches` or `phone/metal2` starts the metal2 CI.
 - `tools/sunfish-m2env-bench.sh TAG KEY=VAL...` writes `/var/local/mtl2-env`, restarts backboardd and benches. `TUDBG=opts` sets TU_DEBUG.
-- Metal clients are listed in /var/local/mtl2-clients (com.apple.WebKit.GPU + MobileSafari added 2026-10-23).
+- Metal clients are listed in /var/local/mtl2-clients (com.apple.WebKit.GPU + MobileSafari added 2026-10-23, Maps 2026-10-29).
 - Bridge switches: SWEET_DRAWLOG, SWEET_CULL, SWEET_PIPESTATS, SWEET_CTL, METAL2VULKAN_HALF_RELAXED, SWEET_M2V_MESSAGES. Telemetry: `touch /var/local/mtl2-telemetry`.
 
 ## Facts
