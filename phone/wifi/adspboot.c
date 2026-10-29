@@ -20,6 +20,8 @@
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
  *                     sp2: first an LPASS core hw vote (sp2b: 0x100F4, --vote-block N), LPI pin mux (gpio8-10) after
  *                     DEVICE_START, undone before DEVICE_STOP; --no-lpi skips both
+ *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
+ *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
@@ -91,22 +93,27 @@ static int rpc_on;
 #define PCM_PERIODS	8
 #define PCM_STRIDE	0x1000		/* one page per period */
 #define PCM_BUF		(PCM_PERIODS * PCM_STRIDE)
-static int pcm_on;
+#define REC_READS	4		/* sp7: --rec READ_V2 buffers after the playback pages, one page each */
+#define REC_BYTES	0x1000
+static int pcm_on, rec_on, rec_hex;
+static uint32_t pcm_buf_len = PCM_BUF;	/* sp7: + REC_READS pages with --rec, same mapping */
 static uint32_t pcm_sid = 0x1b21, pcm_shift = 1;
 static uint64_t pcm_pa, pcm_dsp;
 
 static int pcm_smmu(void)
 {
 	uint16_t sids[1] = { (uint16_t)pcm_sid };
-	pcm_pa = smmu_dry ? 0x100000000ull : pm_alloc(PCM_BUF, 0x1000);
+	if (rec_on)
+		pcm_buf_len = PCM_BUF + REC_READS * REC_BYTES;
+	pcm_pa = smmu_dry ? 0x100000000ull : pm_alloc(pcm_buf_len, 0x1000);
 	if (!pcm_pa)
 		return 1;
 	pcm_dsp = PCM_IOVA | (uint64_t)pcm_shift << 32;
 	smmu_alias = (uint64_t)pcm_shift << 32;
-	int bad = smmu_translate("ADSP pcm", sids, 1, PCM_IOVA, pcm_pa, PCM_BUF);
+	int bad = smmu_translate("ADSP pcm", sids, 1, PCM_IOVA, pcm_pa, pcm_buf_len);
 	smmu_alias = 3ull << 32;
 	printf("pcm: buffer pa %llx (%u B), DSP address %llx (sid %#x, stream bits %u)%s\n", (unsigned long long)pcm_pa,
-	       PCM_BUF, (unsigned long long)pcm_dsp, pcm_sid, pcm_shift, bad ? ": SMMU FAILED" : "");
+	       pcm_buf_len, (unsigned long long)pcm_dsp, pcm_sid, pcm_shift, bad ? ": SMMU FAILED" : "");
 	if (!bad && !smmu_dry)
 		smmu_faults("ADSP pcm", pcm_sid);	/* before */
 	return bad;
@@ -920,7 +927,7 @@ enum { AFE_IDLE, AFE_VOTE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD,
 static int afe_on, afe_step, afe_clk_ok, afe_started;
 static int no_lpi, hw_handle = -1, lpi_set;	/* sp2 */
 static uint32_t vote_block = 2;	/* sp2b: --vote-block */
-static uint32_t lpi_saved[3];
+static uint32_t lpi_saved[4];
 static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response we wait for */
 
 static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16_t len)
@@ -954,12 +961,27 @@ static void afe_clock(uint32_t opcode, int enable)
 
 static void pcm_start(void);
 
-/* sp2: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA, no pull (live.dts:23261-23340). 0 = all read back. */
+/* SET_PARAM_V2 body with the I2S config of PORT (48 kHz, 16 bit, stereo, ws internal) on lane LANE (1 SD0, 2 SD1) */
+#define AFE_I2S_PL	(16 + sizeof(struct afe_param) + sizeof(struct afe_i2s))
+static void afe_i2s_pl(uint8_t *b, uint16_t port, uint16_t lane)
+{
+	struct afe_param p = { AFE_MODULE_AUDIO_DEV_INTERFACE, AFE_PARAM_ID_I2S_CONFIG, sizeof(struct afe_i2s), 0 };
+	struct afe_i2s c = { 1, 16, lane, 1 /* stereo */, 1 /* ws internal */, 48000, 0, 0 };
+	uint16_t size = sizeof(p) + sizeof(c);
+	memset(b, 0, AFE_I2S_PL);
+	memcpy(b, &port, 2);
+	memcpy(b + 2, &size, 2);
+	memcpy(b + 16, &p, sizeof(p));
+	memcpy(b + 16 + sizeof(p), &c, sizeof(c));
+}
+
+/* sp2: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA, no pull (live.dts:23261-23340). 0 = all read back.
+ * sp7: --rec adds gpio11 SD1 func2 (0xc8: same 8 mA / no pull, function field 2; vi-loopback.md section 1). */
 static int lpi_pins(int on)
 {
-	static const uint32_t want[3] = { 0xcc, 0xcc, 0xd0 };
+	static const uint32_t want[4] = { 0xcc, 0xcc, 0xd0, 0xc8 };
 	int bad = 0;
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < (rec_on ? 4 : 3); i++) {
 		uint64_t pa = LPI_PA + 0x1000u * (8 + i);
 		uint32_t cur = rd32(pa), v = on ? want[i] : lpi_saved[i];
 		if (on)
@@ -1005,14 +1027,8 @@ static void afe_run(void)
 	case AFE_CLK_F3: afe_clock(AFE_SVC_CMD_SET_PARAM, 1); break;
 	case AFE_CLK_FC: afe_clock(AFE_SVC_CMD_SET_PARAM_V2, 1); break;
 	case AFE_CFG: {
-		uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_i2s)] = { 0 };
-		struct afe_param p = { AFE_MODULE_AUDIO_DEV_INTERFACE, AFE_PARAM_ID_I2S_CONFIG, sizeof(struct afe_i2s), 0 };
-		struct afe_i2s c = { 1, 16, 1 /* SD0 */, 1 /* stereo */, 1 /* ws internal */, 48000, 0, 0 };
-		uint16_t size = sizeof(p) + sizeof(c);
-		memcpy(b, &port, 2);
-		memcpy(b + 2, &size, 2);
-		memcpy(b + 16, &p, sizeof(p));
-		memcpy(b + 16 + sizeof(p), &c, sizeof(c));
+		uint8_t b[AFE_I2S_PL];
+		afe_i2s_pl(b, port, 1 /* SD0 */);
 		afe_send(port, AFE_PORT_CMD_SET_PARAM_V2, b, sizeof(b));
 		break;
 	}
@@ -1121,8 +1137,36 @@ static void afe_next(int ok, uint32_t status)
 #define PCM_TONE_PERIODS	300		/* 3 s */
 #define PCM_WTOKEN		0x80000000u	/* | period: what a write's WRITE_DONE carries back */
 
-enum { P_IDLE, P_MAP, P_ADM_OPEN, P_OPEN_WRITE, P_ROUTE, P_FMT, P_RUN, P_PLAY, P_PAUSE, P_CLOSE, P_ADM_CLOSE, P_UNMAP,
-       P_DONE };
+/*
+ * sp7: `--rec` (needs --pcm --amp): records the left amp's VMON/IMON back over SEC_MI2S_TX (0x1003, SD1) while the
+ * tone plays (research/notes/vi-loopback.md). Setup steps R_* run inside the PCM sequence (AFE 0x1003 config + start,
+ * ADM open TX, ASM session 2 OPEN_READ_V3 + ENC_CFG_BLK, matrix 1 route, RUN); a failed R_* step only drops the
+ * recording, the tone goes on. The tone gets 0.5 s of silence before (baseline) and after; REC_READS READ_V2 of
+ * 4096 B stay queued in pages after the playback ones; RMS/peak per channel every 100 ms. Teardown in reverse:
+ * pause, close session 2, ADM close, AFE stop 0x1003 (no matrix unmap: V5 has none), amp TX registers back.
+ * `--rec-hex` dumps the first READ_DONE payload. Session 2 CLOSE is the ASM stream close as for session 1 (not
+ * the glink CLOSE that ADSP_CLOSE gates).
+ */
+#define ASM_STREAM_CMD_OPEN_READ_V3	0x00010db4
+#define ASM_STREAM_CMD_SET_ENCDEC_PARAM	0x00010c10
+#define ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2 0x00010da3
+#define ASM_DATA_CMD_READ_V2		0x00010dac
+#define ASM_DATA_EVENT_READ_DONE_V2	0x00010d9a
+#define AFE_PORT_SEC_MI2S_TX	0x1003
+#define REC_SESSION		2
+#define REC_STREAM_PORT		(REC_SESSION << 8 | 1)
+#define REC_RTOKEN		0x40000000u	/* | buffer: what a read's READ_DONE carries back */
+#define REC_LEAD_PERIODS	50		/* 0.5 s of silence before the tone (baseline) and after it */
+
+enum { P_IDLE, P_MAP, R_AFE_CFG, R_AFE_START, R_ADM_OPEN, R_OPEN_READ, R_ENC, R_ROUTE, P_ADM_OPEN, P_OPEN_WRITE,
+       P_ROUTE, P_FMT, P_RUN, R_RUN, P_PLAY, R_PAUSE, R_CLOSE, R_ADM_CLOSE, R_AFE_STOP, P_PAUSE, P_CLOSE, P_ADM_CLOSE,
+       P_UNMAP, P_DONE };
+#define P_TEARDOWN		R_PAUSE
+static int rec_failed, rec_afe, rec_copp_open, rec_open, rec_running, rec_hexed;
+static uint32_t rec_copp, rec_lead, rec_reads, rec_errs;
+static uint64_t rec_t0;
+static uint64_t rec_win_ss[2], rec_ph_ss[3][2], rec_ph_n[3];	/* 100 ms window, per phase: baseline/tone/after */
+static uint32_t rec_win_n, rec_win_pk[2], rec_ph_pk[3][2];
 static int pcm_step, pcm_mapped, pcm_copp_open, pcm_stream_open, pcm_running, pcm_failed;
 static uint32_t pcm_op, pcm_rsp, pcm_handle, pcm_copp, pcm_tone_at;
 static uint32_t pcm_sent, pcm_done, pcm_out, pcm_underflow, pcm_werr;
@@ -1148,12 +1192,45 @@ static uint64_t amp_t0, amp_next;
 static int amp_diag_n, amp_pcm_stop_test, pcm_stopped;
 static uint64_t amp_stop_t;
 
+/* sp7: --rec ASP TX routing (vi-loopback.md step 2): VMON/IMON on, TX1 = VMON slot 0, TX2 = IMON slot 1, 16 bit,
+ * TX1/2 enabled. on = 1 saves + writes + reads back, 0 restores (PWR_CTRL2 is left to cs_power_down: it zeroes it). */
+static const struct { const char *n; uint32_t reg, mask, val; } amp_txr[] = {
+	{ "pwr_ctrl2", 0x2018, 0x3000, 0x3000 }, { "asp_tx1_src", 0x4c20, 0xffffffffu, 0x18 },
+	{ "asp_tx2_src", 0x4c24, 0xffffffffu, 0x19 }, { "sp_tx_wl", 0x4830, 0xffffffffu, 16 },
+	{ "sp_frame_tx_slot", 0x4810, 0xffffffffu, 0x0100 }, { "sp_enables", 0x4800, 0x3, 0x3 },
+};
+static uint32_t amp_tx_saved[6];
+static int amp_tx_set;
+
+static void amp_tx(int on)
+{
+	if (!rec_on || (on ? amp_tx_set : !amp_tx_set))
+		return;
+	for (unsigned i = 0; i < 6; i++) {
+		unsigned k = on ? i : 5 - i;
+		uint32_t cur = 0, v, back = 0;
+		if (!on && amp_txr[k].reg == 0x2018)
+			continue;
+		if (cs_read(&amp, amp_txr[k].reg, &cur))
+			continue;
+		if (on)
+			amp_tx_saved[k] = cur;
+		v = on ? (cur & ~amp_txr[k].mask) | amp_txr[k].val : amp_tx_saved[k];
+		cs_write(&amp, amp_txr[k].reg, v);
+		cs_read(&amp, amp_txr[k].reg, &back);
+		printf("amp: rec %s %s %#x: %#x -> %#x, read back %#x%s\n", on ? "set" : "restore", amp_txr[k].n,
+		       amp_txr[k].reg, cur, v, back, back == v ? "" : " MISMATCH");
+	}
+	amp_tx_set = on;
+}
+
 static void amp_off(void)
 {
 	if (!amp.configured)
 		return;
 	printf("amp: power down%s\n", amp.up ? ", was on" : "");
 	cs_power_down(&amp);
+	amp_tx(0);	/* sp7: after GLOBAL_EN 0 */
 	if (amp_t0)
 		printf("amp: on for %llu ms\n", (unsigned long long)(now_ms() - amp_t0));
 	amp_ready = 0;
@@ -1181,6 +1258,7 @@ static void amp_start(void)
 	printf("amp: power up (%d dB)\n", amp_db);
 	uint32_t cd;
 	cs_read(&amp, 0x14000, &cd);	/* sp2: CLOCK_DETECT_1 before GLOBAL_EN (logged by cs_read) */
+	amp_tx(1);	/* sp7 */
 	int r = cs_power_up(&amp);
 	cs_read(&amp, 0x14000, &cd);	/* and after */
 	if (r) {
@@ -1224,7 +1302,7 @@ static void amp_poll(void)
 	} else if (now_ms() - amp_t0 >= AMP_MAX_MS) {
 		printf("amp: %d ms cap\n", AMP_MAX_MS);
 		amp_off();
-	} else if (pcm_sent + AMP_TAIL_PERIODS >= pcm_tone_periods) {
+	} else if (pcm_sent + AMP_TAIL_PERIODS >= rec_lead + pcm_tone_periods) {
 		printf("amp: tone ends in <= 0.5 s: off\n");
 		amp_off();
 	}
@@ -1258,7 +1336,7 @@ static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
-	int tone = pcm_sent < pcm_tone_periods;
+	int tone = pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec */
 	for (unsigned f = 0; f < PCM_FRAMES; f++)
 		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
 	pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));	/* pm_wr cleans to PoC: the DSP reads DRAM */
@@ -1277,17 +1355,165 @@ static void pcm_write(unsigned p)
 
 static void afe_next(int ok, uint32_t status);
 
+/* sp7: queue READ_V2 into rec buffer b (pages after the playback ones) */
+static void rec_read(unsigned b)
+{
+	uint64_t a = pcm_dsp + PCM_BUF + (uint64_t)REC_BYTES * b;
+	/* asm_data_cmd_read_v2: buf addr lsw/msw, mem_map_handle, buf_size, seq_id */
+	uint32_t r[5] = { (uint32_t)a, (uint32_t)(a >> 32), pcm_handle, REC_BYTES, b };
+	pcm_tx(APR_SVC_ASM, REC_STREAM_PORT, REC_RTOKEN | b, ASM_DATA_CMD_READ_V2, r, sizeof(r));
+	rec_reads++;
+}
+
+/* sp7: phase of what is being recorded now: 0 baseline (before the tone), 1 tone with the amp on, 2 the rest */
+static int rec_phase(void)
+{
+	if (pcm_done < rec_lead)
+		return 0;
+	return amp.up && pcm_done < rec_lead + pcm_tone_periods ? 1 : 2;
+}
+
+/* sp7: a READ_DONE_V2 (status, addr lsw/msw, handle, enc_framesize, offset, ts lsw/msw, flags, frames, seq): stats,
+ * then requeue while the tone plays */
+static void rec_back(unsigned b, const uint32_t *pl, uint32_t len)
+{
+	if (len < 6 || pl[0]) {
+		if (!rec_errs++)
+			printf("rec: READ_DONE buffer %u status %x (len %u)\n", b, len ? pl[0] : 0xffffffff, len);
+	} else {
+		uint32_t n = pl[4], off = pl[5];
+		if (off > REC_BYTES || n > REC_BYTES - off)
+			n = off > REC_BYTES ? 0 : REC_BYTES - off;
+		int16_t d[REC_BYTES / 2];
+		if (n && !pm_rd(pcm_pa + PCM_BUF + (uint64_t)REC_BYTES * b + off, d, (n + 3) & ~3u)) {
+			if (rec_hex && !rec_hexed++) {
+				hex32("rec: READ_DONE payload", (const uint8_t *)pl, len * 4);
+				hex32("rec: first data", (const uint8_t *)d, n < 64 ? n : 64);
+			}
+			int ph = rec_phase();
+			for (uint32_t i = 0; i + 1 < n / 2; i += 2)
+				for (int c = 0; c < 2; c++) {
+					int v = d[i + c], a = v < 0 ? -v : v;
+					rec_win_ss[c] += (uint64_t)(v * v);
+					rec_ph_ss[ph][c] += (uint64_t)(v * v);
+					if ((uint32_t)a > rec_win_pk[c])
+						rec_win_pk[c] = a;
+					if ((uint32_t)a > rec_ph_pk[ph][c])
+						rec_ph_pk[ph][c] = a;
+				}
+			rec_win_n += n / 4;
+			rec_ph_n[ph] += n / 4;
+			if (rec_win_n >= 4800) {	/* 100 ms */
+				printf("rec t=%.1f ch0 rms %d peak %u ch1 rms %d peak %u\n", (now_ms() - rec_t0) / 1000.0,
+				       (int)sqrt((double)rec_win_ss[0] / rec_win_n), rec_win_pk[0],
+				       (int)sqrt((double)rec_win_ss[1] / rec_win_n), rec_win_pk[1]);
+				rec_win_n = rec_win_pk[0] = rec_win_pk[1] = 0;
+				rec_win_ss[0] = rec_win_ss[1] = 0;
+			}
+		}
+	}
+	if (pcm_step == P_PLAY && rec_running)
+		rec_read(b);
+}
+
+static void rec_summary(void)
+{
+	static const char *nm[3] = { "baseline", "tone", "after" };
+	printf("rec: %u reads queued, %u errors\n", rec_reads, rec_errs);
+	for (int p = 0; p < 3; p++)
+		printf("rec: %s %llu frames: ch0 (VMON) rms %d peak %u, ch1 (IMON) rms %d peak %u\n", nm[p],
+		       (unsigned long long)rec_ph_n[p],
+		       rec_ph_n[p] ? (int)sqrt((double)rec_ph_ss[p][0] / rec_ph_n[p]) : 0, rec_ph_pk[p][0],
+		       rec_ph_n[p] ? (int)sqrt((double)rec_ph_ss[p][1] / rec_ph_n[p]) : 0, rec_ph_pk[p][1]);
+}
+
 /* Run step pcm_step; teardown steps with nothing to undo are skipped. P_DONE hands back to the AFE (stop). */
 static void pcm_run(void)
 {
-	if (pcm_step >= P_PAUSE)
+	if (pcm_step > P_PLAY)
 		amp_off();	/* sp1: amp down before any PCM/AFE teardown */
+	int rec_go = rec_on && !rec_failed;	/* sp7: R_* setup steps */
 	for (;; pcm_step++) {
 		switch (pcm_step) {
+		case R_AFE_CFG: {
+			if (!rec_go)
+				break;
+			uint8_t b[AFE_I2S_PL];
+			afe_i2s_pl(b, AFE_PORT_SEC_MI2S_TX, 2 /* SD1 */);
+			pcm_send(APR_SVC_AFE, AFE_PORT_SEC_MI2S_TX, AFE_PORT_CMD_SET_PARAM_V2, b, sizeof(b), 0);
+			return;
+		}
+		case R_AFE_START:
+		case R_AFE_STOP: {
+			if (pcm_step == R_AFE_START ? !rec_go : !rec_afe)
+				break;
+			uint16_t b[2] = { AFE_PORT_SEC_MI2S_TX, 0 };
+			pcm_send(APR_SVC_AFE, AFE_PORT_SEC_MI2S_TX, pcm_step == R_AFE_START ? AFE_PORT_CMD_DEVICE_START :
+				 AFE_PORT_CMD_DEVICE_STOP, b, sizeof(b), 0);
+			return;
+		}
+		case R_ADM_OPEN: {
+			if (!rec_go)
+				break;
+			/* as P_ADM_OPEN, mode 2 (live rec), endpoint the TX port */
+			struct { uint16_t flags, mode, ep1, ep2; uint32_t topo; uint16_t ch, bits; uint32_t rate; uint8_t map[8]; }
+			__attribute__((packed)) o = { 0, 2, AFE_PORT_SEC_MI2S_TX, 0xffff, ADM_TOPOLOGY_NONE, 2, 16, 48000, { 1, 2 } };
+			pcm_send(APR_SVC_ADM, AFE_PORT_SEC_MI2S_TX, ADM_CMD_DEVICE_OPEN_V5, &o, sizeof(o), ADM_CMDRSP_DEVICE_OPEN_V5);
+			return;
+		}
+		case R_OPEN_READ: {
+			if (!rec_go)
+				break;
+			/* asm_stream_cmd_open_read_v3: u32 mode flags, src endpoint (0 matrix), preproc topology, enc format,
+			 * u16 bits, reserved */
+			struct { uint32_t flags, src, topo, fmt; uint16_t bits, res; } __attribute__((packed)) r = {
+				0, 0, ASM_TOPOLOGY_NONE, ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2, 16, 0 };
+			pcm_send(APR_SVC_ASM, REC_STREAM_PORT, ASM_STREAM_CMD_OPEN_READ_V3, &r, sizeof(r), 0);
+			return;
+		}
+		case R_ENC: {
+			if (!rec_go)
+				break;
+			/* param id, size 28; frames per buf 0, blk size 20; u16 ch, bits, u32 rate, u16 signed, reserved, map[8] */
+			struct { uint32_t id, size, frames, blk; uint16_t ch, bits; uint32_t rate; uint16_t sign, res; uint8_t map[8]; }
+			__attribute__((packed)) e = { ASM_PARAM_ID_ENCDEC_ENC_CFG_BLK_V2, 28, 0, 20, 2, 16, 48000, 1, 0, { 1, 2 } };
+			pcm_send(APR_SVC_ASM, REC_STREAM_PORT, ASM_STREAM_CMD_SET_ENCDEC_PARAM, &e, sizeof(e), 0);
+			return;
+		}
+		case R_ROUTE: {
+			if (!rec_go)
+				break;
+			struct { uint32_t matrix, sessions; uint16_t session, copps, copp[2]; } __attribute__((packed)) r = {
+				1 /* audio tx */, 1, REC_SESSION, 1, { (uint16_t)rec_copp, 0 } };
+			pcm_send(APR_SVC_ADM, 0, ADM_CMD_MATRIX_MAP_ROUTINGS_V5, &r, sizeof(r), 0);
+			return;
+		}
+		case R_RUN: {
+			if (!rec_go)
+				break;
+			uint32_t r[3] = { 0, 0, 0 };
+			pcm_send(APR_SVC_ASM, REC_STREAM_PORT, ASM_SESSION_CMD_RUN_V2, r, sizeof(r), 0);
+			return;
+		}
+		case R_PAUSE:
+			if (!rec_running)
+				break;
+			pcm_send(APR_SVC_ASM, REC_STREAM_PORT, ASM_SESSION_CMD_PAUSE, NULL, 0, 0);
+			return;
+		case R_CLOSE:
+			if (!rec_open)
+				break;
+			pcm_send(APR_SVC_ASM, REC_STREAM_PORT, ASM_STREAM_CMD_CLOSE, NULL, 0, 0);
+			return;
+		case R_ADM_CLOSE:
+			if (!rec_copp_open)
+				break;
+			pcm_send(APR_SVC_ADM, (uint16_t)rec_copp, ADM_CMD_DEVICE_CLOSE_V5, NULL, 0, 0);
+			return;
 		case P_MAP: {
 			/* asm_cmd_shared_mem_map_regions: u16 pool, u16 regions, u32 property; region: addr lsw/msw, size */
 			struct { uint16_t pool, regions; uint32_t prop, lo, hi, size; } __attribute__((packed)) m = {
-				ASM_SHMEM_4K_POOL, 1, 0, (uint32_t)pcm_dsp, (uint32_t)(pcm_dsp >> 32), PCM_BUF };
+				ASM_SHMEM_4K_POOL, 1, 0, (uint32_t)pcm_dsp, (uint32_t)(pcm_dsp >> 32), pcm_buf_len };
 			pcm_send(APR_SVC_ASM, 0, ASM_CMD_SHARED_MEM_MAP_REGIONS, &m, sizeof(m), ASM_CMDRSP_SHARED_MEM_MAP_REGIONS);
 			return;
 		}
@@ -1334,6 +1560,12 @@ static void pcm_run(void)
 			pcm_t0 = pcm_t1 = now_ms();
 			for (unsigned p = 0; p < PCM_PERIODS; p++)
 				pcm_write(p);
+			if (rec_running) {	/* sp7 */
+				printf("rec: %u reads of %u B queued, tone after %u x 10 ms\n", REC_READS, REC_BYTES, rec_lead);
+				rec_t0 = now_ms();
+				for (unsigned b = 0; b < REC_READS; b++)
+					rec_read(b);
+			}
 			pcm_due = now_ms() + 1000;
 			return;
 		case P_PAUSE:
@@ -1362,6 +1594,8 @@ static void pcm_run(void)
 			printf("pcm: done: %s; %u periods written, %u done (%u errors) in %llu ms, %u underflows, handle %x copp %u\n",
 			       pcm_failed ? "FAILED" : "ok", pcm_sent, pcm_done, pcm_werr,
 			       (unsigned long long)(pcm_t1 - pcm_t0), pcm_underflow, pcm_handle, pcm_copp);
+			if (rec_on)
+				rec_summary();	/* sp7 */
 			smmu_faults("ADSP pcm", pcm_sid);	/* after */
 			afe_next(1, 0);	/* AFE_HOLD -> stop, clock off */
 			return;
@@ -1390,9 +1624,21 @@ static void pcm_next(int ok, uint32_t status)
 		pcm_copp_open = 0;
 	else if (s == P_UNMAP)
 		pcm_mapped = 0;
-	if (!ok && s < P_PLAY) {
+	else if (s == R_AFE_START || s == R_AFE_STOP)	/* sp7 */
+		rec_afe = s == R_AFE_START && ok;
+	else if (s == R_ADM_OPEN || s == R_ADM_CLOSE)
+		rec_copp_open = s == R_ADM_OPEN && ok;
+	else if (s == R_OPEN_READ || s == R_CLOSE)
+		rec_open = s == R_OPEN_READ && ok;
+	else if (s == R_RUN || s == R_PAUSE)
+		rec_running = s == R_RUN && ok;
+	if (!ok && ((s >= R_AFE_CFG && s <= R_ROUTE) || s == R_RUN)) {
+		printf("rec: op %x failed (status %x): tone without recording\n", pcm_op, status);	/* sp7: no abort */
+		rec_failed = 1;
+		pcm_step = s + 1;
+	} else if (!ok && s < P_PLAY) {
 		pcm_failed = 1;
-		pcm_step = P_PAUSE;
+		pcm_step = P_TEARDOWN;
 	} else
 		pcm_step = s + 1;
 	pcm_run();
@@ -1412,10 +1658,10 @@ static void pcm_back(unsigned p)
 		amp_start();	/* sp1: stream running, BCLK present */
 	if (pcm_stopped)
 		return;	/* sp6: --amp-pcm-stop-test */
-	if (pcm_sent < pcm_tone_periods + PCM_PERIODS)
+	if (pcm_sent < rec_lead * 2 + pcm_tone_periods + PCM_PERIODS)	/* sp7: + silence before and after */
 		pcm_write(p % PCM_PERIODS);
 	else if (!pcm_out) {
-		pcm_step = P_PAUSE;
+		pcm_step = P_TEARDOWN;
 		pcm_run();
 	}
 }
@@ -1438,6 +1684,15 @@ static int pcm_rx(const struct apr_hdr *h, const uint32_t *pl, uint32_t len)
 		pcm_back(h->token & 0xff);
 		return 1;
 	}
+	if (h->opcode == ASM_DATA_EVENT_READ_DONE_V2 && (h->token & REC_RTOKEN)) {	/* sp7 */
+		rec_back(h->token % REC_READS, pl, len);
+		return 1;
+	}
+	if (h->opcode == APR_BASIC_RSP && (h->token & REC_RTOKEN)) {
+		printf("rec: read %u refused (status %x)\n", h->token % REC_READS, len > 1 ? pl[1] : 0);
+		rec_errs++;
+		return 1;
+	}
 	if (h->opcode == ASM_SESSION_EVENT_RX_UNDERFLOW) {
 		if (!pcm_underflow++)
 			printf("pcm: underflow (first, after %u periods done)\n", pcm_done);
@@ -1453,8 +1708,9 @@ static int pcm_rx(const struct apr_hdr *h, const uint32_t *pl, uint32_t len)
 	}
 	if (pcm_rsp && h->opcode == pcm_rsp) {	/* ADM_CMDRSP_DEVICE_OPEN_V5: status, copp_id (low 16 bits) */
 		uint32_t st = len ? pl[0] : 0xffffffff;
-		pcm_copp = len > 1 ? pl[1] & 0xffff : 0;
-		printf("pcm: ADM open status %x copp %u\n", st, pcm_copp);
+		uint32_t *cp = pcm_step == R_ADM_OPEN ? &rec_copp : &pcm_copp;	/* sp7: the TX copp */
+		*cp = len > 1 ? pl[1] & 0xffff : 0;
+		printf("pcm: ADM open status %x copp %u\n", st, *cp);
 		pcm_next(st == 0, st);
 		return 1;
 	}
@@ -1482,7 +1738,7 @@ static void pcm_poll(void)
 	if (pcm_step == P_PLAY) {
 		printf("pcm: no WRITE_DONE in 1 s (%u written, %u done)\n", pcm_sent, pcm_done);
 		pcm_failed = 1;
-		pcm_step = P_PAUSE;
+		pcm_step = P_TEARDOWN;
 		pcm_run();
 	} else {
 		printf("pcm: op %x: no reply in 3 s\n", pcm_op);
@@ -1511,7 +1767,7 @@ static void apr_rx(const uint8_t *p, size_t n)
 		len = 64;
 	memcpy(pl, p + hl, len * 4);
 	uint32_t status = len ? pl[h.opcode == APR_BASIC_RSP && len > 1 ? 1 : 0] : 0;
-	if (h.opcode == ASM_DATA_EVENT_WRITE_DONE_V2 && !getenv("ADSP_APR_HEX")) {	/* ap6: 308 per run, counted */
+	if ((h.opcode == ASM_DATA_EVENT_WRITE_DONE_V2 || h.opcode == ASM_DATA_EVENT_READ_DONE_V2) && !getenv("ADSP_APR_HEX")) {	/* ap6: 308 per run, counted */
 		pcm_rx(&h, pl, len);
 		return;
 	}
@@ -1996,6 +2252,10 @@ int main(int argc, char **argv)
 			apr_on = afe_on = pcm_on = smmu = 1;
 		else if (!strcmp(argv[i], "--amp"))	/* sp1: left amp on for the --pcm tone; implies --pcm */
 			amp_on = apr_on = afe_on = pcm_on = smmu = 1;
+		else if (!strcmp(argv[i], "--rec"))	/* sp7: VMON/IMON loopback over SEC_MI2S_TX; needs --pcm --amp */
+			rec_on = 1;
+		else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
+			rec_hex = 1;
 		else if (!strcmp(argv[i], "--amp-pcm-stop-test"))	/* sp6: let the ADSP underflow with the amp on */
 			amp_pcm_stop_test = 1;
 		else if (!strcmp(argv[i], "--amp-check"))	/* sp1: configure + read back only, no GLOBAL_EN, then exit */
@@ -2038,6 +2298,12 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	fastrpc_sensors(sensors);
+	if (rec_on && (!pcm_on || !amp_on)) {	/* sp7 */
+		fprintf(stderr, "adspboot: --rec needs --pcm --amp\n");
+		return 2;
+	}
+	if (rec_on)
+		rec_lead = REC_LEAD_PERIODS;
 	if (amp_db > -20)
 		amp_db = -20;	/* sp1: ceiling (cs_config clamps too) */
 	atexit(lpi_restore);	/* sp2: runs after amp_off (atexit is LIFO) */
@@ -2079,7 +2345,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

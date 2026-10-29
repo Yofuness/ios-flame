@@ -18,6 +18,11 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   Apple's shaders), Google and Qualcomm images and firmware, partition dumps, device trees and logs from a phone
   (serials, IMEI, network names), Wi-Fi credentials (`/var/local/wlan.conf` lives on the phone only). Research notes
   and source excerpts go in `research/notes/` (`research/` is gitignored), never only in a session scratchpad.
+- **Reproducible on-device changes** (the user, 2026-10-30): every change made on the phone (files, plists, launchd
+  jobs, iOS settings changed by taps, config in /var/local) must be reproducible from git: an install script under
+  `tools/`, or written steps in `docs/setup.md` that a script will replace later. Log each on-device change in
+  `docs/device-changes.md` (dated, what/where/how, the script or setup step that reproduces it) in the same commit.
+  For an unfinished feature under work, a log line is enough; script it once the feature works.
 - **Destructive steps** (partition backups, userdata writes): confirm with the user first. `docs/recovery.md` gets
   back to stock Android.
 - **Docs layout:** `README.md` has the status table (one row per feature), `docs/README.md` indexes the docs,

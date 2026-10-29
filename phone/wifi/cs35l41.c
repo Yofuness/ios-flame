@@ -98,6 +98,12 @@ static int wr(struct cs_amp *a, uint32_t reg, uint32_t v)
 	return err;
 }
 
+/* sp7: --rec ASP TX routing writes from adspboot; logged, 0x40 only like every write */
+int cs_write(struct cs_amp *a, uint32_t reg, uint32_t v)
+{
+	return wr(a, reg, v);
+}
+
 /* sp1: what a register should read back as (fields merged over all writes to it) */
 static void expect(struct cs_amp *a, uint32_t reg, uint32_t mask, uint32_t val)
 {
