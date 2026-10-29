@@ -23,6 +23,11 @@
 ### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
 - Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
 
+### 2026-10-29 11:00 rotation: SpringBoard probe P (rot2, kernel95; SweetMetal2 e63cb6d)
+- New `P` command in /var/local/sweet-orient (SpringBoard, read-only): lines go to /var/local/mtl2.log (the per-boot live log did not show them).
+- Calculator in front. After `D 3 0` + `E 3`: activeInterfaceOrientation 3; the SBMainSwitcherWindow's _UISceneLayerHostContainerView becomes 812x375 (was 375x812) with an identity layer transform and sublayerTransform, and that window's interfaceOrientation stays 1. The wallpaper and root-scene host views stay 375x812 portrait. Webcam: keypad unchanged.
+- So SpringBoard sizes the app's host view for landscape but neither rotates the hosting window nor applies a 90 deg transform; Calculator does not relayout. `-[SBApplication sceneHandle]` does not exist on this iOS (scene settings not read yet; next: find the iOS 16 accessor, e.g. via SBSceneManager / FBSceneManager scenes by bundle id).
+
 ### 2026-10-29 10:45 rotation: Calculator does not relayout (rot0, rot1; kernel95)
 - Research (research/notes/rotation-ios16.md, not disassembly-confirmed): on iPhone the app rotates its own pixels (UIWindow landscape bounds + 90 deg layer transform); backboardd/CA do not rotate the display. Calculator turns into the scientific keypad in landscape: a layout change visible on the webcam.
 - rot0 (k95idle boot, Weather location alert on top): D 3 0 + E 3, E 4: 4x5 keypad stays. Confounded.
