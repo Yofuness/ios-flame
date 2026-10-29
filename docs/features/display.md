@@ -20,6 +20,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 21:40 ONE-STEP ROTATE WORKS: `R 3` / `R 1` (rot7-rot10, kernel98; SweetMetal2 50a5730, cbb2525)
+- rot7/rot8 (50a5730: front scenes first, then background): R still left Calculator portrait. rot9: plain `S 3` rotated it, `S 1` restored it, so the backboardd D step (and E) reset the app scene after the update.
+- cbb2525: `R N` = scene updates only (front first, then the rest) + 1 s re-apply to apps that come to the front; D only with `R N t`, E only with `R N e`.
+- rot10: `R 3` -> Calculator landscape, upright, scientific layout (rot10-b). Safari opened afterwards got the re-apply (logged) and drew landscape, but its content only fills the left ~45% (portrait width), right side black, while the toolbar spans the full width (rot10-c). `R 1` -> Safari portrait (an extra strip with up/down arrows at the bottom, rot10-d); Calculator portrait (rot10-e). No reset.
+- Open: Safari's half-drawn landscape (try R while Safari is already in front); touch mapping in landscape (`R N t`); SpringBoard's own UI (home screen) stays portrait.
+
 ### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
 - Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
 
