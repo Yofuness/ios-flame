@@ -76,7 +76,13 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
 - **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
   choice made) to the "Questions for you" list in `docs/plan.md`, so they can answer later. Don't wait.
 - **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list (`docs/backlog.md`) and move on.
-- **Dev-speed optimizations:** anything slowing development down becomes priority. Give it at most about an hour;
+- **Time limit:** if a priority item shows no visible progress in about half a day, write down where it stands in
+  its feature Log, park it in `docs/backlog.md` and take the next item.
+- **Hard items** (days, uncertain): do their read-only research in the background while phone tests run; keep
+  quick wins at the top of the list.
+- **Find the user-visible breakage too:** the backlog isn't only hardware. Now and then (after big changes, or when
+  the list runs low) survey the apps and core functions and add what fails.
+- **Dev-speed optimizations:** anything slowing development down goes to the top of the priority list. Give it at most about an hour;
   past that it's likely not worth it: note it and move on.
 - **Risky steps** (the user, 2026-10-29): where hardware damage is possible (e.g. PMIC charger writes), proceed with
   caution: research how the system works first, then lots of baby steps. Steps that only risk a reset (hypervisor
