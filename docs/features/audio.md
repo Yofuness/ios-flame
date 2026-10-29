@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 05:15 apps SMMU: all audio-DSP streams mapped (U7, the user's go, 2026-10-29)
+- New phone/wifi/smmu.c: radio.c's WLAN SMMU code (in use every boot) taken out and given a SID parameter; `adspboot smmu [--dry] [--sid SID MASK]`, and `adspboot boot --smmu` does it before the PAS boot. Runtime only: gone after a reboot.
+- Dry run (kernel94, uptime ~27100 s): sCR0 002d0406, 79 SMRs, 61 banks; 0x1b20/0xf would take SMR7 + CB6; no existing SMR overlaps.
+- The masked SMR 0x800f1b20 reads back 0 (the write is dropped; S2CR7 and CB6 did take). A single SID sticks: 0x1b23/0 -> SMR7 80001b23 -> CB7 ok. So one SMR per SID: 0x1b21 (audio-ion) SMR8/CB8, 0x1b23-0x1b28 (FastRPC cbs) SMR7, 9-13 / CB7, 9-13, 0x1b2f (usb-audio) SMR14/CB14, all read back as written (S2CR type 0, SCTLR e0 = M off, CBAR 1f000).
+- Phone fine after: ping, /var/local reads, Wi-Fi up. CB6 is left set up but unused (no SMR points at it).
+- Next: the FastRPC reverse-RPC listener (sensor PD files), then retry adspboot past the 10 s sensor_process fatal.
+
 ### 2026-10-28 21:00 FastRPC listener: protocol spec done; blocked on the apps SMMU (needs the user's decision)
 - Spec (from the sunfish downstream adsprpc.c, quic/fastrpc and recon/live.dts:4246-4345; source excerpts kept in the session scratchpad, not in git): 40-byte smq_msg over glink `fastrpcglink-apps-dsp`, a contiguous metadata buffer (remote_arg64 + page lists), sensorspd = static PD 2, attach = handle 1 method 0 (in: tgid); then remotectl_open("adsp_default_listener"), adsp_listener_init2 (handle 3 mid 3), loop next2 (mid 4) answering apps_std fopen/fread/fclose/opendir/readdir/stat for /vendor/etc/sensors (+ a scratch persist registry dir). Effort ~3-5 days.
 - Blocker (read-only pmem dump of the apps SMMU at 0x15000000): sCR0 0x002d0406 (USFCFG = 1: unmatched streams fault), IDR0 0x4c017e4f (79 SMRs), valid SMRs 0-6 and 117-127, none matching the ADSP FastRPC SIDs 0x1b23-0x1b28. So any AP buffer handed to the DSP would fault: a stream entry + pass-through context bank must be added first. That SMMU also carries UFS/USB DMA, so this change is held for the user's OK (plan U7); not started.

@@ -7,6 +7,8 @@
  *   adspboot [boot]   votes, load adsp.mdt + .bNN, PAS init / mem setup / auth-and-reset, SMP2P ready, glink
  *   adspboot status   read-only: SMP2P state, glink items, crash reason
  *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
+ *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
+ *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
  * Facts (recon/live.dts): qcom,lpass@62400000 pas-id 1, smem-id 423 (crash reason), proxy rails lcx.lvl /
  * lmx.lvl (>= 385); pil_adsp_mem 0x96b00000+0x2200000; smp2p-adsp out 443 / in 429, IPC bit 26; glink_adsp
@@ -22,6 +24,7 @@
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
+#include "smmu.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -37,6 +40,19 @@
 #define IPC_ADSP_SMP2P	26
 #define SCM_PIL(cmd)	(0x42000000ull | (2u << 8) | (cmd))
 #define MDT_RELOC	(1u << 27)
+/* recon/live.dts: audio-ion 0x1b21, fastrpc cbs 0x1b23-0x1b28, usb-audio 0x1b2f. One SMR each: an SMR with a mask
+ * (0x1b20/0xf) reads back 0 (the write is dropped), single SIDs stick. */
+static const uint16_t adsp_sids[] = { 0x1b21, 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x1b27, 0x1b28, 0x1b2f };
+
+static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
+{
+	if (one)
+		return smmu_identity("ADSP", sid, mask);
+	int bad = 0;
+	for (unsigned i = 0; i < sizeof(adsp_sids) / sizeof(adsp_sids[0]); i++)
+		bad |= smmu_identity("ADSP", adsp_sids[i], 0);
+	return bad;
+}
 
 static void kick(unsigned bit)
 {
@@ -733,13 +749,24 @@ int main(int argc, char **argv)
 	if (smem_init())
 		return 1;
 	printf("adsp: smem ok\n");
-	int watch = 20, early = 1, i;
+	int watch = 20, early = 1, smmu = 0, i;
+	uint32_t sid = 0, mask = 0;
+	int one = 0;
 	const char *cmd = "boot";
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
 			watch = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--no-early"))
 			early = 0;
+		else if (!strcmp(argv[i], "--smmu"))
+			smmu = 1;
+		else if (!strcmp(argv[i], "--dry"))
+			smmu_dry = 1;
+		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
+			sid = (uint32_t)strtoul(argv[++i], NULL, 0);
+			mask = (uint32_t)strtoul(argv[++i], NULL, 0);
+			one = 1;
+		}
 		else
 			cmd = argv[i];
 	}
@@ -749,10 +776,14 @@ int main(int argc, char **argv)
 		pas_shutdown();
 		return 0;
 	}
+	if (!strcmp(cmd, "smmu"))
+		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown] [--watch S] [--no-early]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--dry] [--sid SID MASK]\n");
 		return 2;
 	}
+	if (smmu && adsp_smmu(one, sid, mask))
+		return 1;
 
 	uint32_t v;
 	if (smp2p_in(&v) == 0 && (v & 2) && !(v & 1)) {

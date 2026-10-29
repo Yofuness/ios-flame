@@ -17,6 +17,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 05:08 VMware's bridge pinned to wlan0 (U6, the user's go)
+- /etc/vmware/networking: `add_bridge_mapping wlan0 0` appended (backup /etc/vmware/networking.bak-2026-10-29), `systemctl restart vmware-networks`. /proc/vmnet/bridge11 now reads `dev wlan0`: vmnet0 no longer follows new adapters such as the phone's enp0s20f0u1. vmnet-bridge still runs as `-n 0` (it reads the mapping itself).
+- Check pending: boot-to-SSH times on the next boots (were 24-41 s; expect ~25 s every time).
+
 ### 2026-10-28 21:30 the packet-loss window lines up with VMware's bridge (PC side)
 - bta (slow, 36 s): the PC sends unicast ARP probes at kernel 29.6/30.6/31.6 s; the phone logs each `SWEET ARP rx op 1` and its `tx op 2` reply, and the ue0 stats show TX not busy (busy 0, tx frames 150 -> 357). The PC still falls back to a broadcast probe at 33.2 s: the replies leave the phone but don't reach the PC's stack.
 - PC kernel log: VMware's vmnet (`userif-3: sent link down/up event`) fires at every link change; in each slow boot one comes 15-32 s after the phone's USB attach (ns1a +27, ns1b +32, sr1b +20 (Wi-Fi roam), bta +15 (Wi-Fi roam)). `vmnet-bridge -s 6 -n 0` runs without a fixed interface (automatic bridging).
