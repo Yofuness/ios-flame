@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 23:20 Fake taps work: `T X Y` / `W ...` (tap1, kernel98; SweetMetal2 touch commands)
+- backboardd dispatches IOHID digitizer events (hand + finger child) through an admin IOHIDEventSystemClient, sender = the touchscreen service (0x100000126).
+- tap1: Calculator `T 0.38 0.75` -> "2", `T 0.62 0.75` -> "23"; Settings `W 0.5 0.8 0.5 0.3 300` scrolled the list to Battery..FaceTime. Landscape tap after `R 3` at 0.5,0.5 hit a gap (inconclusive). Location Services stayed on after a reboot (Maps: no alert). No reset; 4438 mV.
+- Unblocks B26 (tap-only survey paths) and U6 (landscape touch) without a finger.
+
 ### 2026-10-29 22:40 B32 Location Services on via `L 1` (loc1, loc2; kernel98)
 - loc1: plist edit `LocationServicesEnabledIn7.0`=true in /var/root/Library/Preferences/com.apple.locationd.plist (backup .bak-b32) + locationd restart (kill; no launchctl on the phone): no effect, Maps still showed "Turn On Location Services".
 - New SweetMetal2 command `L 0|1` (SpringBoard calls +[CLLocationManager setLocationServicesEnabled:]). loc2: `orient: L: class 0x2174c8528 set 1, enabled 0 -> 1`; Maps opened to "What's New in Maps" with no Location Services alert (loc2-a). The root plist still has no Enabled key (the state lives elsewhere).

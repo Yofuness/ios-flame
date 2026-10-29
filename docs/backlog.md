@@ -6,7 +6,7 @@ history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
 - Camera black (no camera stack, B17).
-- B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
+- B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center; now doable with `T`/`W` (methods.md). [phone]
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
 - B8 PhotosFileProvider crashes: 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
@@ -22,7 +22,7 @@ history in the feature Logs.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B31 oslog (/var/local/bin/oslog) crashes with SIGSEGV (far 0x10/0x20) on some captures; low priority tool bug.
-- B32 Location Services: switched on with `echo "L 1" > /var/local/sweet-orient` (2026-10-29); check it survives a reboot. No position source yet (no GPS driver; Wi-Fi location needs Apple servers).
+- B32 Location Services: switched on with `echo "L 1" > /var/local/sweet-orient` (2026-10-29); survives a reboot (tap1). No position source yet (no GPS driver; Wi-Fi location needs Apple servers).
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)

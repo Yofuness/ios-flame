@@ -4,6 +4,12 @@ How the work on the Pixel 4a (sunfish) is done: booting, building, measuring, pr
 Results live in the feature logs (`docs/features/`); the plan is `docs/plan.md`. Most of this file came from the old
 `docs/sunfish/display-perf.md` ("Methods and tools", "Per-frame timeline") and `docs/sunfish/status.md` ("How to boot").
 
+## Phone control file (/var/local/sweet-orient, SweetMetal2, read every 1 s)
+`echo "CMD" > /var/local/sweet-orient` over SSH; results in /var/local/mtl2.log.
+- `T X Y` taps, `W X1 Y1 X2 Y2 MS` swipes (X, Y 0..1 in portrait, 0,0 top-left; backboardd injects HID digitizer events).
+- `R 3` / `R 1` rotates apps to landscape / portrait (`t` adds touch mapping, `e` SpringBoard's E step).
+- `L 1` / `L 0` switches Location Services; `P` probes SpringBoard scenes.
+
 ## Booting (from fastboot)
 ```
 cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet sweetpresentwait=1

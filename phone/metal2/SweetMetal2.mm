@@ -12,6 +12,7 @@
 #import <objc/runtime.h>
 #include <IOKit/IOKitLib.h>
 #include <dlfcn.h>
+#include <mach/mach_time.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sys/stat.h>
@@ -385,7 +386,8 @@ __attribute__((constructor)) static void sm2_torch_init(void)
  * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
  * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock; "D N [S]" = method D, in backboardd:
  * BKOrientationManager updateDeviceOrientation:N changeSource:S; "P" = read-only scene/host probe in SpringBoard;
- * "S N [f]" = write the front app scenes' settings orientation (f: also swap the frame); "R N" = D N 0 + E N + S N, kept for new apps. Delete the file to turn it off.
+ * "S N [f]" = write the front app scenes' settings orientation (f: also swap the frame); "R N" = D N 0 + E N + S N, kept for new apps;
+ * "T X Y" = tap, "W X1 Y1 X2 Y2 MS" = swipe (backboardd, X/Y normalized 0..1 portrait). Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -933,6 +935,127 @@ static void sm2_orient_r_apply(long n, bool reapply)
 		sm2_log("orient: R %ld: no front scene", n);
 }
 
+/*
+ * Synthetic touch (dev speed: tests tap without a finger; backboardd only, delete /var/local/sweet-orient to turn
+ * off): "T X Y" taps, "W X1 Y1 X2 Y2 MS" swipes; X, Y normalized 0..1 in portrait. IOKit HID private API via dlsym.
+ */
+typedef void *sm2_hid_ev;
+static struct {
+	void *client;
+	uint64_t sender;
+	sm2_hid_ev (*hand)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, double, double,
+	    double, double, double, Boolean, Boolean, uint32_t);
+	sm2_hid_ev (*finger)(CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t, double, double, double, double,
+	    double, Boolean, Boolean, uint32_t);
+	void (*append)(sm2_hid_ev, sm2_hid_ev, uint32_t);
+	void (*setint)(sm2_hid_ev, uint32_t, long);
+	void (*setsender)(sm2_hid_ev, uint64_t);
+	void (*dispatch)(void *, sm2_hid_ev);
+} sm2_hid;
+
+static bool sm2_touch_init(void)
+{
+	if (sm2_hid.client)
+		return true;
+	void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+	if (!h) {
+		sm2_log("touch: IOKit: %s", dlerror());
+		return false;
+	}
+	void *(*create)(CFAllocatorRef, int, void *) = (void *(*)(CFAllocatorRef, int, void *))dlsym(h,
+	    "IOHIDEventSystemClientCreateWithType");
+	CFArrayRef (*services)(void *) = (CFArrayRef (*)(void *))dlsym(h, "IOHIDEventSystemClientCopyServices");
+	CFTypeRef (*prop)(void *, CFStringRef) = (CFTypeRef (*)(void *, CFStringRef))dlsym(h, "IOHIDServiceClientCopyProperty");
+	CFTypeRef (*regid)(void *) = (CFTypeRef (*)(void *))dlsym(h, "IOHIDServiceClientGetRegistryID");
+	*(void **)&sm2_hid.hand = dlsym(h, "IOHIDEventCreateDigitizerEvent");
+	*(void **)&sm2_hid.finger = dlsym(h, "IOHIDEventCreateDigitizerFingerEvent");
+	*(void **)&sm2_hid.append = dlsym(h, "IOHIDEventAppendEvent");
+	*(void **)&sm2_hid.setint = dlsym(h, "IOHIDEventSetIntegerValue");
+	*(void **)&sm2_hid.setsender = dlsym(h, "IOHIDEventSetSenderID");
+	*(void **)&sm2_hid.dispatch = dlsym(h, "IOHIDEventSystemClientDispatchEvent");
+	if (!create || !sm2_hid.hand || !sm2_hid.finger || !sm2_hid.append || !sm2_hid.setint || !sm2_hid.setsender ||
+	    !sm2_hid.dispatch) {
+		sm2_log("touch: missing symbol (create %p hand %p finger %p dispatch %p)", create, sm2_hid.hand,
+		    sm2_hid.finger, sm2_hid.dispatch);
+		return false;
+	}
+	void *client = create(kCFAllocatorDefault, 1 /* admin */, NULL);
+	if (!client) {
+		sm2_log("touch: client create failed");
+		return false;
+	}
+	/* sender: the real touchscreen service (PrimaryUsagePage 0x0D digitizer), else a fixed constant */
+	sm2_hid.sender = 0x000000010000027FULL;
+	const char *src = "fixed";
+	CFArrayRef svcs = services ? services(client) : NULL;
+	for (CFIndex i = 0; svcs && prop && regid && i < CFArrayGetCount(svcs); i++) {
+		void *s = (void *)CFArrayGetValueAtIndex(svcs, i);
+		CFTypeRef page = prop(s, CFSTR("PrimaryUsagePage"));
+		int pg = 0;
+		if (page && CFGetTypeID(page) == CFNumberGetTypeID())
+			CFNumberGetValue((CFNumberRef)page, kCFNumberIntType, &pg);
+		if (page)
+			CFRelease(page);
+		CFTypeRef id = pg == 0x0D ? regid(s) : NULL;
+		if (id && CFGetTypeID(id) == CFNumberGetTypeID()) {
+			CFNumberGetValue((CFNumberRef)id, kCFNumberSInt64Type, &sm2_hid.sender);
+			src = "touchscreen service";
+			break;
+		}
+	}
+	if (svcs)
+		CFRelease(svcs);
+	sm2_log("touch: client %p, sender 0x%llx (%s)", client, sm2_hid.sender, src);
+	sm2_hid.client = client;
+	return true;
+}
+
+/* phase 0 down, 1 move, 2 up */
+static void sm2_touch_send(double x, double y, int phase)
+{
+	uint64_t ts = mach_absolute_time();
+	uint32_t mask = phase == 1 ? 0x4 : 0x1 | 0x2 | 0x4;	/* range|touch|position; position on move */
+	Boolean on = phase != 2;
+	sm2_hid_ev parent = sm2_hid.hand(kCFAllocatorDefault, ts, 3 /* hand */, 0, 0, mask, 0, x, y, 0, 0, 0, on, on, 0);
+	sm2_hid_ev child = sm2_hid.finger(kCFAllocatorDefault, ts, 1, 2, mask, x, y, 0, 0, 0, on, on, 0);
+	if (!parent || !child) {
+		sm2_log("touch: event create failed (%p %p)", parent, child);
+		if (parent)
+			CFRelease(parent);
+		if (child)
+			CFRelease(child);
+		return;
+	}
+	sm2_hid.append(parent, child, 0);
+	sm2_hid.setint(parent, 0xB0019 /* DigitizerIsDisplayIntegrated */, 1);
+	sm2_hid.setsender(parent, sm2_hid.sender);
+	sm2_hid.dispatch(sm2_hid.client, parent);
+	CFRelease(child);
+	CFRelease(parent);
+}
+
+/* steps 0 = tap at (x1, y1) */
+static void sm2_touch(double x1, double y1, double x2, double y2, long ms, int steps)
+{
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+		if (!sm2_touch_init())
+			return;
+		sm2_touch_send(x1, y1, 0);
+		if (steps == 0) {
+			usleep(80000);
+			sm2_touch_send(x1, y1, 2);
+			sm2_log("touch: tap %.3f %.3f dispatched", x1, y1);
+			return;
+		}
+		for (int i = 1; i <= steps; i++) {
+			usleep((useconds_t)(ms * 1000 / steps));
+			sm2_touch_send(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps, 1);
+		}
+		sm2_touch_send(x2, y2, 2);
+		sm2_log("touch: swipe %.3f %.3f -> %.3f %.3f in %ld ms dispatched", x1, y1, x2, y2, ms);
+	});
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
@@ -966,7 +1089,7 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 		    st.st_mtimespec.tv_nsec == last.tv_nsec))
 			return;
 		last = st.st_mtimespec;
-		char buf[16] = {0};
+		char buf[64] = {0};
 		int fd = open("/var/local/sweet-orient", O_RDONLY);
 		if (fd < 0 || read(fd, buf, sizeof(buf) - 1) < 0)
 			buf[0] = 0;
@@ -981,6 +1104,17 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 					sm2_log("orient: P exception %s", [[ex description] UTF8String]);
 				}
 			}
+			return;
+		}
+		if (buf[0] == 'T' || buf[0] == 'W') {	/* dev speed: "T X Y" tap, "W X1 Y1 X2 Y2 MS" swipe (backboardd) */
+			double v[5] = {0};
+			int k = sscanf(buf + 1, "%lf %lf %lf %lf %lf", &v[0], &v[1], &v[2], &v[3], &v[4]);
+			if (bbd && buf[0] == 'T' && k >= 2)
+				sm2_touch(v[0], v[1], v[0], v[1], 0, 0);
+			else if (bbd && buf[0] == 'W' && k >= 5)
+				sm2_touch(v[0], v[1], v[2], v[3], (long)v[4], 10);
+			else if (bbd)
+				sm2_log("touch: bad command '%.20s'", buf);
 			return;
 		}
 		if (buf[0] == 'L') {	/* B32 "L 0|1": Location Services off/on as Settings does it (plist edit had no effect) */
