@@ -112,7 +112,7 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 #define T_MAIR0		0x00000044u	/* attr 0: normal non-cacheable */
 #define T_PAGE		((1ull << 10) | (1ull << 6) | 3)	/* AF | AP 01 (EL0/EL1 RW) | page */
 /*
- * audio step 7: SMMU_REF=1 in the environment gives the translating bank exactly the SM7150 reference's values
+ * audio step 7: the translating bank uses exactly the SM7150 reference's values by default since au9 (SMMU_OLD=1 = our old ones)
  * (sound_sm7150.c space_on): walks inner/outer write-back, inner shareable (pm_wr cleans the tables to PoC),
  * TRE|AFE|ASIDPNE in SCTLR, 16-bit ASIDs, BPSHCFG 3 in CBAR, and its leaf (SH 2, nG). Same table layout.
  */
@@ -188,7 +188,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 		       (T_PAGE >> 10) & 1 ? "set" : "MISSING");
 		return 0;
 	}
-	int ref = getenv("SMMU_REF") != NULL;	/* audio step 7 */
+	int ref = getenv("SMMU_OLD") == NULL;	/* audio step 7: reference values are the default since au9 (attach -> 0); SMMU_OLD=1 = our old values */
 	int t39 = ref || !getenv("SMMU_T0SZ32");	/* audio step 6 */
 	uint32_t tcr = ref ? R_TCR : t39 ? T_TCR39 : T_TCR, sctlr = ref ? R_SCTLR : T_SCTLR;
 	uint32_t tcr2 = ref ? R_TCR2 : T_TCR2, mair0 = ref ? R_MAIR0 : T_MAIR0, cbar = ref ? R_CBAR : CB_CBAR;
