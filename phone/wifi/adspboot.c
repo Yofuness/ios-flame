@@ -525,7 +525,7 @@ static struct chan *by_rcid(uint16_t rcid)
 static void hex32(const char *tag, const uint8_t *p, size_t n)
 {
 	printf("adsp: %s %zu bytes:", tag, n);
-	for (size_t i = 0; i < n && i < 32; i++)
+	for (size_t i = 0; i < n && i < 64; i++)
 		printf(" %02x", p[i]);
 	printf("\n");
 }
@@ -954,6 +954,8 @@ static void apr_rx(const uint8_t *p, size_t n)
 		return;
 	}
 	memcpy(&h, p, sizeof(h));
+	if (getenv("ADSP_APR_HEX"))	/* af2: GET_STATE replies were 36 B with an odd first word: show the raw packet */
+		hex32("apr: raw", p, n);
 	len = (uint32_t)(n - sizeof(h)) / 4;
 	if (len > 64)
 		len = 64;
