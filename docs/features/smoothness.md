@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 01:40 E3c FLIP MODE WORKS (zc3, zc4; kernel103 = 102 + 0224)
+- zc3: with sweetfb_zerocopy=1 and mode 0, opening Calculator froze the screen on stripes (backboardd renders into slot0 = the old fb; "5s: 72 swaps, avg copy 16041 us"); `sctl kern.sweet_zc_scan=0` (forced redraw) recovered it. Expected from the slot0 overlap: mode 0 must not be used once slots are owned.
+- zc4: slots at 33.9/34.1 s (slot1 id 2, slot0 id 3); `kern.sweet_zc_scan=2` right after -> lock screen, home, Calculator, Settings all normal; 5 taps -> "22,222" live; skipped 0, waits_to 0 throughout. Rates: idle 0-0.2 flips/s, taps ~22/s, Settings scroll load ~27 flips/s (641 in 24 s). One mid-scroll frame showed tearing/ghosting (e2; webcam blur vs slot mixing unknown). `=0` afterwards: clean (redraw worked). No reset, 4439 mV.
+- Next: A/B with tools/sunfish-fpsbench.sh (kernel98 vs kernel103 mode 2, same load); enter flip mode automatically when both slots are owned (no mode-0 window); check the tearing (SwapWait/flush latch timing).
+
 ### 2026-10-30 01:15 xnu 0224 zero-copy E3c built (kernel103 = 102 + 0224; untested)
 - Two slots (slot1 0x9cb00000 first, slot0 0x9c000000 over the old fb) for backboardd's two 1125x2436 surfaces. `kern.sweet_zc_scan=2` = flip mode (EBUSY unless both slots owned): swap() decodes the SwapEnd record (mask rec+0x104, id rec+0x54+4*layer), writes VIG0 SRC0 + CTL0 flush and skips present; frames without a slot are dropped (logged). SwapWait polls the flush bits (1 ms, cap 33 ms). `=0` reverts and forces a redraw. `kern.sweet_zc_stats` string.
 - Open risks: with presents stopped, swap-complete/vsync pacing may throttle CA; leaving flip mode may show a wrong frame (slot0 = fb).
