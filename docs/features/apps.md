@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications; 12 of 18 surveyed apps open fine (Maps since 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
+**State:** ✅ 32 staged apps installed in /Applications; 14 of 18 surveyed apps open fine (Maps, Notes, Wallet confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -47,6 +47,12 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 09:50 B24: black apps re-checked on a fresh boot (b24d, kernel94; ssh up 17 s, 4456 mV)
+- Notes: works ("Welcome to Notes", drawn correctly; `MTL2[MobileNotes]: not listed` = CPU rendering is fine). Wallet: works (empty-state screen). Their black screens in the survey came from the session state, not the apps.
+- Photos: SIGABRT at launch (74.621, reason none) right after `exec fileproviderd`; assetsd is disabled (crash loop, 2026-10-27), likely the cause.
+- Camera: black, alive, no crash (no camera stack, B17). oslog itself crashed (sig 11) during that capture.
+- openapp fails with FBSOpenApplicationServiceErrorDomain Code=5 after an app is kill -9'd or while Maps' Location alert is up; a reboot clears it.
 
 ### 2026-10-29 09:40 B24: Maps opens (b24a-c, kernel94; bridge 2250f8f, e1ab0a8, 91b7ee2)
 - b24a (Maps listed in mtl2-clients): device granted, then SIGABRT 0.1 s after the first draw right after `MISSING NBRenderEncoder -setDepthClipMode:`. No side effects (lock clock, Safari fine, 0 UIWDT/hangs).
