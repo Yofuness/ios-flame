@@ -38,6 +38,7 @@
 #include "smmu.h"
 #include "fastrpc.h"
 #include "pdmapper.h"
+#include "qmi.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -577,6 +578,42 @@ int qrtr_new_server(uint32_t service, uint32_t version, uint32_t instance, uint3
 	return qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, ipcrtr_peer, QRTR_PORT_CTRL, k, sizeof(k));
 }
 
+/*
+ * au13: `--stub-svc SVC[:VER[:INST]]` (repeatable, none by default = off): after the ADSP's HELLO, announce SVC at
+ * 1:0x20+i and answer every QMI request to it with a bare success result (TLV 2 = {0,0}). Tests whether sar.cc's
+ * 10 s fatal waits for a service the AP/modem would normally publish.
+ */
+#define MAX_STUB 8
+static struct { uint32_t svc, ver, inst; } stub[MAX_STUB];
+static int nstub;
+
+static void stub_rx(const uint32_t *h, const uint8_t *body, size_t blen)
+{
+	int i = (int)h[7] - 0x20;
+	struct qmi_msg m;
+	if (h[4]) {
+		uint32_t k[5] = { QRTR_TYPE_RESUME_TX, QRTR_NODE_AP, h[7], 0, 0 };
+		qrtr_send(QRTR_TYPE_RESUME_TX, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
+	}
+	if (qmi_parse(body, (uint32_t)blen, &m)) {
+		hex32("stub svc: unparsable", body, blen);
+		return;
+	}
+	printf("adsp: stub svc %u: %s id 0x%x txn %u len %u from %u:%x\n", stub[i].svc,
+	       m.type == QMI_REQUEST ? "req" : m.type == QMI_INDICATION ? "ind" : "resp", m.id, m.txn, m.len, h[2], h[3]);
+	qmi_dump(&m);
+	if (m.type != QMI_REQUEST)
+		return;
+	struct qmi_buf *q = malloc(sizeof(*q));
+	if (!q)
+		return;
+	qmi_start(q, QMI_RESPONSE, m.txn, m.id);
+	qmi_tlv_result(q, 0, 0);
+	size_t n = qmi_finish(q);
+	qrtr_send(QRTR_TYPE_DATA, h[7], h[2], h[3], q->b, (uint32_t)n);
+	free(q);
+}
+
 /* QRTR v1 control packet from us (node 1, ctrl port) to dst. */
 static void qrtr_ctrl(struct chan *c, uint32_t type, uint32_t dnode, uint32_t dport)
 {
@@ -605,6 +642,10 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 			printf(" svc %u inst %u node %u port %x", k[1], k[2], k[3], k[4]);
 		else if (ty == 6 || ty == 7)
 			printf(" client %u:%x", k[1], k[2]);
+		else if (ty == 3)
+			printf(" node %u", k[1]);
+		else
+			printf(" raw %x %x %x %x %x", k[0], k[1], k[2], k[3], k[4]);
 	}
 	printf("\n");
 	if (h[0] != 1)
@@ -615,6 +656,8 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 		ipcrtr_peer = h[2];
 		if (pdmap)
 			qrtr_new_server(PDMAPPER_SERVICE, 1, 1, PDMAPPER_PORT);
+		for (int i = 0; i < nstub; i++)	/* au13 */
+			qrtr_new_server(stub[i].svc, stub[i].ver, stub[i].inst, 0x20 + i);
 	} else if (ty == 10) {
 		uint32_t svc = 0;
 		if (blen >= 8)
@@ -624,6 +667,13 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 			printf("adsp: pd-mapper: lookup for 64 answered with 1:%x\n", PDMAPPER_PORT);
 			qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
 		}
+		for (int i = 0; i < nstub; i++)	/* au13 */
+			if (svc == stub[i].svc) {
+				uint32_t k[5] = { QRTR_TYPE_NEW_SERVER, svc, stub[i].ver | stub[i].inst << 8, QRTR_NODE_AP,
+						  0x20u + i };
+				printf("adsp: stub svc %u: lookup answered with 1:%x\n", svc, 0x20 + i);
+				qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
+			}
 		qrtr_ctrl(c, 4, h[2], h[3]);	/* all-zero NEW_SERVER = end of lookup */
 	} else if (ty == 1 && pdmap && h[7] == PDMAPPER_PORT) {
 		struct qrtr_hdr qh = { h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7] };
@@ -632,7 +682,9 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 			qrtr_send(QRTR_TYPE_RESUME_TX, QRTR_PORT_CTRL, h[2], h[3], k, sizeof(k));
 		}
 		pdmapper_handle(&qh, body, (uint32_t)blen);
-	} else if (ty == 1)
+	} else if (ty == 1 && h[7] >= 0x20 && h[7] < 0x20u + nstub)
+		stub_rx(h, body, blen);
+	else if (ty == 1)
 		hex32("qrtr data to unserved port, dropped:", body, blen);
 }
 
@@ -901,6 +953,13 @@ int main(int argc, char **argv)
 			fastrpc_root(root = 1);
 		else if (!strcmp(argv[i], "--sensors"))
 			sensors = 1;
+		else if (!strcmp(argv[i], "--stub-svc") && i + 1 < argc && nstub < MAX_STUB) {
+			char *e;
+			stub[nstub].svc = (uint32_t)strtoul(argv[++i], &e, 0);
+			stub[nstub].ver = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 1;
+			stub[nstub].inst = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 0;
+			nstub++;
+		}
 		else if (!strcmp(argv[i], "--dry"))
 			smmu_dry = 1;
 		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
