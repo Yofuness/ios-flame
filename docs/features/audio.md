@@ -34,6 +34,9 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 13:25 stub modem SAR service: no effect (au13; adspboot ef1590b)
+- `--stub-svc 17` announced (NEW_SERVER svc 17 at 1:20); the ADSP never sent it anything; no NEW_LOOKUP/DEL_CLIENT/BYE at all. Same fatal at 10127 ms. Missing remote service ruled out (as the 2026-10-28 18:45 analysis said: findSuidSync waits for sensor SUIDs). Likely: no physical sensor driver registers (power rails / interrupts / buses for the SSC sensors). Mi 9T firmware (non-Google) has no SarClient. Next: which sensor SarClient needs and what powers it (read-only).
+
 ### 2026-10-29 13:10 the 10 s fatal = SarClient in the static sensors image (firmware strings)
 - ../restore/fw/vendor/adsp/adsp.b13 @1156273-1156520: "CHRE_util", "Failed to initialize ASH SEE helper", "chre_utils fatal", "sar.cc", then sns_qmi_client_alt.c "qmi_client_init_instance error %i"; adsp.b18 @10212: "9SarClient", "N4chre26SeeHelperCallbackInterfaceE", "Failed to find sensor '%s'". No SAR/CHRE config key or nanoapp file.
 - au12: the ADSP sent no NEW_LOOKUP (HELLO, 12 NEW_SERVER, 4 DATA). Our adspboot announces only svc 64 to it; the modem's services (wland's edge) are never announced to the ADSP. Hypothesis: SarClient waits ~10 s for a QMI service (likely the modem's SAR service) and asserts. Next: stub-service option in adspboot, then real modem<->ADSP forwarding if confirmed.
