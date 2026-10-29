@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 DSP up; APR + AFE + PCM stream; the left CS35L41 amp powers up on the I2S clock (PLL lock, PUP_DONE) and plays at -30 dB; not yet heard by the PC mic. **Updated:** 2026-10-29.
+**State:** 🟡 parked 2026-10-30: DSP, APR, AFE stream and both CS35L41 amps run cleanly, but no sound (measurement mic + the user); next steps in the Log. **Updated:** 2026-10-30.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 16:30 sp14: 32-bit slots / 24-bit ADM still silent; speaker PARKED
+- research/notes/apr-diff.md: our ASM/ADM/matrix/AFE payloads equal ios-redfin's working sequence except ADM bit width (16 vs 24) and the port type (I2S 16-bit vs their TDM 32-bit slots); every APR reply status 0; 388 periods in 3854 ms = real time, so the matrix pulls our data.
+- sp14a `--i2s-32` (3.072 MHz, amp PLL/SP_RATE 0x21 verified vs Linux cs35l41.c cs35l41_pll_sysclk, SP_FORMAT 32-bit, ADM 24), sp14b `--adm-bits 24`, sp14c `--i2s-32 --amp-boost`: amp 0x41 PUP_DONE + PLL_LOCK, on ~3.03 s, pcm ok, 0 underflows; mic beside the bottom speaker: 0 TONE windows each (1 kHz bin at the noise floor).
+- Parked after ~15 targeted runs (half-day rule). What is proven: ADSP + APR + AFE + matrix run in real time, the shared memory is right (sp13), both amps power up and lock to BCLK, the user and the mic hear nothing.
+- Next when resumed: prove whether SD0 carries data: (a) a tight C sampler of the LPI gpio10 input bit (mmap /dev/pmem, millions of reads) during the tone; (b) an AFE internal loopback 0x1002 -> a TX port read via ASM; (c) read the amp's ASP/DSP status (IRQ2 ASP errors, the "DSP1RX" PCM level) mid-tone; (d) Linux `cs35l41` "ASPRX1"->"DACPCM1" plus "AMP_EN"/"AMP_OUT_MUTE"/"DSP1 PM" sequence diff once more against a stock sunfish dmesg/regmap dump if one can be found.
 
 ### 2026-10-30 15:50 sp12/sp13: shared memory is right; the gap is inside the DSP routing (suspected)
 - sp12 (pin sampling with pmem during playback): all 600 reads of the LPI in/out bits were 0, timing vs the tone unconfirmed; inconclusive (the amp's PLL locks on BCLK, so BCLK does arrive).
