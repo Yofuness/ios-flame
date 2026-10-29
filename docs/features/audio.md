@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 17:05 PCM through ASM/ADM: setup ok, 53 periods played, then the APR channel stalls (pc1; kernel98; adspboot 11c845c)
+- 11c845c `--pcm`: 32 KB buffer for ADSP stream 0x1b21 through a translating bank (CB12, SMMU_REF values), DSP address 0x1a0000000 (IOVA 0xa0000000 | 1<<32); ASM map 0x10D92 -> handle b0a52a58; ADM open v5 0x10326 (port 0x1002, topology 0x10312, 16-bit 48 kHz 2 ch) status 0 copp 0; ASM open-write v3 0x10DB3, matrix route 0x10325, media fmt 0x10D98, run 0x10DAA: all status 0.
+- Playback (1 kHz -20 dBFS, 10 ms periods, 8 in flight): 61 written, 53 WRITE_DONE in 504 ms, then nothing; teardown commands and AFE stop got no reply. ADSP state 6 (not crashed), no SMMU fault on 0x1b21 or 0x1b23, no reset. Amps off (no sound expected).
+- Hypothesis: glink intent accounting under streaming (remote intents dropped when our table was full; local RX intents not refilled). Fix in progress.
+- tools/sunfish-tone-detect.sh: the Sonix USB camera mic listens for the tone (Iriun gives video only on Linux), for the amp step.
+
 ### 2026-10-29 16:45 AFE port starts: SEC_MI2S_RX clock + config + start/stop all status 0 (af2-af4; kernel98; adspboot b8ed3ee, 7d3905c)
 - Bugs fixed: GET_STATE is AVCS_CMD_ADSP_EVENT_GET_STATE 0x1290C (we sent 0x1326C, silently dropped); our APR hdr_field was 0x0150 (CMD_RSP type), now 0x0250 (SEQ_CMD); ADSP replies use an 8-word header (hdr_field 0x0081/0x0181, length in bits 7:4) — we read the payload 12 bytes early (af2: "not ready" was a header word; af3 raw dump: payload word 1 = ready). 10 s ready gate (ADSP_APR_NO_GATE=1 off); 0x100FC fallback removed; ADSP_APR_HEX=1 raw dumps.
 - af4: `apr: adsp state words[0]=1 (ready)`, `apr: fwk 2.9.0.0, 8 services`; AFE (src/dest svc 4): 0x100F3 clock set (SEC_MI2S_IBIT 0x102, 1.536 MHz) ok; 0x100EF I2S config port 0x1002 (48 kHz, 16-bit, stereo, SD0) ok; 0x100E5 DEVICE_START ok; 2 s; 0x100E6 STOP ok; clock off ok. Every APR_BASIC_RSP 0x110E8 status 0. ADSP state 6 after; no crash, no reset; ssh 17 s; 4455 mV.
