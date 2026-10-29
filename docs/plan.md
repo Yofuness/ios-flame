@@ -30,32 +30,8 @@ button, SE9 I2C + amps, boot-arg defaults.
 - D2 boot time: dropbear only starts ~33 s into boot (start it earlier: a root write); boot to SSH is ~25 s now.
 - D4 [DONE 2026-10-29] live log per boot (`../logs/boots/current.log`); the 474 MB log gzipped in `../logs/archive/`.
 
-## Broken (cheapest first; [phone] = needs the phone)
-- B1 mtl2.log never rotated: fix built, check on the next install. [phone]
-- B8 PhotosFileProvider crashes (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
-- B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
-- B11 UI watchdog misses a kernel hang with swaps still running.
-- B12 Sensors: all behind the ADSP's SSC; wait for audio. Fallback: a sysctl that injects rotation events.
-- B13 Battery % while discharging unchecked (U3).
-- B14 Charging drain under load = the USB source's budget; optional read-only TYPEC/APSD check (U4).
-- B15 Bluetooth: WCN3990 over a QUP UART + QCA firmware + a Broadcom shim for bluetoothd; 1-3 weeks.
-- B16 Audio: see priority 1; then APR + CS35L41 for a beep (U5).
-- B17 Camera frames (M2): camcc PLL for 24 MHz MCLK, CSIPHY/CSID/IFE, camera SMMU; weeks.
-- B19 Respawn loops: see priority 4.
-- B20 Screen rotation: see priority 2.
-- B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
-- B18 Cellular: not planned. iCloud: not expected to work.
-
-## Later (needs repeated 1 h+ tests)
-- B21 GPU busy-hang recovery + pool growth (no real hang seen since xnu 0207).
-- B4 Silent resets in long app soaks (PON reason is sticky, no lead).
-
-## Optimize (last)
-- O2 panel rate ~21 updates/s: only a second, preemptible GPU ring is left (big).
-- O3 Reduce Transparency speed (with B10).
-- O4 lskdd respawn cost (with B19).
-- O5 display-off CPU fade when sweetpanelsleep is off.
-- O6 failed GPU hang recovery takes 3.9-12.8 s: fail faster.
+## Backlog
+The Broken, Later and Optimize lists are in [backlog.md](backlog.md) (not auto-loaded).
 
 ## Verification
 Each item: numbers in the feature Log, this plan and the README status table in the same commit, a journal line,

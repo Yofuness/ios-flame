@@ -66,14 +66,16 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   possible comes first.
 - **Focus:** a couple of systems at a time, from the Priority list in `docs/plan.md` (at most 5, the active one
   marked). Easy things go first: the user loves seeing progress.
-- **After each finished priority item:** scan the Broken list for low-hanging fruit and move the easiest items up
+- **After each finished priority item:** scan the Broken list in `docs/backlog.md` for low-hanging fruit and move the easiest items up
   into the Priority list.
 - **Wins:** push-notify the user every time something starts working.
-- **Broken list:** `docs/plan.md`'s Broken list. Anything newly found broken goes on it; then carry on.
+- **Backlog:** the Broken, Later and Optimize lists are in `docs/backlog.md`, not auto-loaded. Read it when waiting
+  on a test or build, after finishing a priority item, and when adding something newly found broken (add it, then
+  carry on).
 - **While waiting** (tests, builds, boots): work on other Broken items instead of idling.
 - **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
   choice made) to the "Questions for you" list in `docs/plan.md`, so they can answer later. Don't wait.
-- **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list and move on.
+- **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list (`docs/backlog.md`) and move on.
 - **Dev-speed optimizations:** anything slowing development down becomes priority. Give it at most about an hour;
   past that it's likely not worth it: note it and move on.
 - **Risky steps** (the user, 2026-10-29): where hardware damage is possible (e.g. PMIC charger writes), proceed with
@@ -88,7 +90,7 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   stacks on the iOS brightness and the webcam can't see the screen (`sunfish-dim.sh 100` clears a leftover dim).
   Remove the flag when the user is up.
 - **Other optimization:** make systems usable, not fast. Once something works and could be faster, add it to the
-  "Optimize (last)" list and move on.
+  "Optimize (last)" list (`docs/backlog.md`) and move on.
 
 # Delegation and sessions (tokens)
 - **Every agent starts cold:** it loads this file and the plan (~4K tokens) and re-reads what it needs. So:
