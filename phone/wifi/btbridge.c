@@ -59,7 +59,7 @@
 #define READY		"/private/var/tmp/btbridge.pid"
 #define KDEV		"/dev/btbridge"
 #define WD_SECS		2.0
-#define WD_MISSES	3
+#define WD_MISSES	2		/* bt9: was 3; the AirPods hang showed 2 misses then bluetoothd gave up */
 
 static int shim = 1, lext = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
@@ -263,7 +263,9 @@ static void host_input(void)
 		else if (n_acl_up++ < 8 || n_acl_up % 256 == 0)
 			printf("-> %s handle %#x len %u\n", hb[0] == 0x02 ? "acl" : "sco", (hb[1] | hb[2] << 8) & 0xfff,
 			       need - (hb[0] == 0x02 ? 5 : 4));
-		if (!done && hb[0] == 0x01 && !wd_op) {
+		/* bt9 (AirPods, U9b): bluetoothd's HCI_Reset came while an older command was still watched, so the reset
+		 * was never checked and no recovery ran: a host HCI_Reset always (re)arms the watchdog */
+		if (!done && hb[0] == 0x01 && (!wd_op || (hb[1] | hb[2] << 8) == 0x0c03)) {
 			wd_op = hb[1] | hb[2] << 8;
 			wd_since = now_s();
 		}

@@ -23,6 +23,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:30 AirPods retest (U9b, kernel108): the chip goes silent; watchdog re-armed on HCI_Reset
+- The user paired AirPods Pro 2 again on kernel108 (0231): no bluetoothd CRASH line this time; instead the chip stopped answering (btbridge watchdog: 0x0419 Remote Name Request, then 0x0c37 and 0x1001 unanswered); bluetoothd restarted 3 times. No recovery ran: the host HCI_Reset (0x0c03) came while 0x0c37 was the watched command, so the reset was never checked, and only 2 misses happened (threshold 3).
+- Fix (btbridge, installed, untested): a host HCI_Reset always re-arms the watchdog; WD_MISSES 3 -> 2. Why AirPods make the chip hang is still open (polled 115200-baud UART vs the AirPods' traffic / Apple-specific pairing).
+
 ### 2026-10-30 16:55 bt8: kernel108 + new btbridge clean; pairing remembered
 - Boot clean (kernel108 = 107 + 0231), btbridge "watchdog on, rx restart on", "ready, pumping"; bluetoothd one pid over 30 s; no CRASH. Settings > Bluetooth on; My Devices lists the paired Xbox controller ("Not Connected": controller off), so pairings survive reboots.
 - SIGTERM: btbridge exits within 5 s (rail off, GCC vote cleared, stats), a manual restart is "ready" 45 s later (bluetoothd restarts with it). No recoveries or RX restarts needed this boot. AirPods retest with 0231 needs the user.
