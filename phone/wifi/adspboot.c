@@ -1129,6 +1129,7 @@ static uint32_t pcm_sent, pcm_done, pcm_out, pcm_underflow, pcm_werr;
 static uint64_t pcm_due, pcm_t0, pcm_t1;
 static int16_t pcm_sine[48];
 static uint32_t pcm_tone_periods = PCM_TONE_PERIODS;
+static int pcm_dbfs = -20;	/* sp5: tone level, clamped to -40..-6 dBFS */
 
 /*
  * sp1: `--amp` (implies --pcm) turns the left amp (0x40 only) on for the tone: configured and read back before the
@@ -1302,7 +1303,7 @@ static void pcm_run(void)
 			return;
 		}
 		case P_PLAY:
-			printf("pcm: playing 1 kHz -20 dBFS for %u x 10 ms, %u periods of %u B in flight\n", pcm_tone_periods,
+			printf("pcm: playing 1 kHz %d dBFS for %u x 10 ms, %u periods of %u B in flight\n", pcm_dbfs, pcm_tone_periods,
 			       PCM_PERIODS, PCM_BYTES);
 			pcm_op = 0;
 			pcm_t0 = pcm_t1 = now_ms();
@@ -1441,7 +1442,7 @@ static int pcm_rx(const struct apr_hdr *h, const uint32_t *pl, uint32_t len)
 static void pcm_start(void)
 {
 	for (int i = 0; i < 48; i++)
-		pcm_sine[i] = (int16_t)lrint(3277.0 * sin(2 * M_PI * i / 48));	/* -20 dBFS peak */
+		pcm_sine[i] = (int16_t)lrint(32767.0 * pow(10, pcm_dbfs / 20.0) * sin(2 * M_PI * i / 48));	/* pcm_dbfs peak */
 	pcm_step = P_MAP;
 	pcm_run();
 }
@@ -1972,7 +1973,13 @@ int main(int argc, char **argv)
 			amp_check = 1;
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
 			amp_db = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "--amp-gain") && i + 1 < argc)	/* sp3: analog gain steps 0..10 (cs_config clamps) */
+		else if (!strcmp(argv[i], "--pcm-dbfs") && i + 1 < argc) {	/* sp5: clamped -40..-6 */
+			pcm_dbfs = atoi(argv[++i]);
+			if (pcm_dbfs > -6)
+				pcm_dbfs = -6;
+			if (pcm_dbfs < -40)
+				pcm_dbfs = -40;
+		} else if (!strcmp(argv[i], "--amp-gain") && i + 1 < argc)	/* sp3: analog gain steps 0..10 (cs_config clamps) */
 			amp.amp_gain = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--pcm-sid") && i + 1 < argc) {
 			pcm_sid = (uint32_t)strtoul(argv[++i], NULL, 0);
@@ -2043,7 +2050,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N] [--amp-gain N]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
