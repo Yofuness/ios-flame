@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 15:35 RESET: E2 allocation panics (e2a, kernel99 = 98 + xnu 0222)
+- `sctl kern.sweet_mdp_e2=1` -> `panic(...): kmem_alloc(..., 10190848, 0x100021): failed with 3 @vm_kern.c:178` (kmem_alloc_contig of 9.7 MB below 4 GB with KMA_PERMANENT failed; the call panics instead of returning). No e2 log lines; phone to fastboot; rescued on kernel98 (e2r, ssh 18 s, 4439 mV). sctl 64-bit retry (11522a2) worked up to the write.
+- No verdict on E2. Next: allocate the contiguous buffer early (at registration, when memory is not fragmented), with a non-panicking call, or reserve it at boot; fail with ENOMEM.
+
 ### 2026-10-29 15:15 zero-copy design (research/notes/zero-copy-design.md)
 - Chosen: backboardd keeps 1125x2436; its display IOSurfaces allocated physically contiguous (SweetSurface.cpp:759, fallback normal); swap() (SweetFramebuffer.cpp:868) points VIG0 at the swapped surface (SRC_SIZE 1125x2436, OUT 1080x2340, QSEED3LITE scaling) + CTL0 flush; real SwapWait polls the flush bits (1 ms, 33 ms cap). Rejected: 1080x2340 canvas (360x780 pt: red rdar status bar, would need an iPhone 13 mini identity), carveout slots (2 x 11.1 MB fill the 24.1 MB carveout). Rounded-corner mattes lost at first.
 - Experiments: E2 (MDP reads contiguous memory outside the carveout? SMMU stream 0x800) first, E1 (QSEED3LITE scale test), E3 (flip + SwapWait behind sweetfb_zerocopy, fpsbench).
