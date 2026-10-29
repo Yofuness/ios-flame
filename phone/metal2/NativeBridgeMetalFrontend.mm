@@ -1024,6 +1024,23 @@ struct CullEntry {void (^blk)(void)=nil;bool draw=false,covering=false;unsigned 
  [self drawIndexedPrimitives:t indexCount:n indexType:k indexBuffer:b indexBufferOffset:o instanceCount:1 baseVertex:0 baseInstance:0];
 }
 - (void)useResource:(id<MTLResource>)r usage:(MTLResourceUsage)u stages:(MTLRenderStages)s {(void)r;(void)u;(void)s;}
+// 0110 (B24): more selectors Maps-like apps call. Residency and barriers are no-ops like useResource; the multi
+// scissor/viewport forms keep element 0 only (logged once if more are given).
+- (void)useResources:(const id<MTLResource> __unsafe_unretained*)r count:(NSUInteger)n usage:(MTLResourceUsage)u stages:(MTLRenderStages)s {(void)r;(void)n;(void)u;(void)s;}
+- (void)useHeap:(id<MTLHeap>)h {(void)h;}
+- (void)useHeap:(id<MTLHeap>)h stages:(MTLRenderStages)s {(void)h;(void)s;}
+- (void)useHeaps:(const id<MTLHeap> __unsafe_unretained*)h count:(NSUInteger)n stages:(MTLRenderStages)s {(void)h;(void)n;(void)s;}
+- (void)memoryBarrierWithScope:(MTLBarrierScope)sc afterStages:(MTLRenderStages)a beforeStages:(MTLRenderStages)b {(void)sc;(void)a;(void)b;}
+- (void)setScissorRects:(const MTLScissorRect *)r count:(NSUInteger)n {
+ static BOOL warned=NO;
+ if(n>1&&!warned){warned=YES;NBLOG(@"native-metal: setScissorRects: count %lu, only the first used",(unsigned long)n);}
+ if(n)[self setScissorRect:r[0]];
+}
+- (void)setViewports:(const MTLViewport *)v count:(NSUInteger)n {
+ static BOOL warned=NO;
+ if(n>1&&!warned){warned=YES;NBLOG(@"native-metal: setViewports: count %lu, only the first used",(unsigned long)n);}
+ if(n)[self setViewport:v[0]];
+}
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:true];}
 - (void)waitForFence:(id<MTLFence>)fence beforeStages:(MTLRenderStages)stages {[self fence:fence stages:stages update:false];}
 @end
