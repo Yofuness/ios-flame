@@ -11,7 +11,7 @@
 
 static int show(const char *name)
 {
-	char buf[256];
+	static char buf[16384];	/* string sysctls like kern.sweet_mdpdump (~8 KB) */
 	size_t len = sizeof(buf) - 1;
 	if (sysctlbyname(name, buf, &len, NULL, 0) != 0) {
 		perror(name);
