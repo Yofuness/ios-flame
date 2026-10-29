@@ -4,6 +4,7 @@ Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-br
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
+0. ▶ **r/hackios survey** (the user, 2026-10-29, priority): other iOS-on-non-Apple projects and their repos; what we can reuse (research/notes/hackios-survey.md).
 1. ▶ **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
    compositing side (backboardd display transform / our framebuffer). (display.md)
 2. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign
