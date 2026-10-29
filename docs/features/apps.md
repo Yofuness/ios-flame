@@ -48,6 +48,19 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 09:25 B29: lock-screen button noise, storage of buffer textures (b29a, b29b; kernel94; bundle f6550d2)
+- a980246 logs (bytesNoCopy / IOSurface, 1-byte formats): 0 lines; the textures come through `-[MTLBuffer newTextureWithDescriptor:offset:bytesPerRow:]`.
+- f6550d2 (bridge 0107) logs each buffer texture's storage: backboardd only, 32 lines: 17 wider alias (e.g. 1125x2436 BGRA8, RG8 23x23/32x40 row 64, A8 rows 64-aligned), 15 shadow. Shadows: RGBA8 101x101 / 103x103 / 97x76 row 416, BGRA8 194x237 r784, 1x1, A8 216x61 r224, 463x54 r480, 712x234 / 732x174 / 736x234 r736, 981x245 r992, big BGRA8 1326x1326 / 1271x1823 / RGBA8 1105x1160. Reason: no-copy buffer, Turnip refuses the row pitch (needs 64; host-allocation linear needs 256).
+- Copy regions and Turnip's row copies are correct (investigator). Hypothesis: CA writes the icon pixels on the CPU after the shadow was filled and the tracker does not see it -> stale/uninitialised shadow. Next: M2V_SHADOW_REFRESH=always test switch.
+- Lock-screen clock clean on both boots (AegirPoster not listed); the two buttons noisy.
+
+### 2026-10-29 09:20 B25: Music crash (b29a boot, kernel94)
+- Disassembly: `_MediaLibrary_coreLibrary` does `[[self databasePath] lastPathComponent] UTF8String` -> std::string; databasePath (MPMediaLibrary -> MPMediaLibraryDataProviderML3 -> ML3MusicLibrary) is nil. Listings: research/re/MediaPlayer.s, MusicLibrary.s.
+- Present on the phone: /etc/passwd mobile (home /var/mobile), /var/mobile/Media/iTunes_Control/iTunes/MediaLibrary.sqlitedb (532 KB), medialibraryd and tccd running.
+- oslog at launch: `-[MPMediaLibrary initWithClientIdentity:userIdentity:]: app not authorized for access`, then `<MPMediaLibrary> [nil] - Singleton`, crash 1 ms after the first library request. Account DSID (null) everywhere. No medialibraryd / ML3 log lines.
+- TCC.db had no kTCCServiceMediaLibrary rows. Added (com.apple.Music, auth_value 2, reason 4) on a host copy (WAL checkpointed), swapped in with tccd stopped, tccd restarted. Music still crashes (578, 591, 616, 638 s). Backup: /var/local/tcc-pre-b25/ (TCC.db + wal + shm). Row kept (harmless).
+- Parked: next would be the authorization check itself in MediaPlayer (which call answers "not authorized": TCC preflight vs an entitlement / client-identity check).
+
 ### 2026-10-29 09:30 B28: AegirPoster crash loop vs mtl2-clients (b28a, kernel94, default args)
 - Symbolized (b19a, 66 crashes 305.8-626.5 s, all the same bt): uncaught exception on an FBSSerialQueue block -> std::terminate -> _objc_terminate -> abort. 60 ms before each: `MTL2[pid AegirPoster]: not listed (/var/local/mtl2-clients): no Metal device`. Pairs ~0.4 s apart every ~10 s; starts at the idle auto-lock (~300 s) and stops on its own (~626 s).
 - b28a (AegirPoster added to mtl2-clients, reboot, 11 min untouched; ssh up 17 s, 4456 mV): 2 crashes (sig 9, 310.0 / 315.1 s), then none to 756 s. Device created ("_MTLDevice is 528 bytes") but many "no device answer" queries. 0 UIWDT, 0 GPU hangs.
