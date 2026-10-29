@@ -10,7 +10,8 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
 2. **Bluetooth follow-ups** (B15): pairing test (needs U9), UART drops (3 Mbaud / interrupt RX), faster boot
    firmware load; A2DP later (redfin 1016). (bluetooth.md)
 3. **iOS sound path**: redfin's kernel APR stream + RedwoodAudio.driver HAL plug-in, once the speaker plays. (audio.md)
-4. **Sensors -> auto-rotate** (B12): redfin fastrpcd + sensd + HID patches 0971/0972/1031. (display.md, sensors)
+4. ▶ **Sensors -> auto-rotate** (B12): all 6 sensors answer; iOS rotates natively from the orientation HID service
+   (kernel107, faked events). Next: per-sensor QRTR ports so real samples flow, then a tilt test (U10). (sensors.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
@@ -29,6 +30,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U3 battery % while discharging: phone off the charger 30 min, on kernel106 with sweetbattery=2 (Claude boots it). (B13)
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
 - U9 Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
+- U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
 - U8 home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 speaker beep: listen next to the phone for a 3 s 1 kHz tone (amp powers up cleanly; the PC mic hears nothing). Ready now.
 

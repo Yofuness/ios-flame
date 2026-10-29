@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:50 iOS ROTATES NATIVELY from the orientation HID service (mo1, mo2; kernel107 sweetmotion=0x77)
+- mo1: backboardd (pid 59) opens the orientation service at 24 s (also accel/gyro/compass/pressure/als, interval 0 except als 0.1-0.4 s). Fake orientation events reach it. Real sensors: adspboot --sns-motion posted "orientation 5" (face up, correct: phone flat) but only 5 samples written, 4 rejected: all sensors shared QRTR client port 0x40, so each sensor's queue saw the others' SUIDs ("event 1025 from another SUID ..." x1015) -> fix in progress (per-sensor ports).
+- mo1 frames looked unrotated; mo2 explains: the phone was already landscape from an earlier S 3. mo2 oslog on `m fake orient 3`: kernel "orientation #49 (fake) 3" -> backboardd "Received orientation (FaceUp to LandscapeLeft)", "Updating device orientation from CoreMotion to: landscapeLeft (3)", sent to SpringBoard -> SpringBoard "Active interface orientation changing ... to landscapeRight (3)", "Running SBRotateScenesWorkspaceTransaction", "Did set interfaceOrientation[3] on scene" for Calculator; frame landscape. No stale/ignored/locked. Orientation lock keys unset.
+- So iOS's own rotation path works from our sensor HID service (no SweetMetal2 R needed). Next: real accel samples (per-sensor port fix), then a tilt test by hand (U10).
+
 ### 2026-10-30 12:10 ALL SIX SENSORS ANSWER; accel streams (sn1, kernel106; adspboot e9a349e)
 - `--sns-list`: 6 of 6 types: accel + gyro LSM6DSR (STMicro; 26-416 Hz; ±2 g, ±125 dps), mag LIS2MDL (STMicro; 0-100 Hz), pressure BMP380 (Bosch; 1-25 Hz), als + prox TCS3701 (AMS; 10 Hz). So the guessed soc0/registry values were right.
 - `--sns-stream accel --sns-rate 50 --sns-secs 20`: 1072 samples (~54 Hz), x -0.04 y -0.57 z 9.86, |a| 9.88 m/s^2 (phone flat, face up). No timeouts or PD crash; rc 0; no reset; 4455 mV.
