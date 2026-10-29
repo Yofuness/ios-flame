@@ -48,6 +48,8 @@ p['LaunchDaemons']['/System/Library/LaunchDaemons/org.iosonpixel.dropbear.plist'
     # -R: generate host keys on first connection (no -E: syslog off; no -s: passwords compiled out)
     'ProgramArguments': ['/var/local/bin/dropbear', '-F', '-R', '-p', '22'],
     'RunAtLoad': True, 'KeepAlive': True, 'UserName': 'root',
+    # Interactive like timed/wifid, which exec in launchd's first daemon second (D2, 2026-10-29)
+    'ProcessType': 'Interactive', 'POSIXSpawnType': 'Interactive',
     'EnvironmentVariables': {'PATH': '/var/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'},
     # no StandardErrorPath: opening a file on /var/local made launchd start dropbear ~8 s late (2026-10-28)
 }
