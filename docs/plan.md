@@ -11,7 +11,8 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
    firmware load; A2DP later (redfin 1016). (bluetooth.md)
 3. **iOS sound path**: redfin's kernel APR stream + RedwoodAudio.driver HAL plug-in, once the speaker plays. (audio.md)
 4. **Sensors -> auto-rotate** (B12): redfin fastrpcd + sensd + HID patches 0971/0972/1031. (display.md, sensors)
-5. **Battery %** from the fuel gauge (redfin 0966, PM6150 addresses). (battery.md)
+5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
+   offsets from a RAM-log rescue. (battery.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
 IMX363/IMX355 sensors; 3-5 days).
 
@@ -25,7 +26,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 
 ## Your tasks at the phone (when you're available)
 - U1 flashlight button by hand: tap on/off, long-press for a lower level. ~2 min.
-- U3 battery % while discharging: phone off the charger 30 min. (B13)
+- U3 battery % while discharging: phone off the charger 30 min, on kernel106 with sweetbattery=2 (Claude boots it). (B13)
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
 - U9 Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U8 home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)

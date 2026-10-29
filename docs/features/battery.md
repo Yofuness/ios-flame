@@ -13,6 +13,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:20 bat1: kernel106 coulomb counting runs; unproven on the charger (xnu 0227, sweetbattery=2)
+- 0227 (from ios-redfin 0966, MIT): sweetbattery=2 = count charge from QG LAST_ADC_I every 5 s, seed from QG SDAM 0xb646/0xb647 (inferred offsets) or the voltage estimate, rest pull to the voltage estimate; capacity 3080 mAh (DT) in both modes (was 5020). =1 = old voltage mode.
+- bat1 (on USB, full, 4454 mV): "pct 100 (count 3080 mAh, vEst 100%, I 0 mA, mode counting)" at 82/142/202 s; status bar 100. The first-poll lines (SDAM b640 dump, QG subtype, seeded) are not in the live log: they ran before it starts (~30 s); the RAM-log rescue would have them. No reset; Bluetooth up.
+- Open: SDAM offsets unconfirmed; a discharge run (off the charger, U3) is the real test. Default stays sweetbattery=1 until then.
+
 ### 2026-10-28 14:30 PON baseline: the same after a clean reboot (lead withdrawn)
 - After a deliberate `flame-cmd.py reboot` (PSCI SYSTEM_RESET), k78b reads the identical line: `08:03 ... 11:01 13:01 | reason hard_reset|smpl| warm 0 poff/fault 0/0`. PON_REASON1 is sticky from the original cold power-on (warm resets don't rewrite it; WARM_RESET_REASON 0x0a stays 0 even after PSCI reset, so maybe a different offset on this GEN2 block), so the "smpl" after k77s says nothing about the silent reset. Next idea: `fastboot getvar all` right after a silent reset vs after a clean reboot (ABL's own reboot reason), and the GEN2 PON offsets from a real source.
 
