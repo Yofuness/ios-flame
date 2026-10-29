@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 22:10 M2 prep (read-only): the IMX363 init/mode tables are in the camx module file
+- vendor.img /lib64/camera/: com.qti.sensormodule.metric_imx363.bin (1,044,640 B; sensor + actuator + OIS + EEPROM), com.qti.sensor.imx363.so, com.qti.sensormodule.primax_imx355.bin + .so, Google tuning bins. Google's files: decoded only in the session scratchpad (camx/dec.py), not in git.
+- Format: a symbol table (0x48-byte records: index, name, data offset, size) then a data area at 0xacd50; register lists are 80-byte items with a 16-bit address, an 8-bit value and a delay.
+- IMX363: init table 30 registers, starting with EXCK_FREQ 0x0136/0x0137 = 24.00 MHz; 10 modes of 82 registers each, all 4-lane RAW10 (0x0114 = 3, 0x0112 = 0x0a0a), pre-PLL divider 4: 4032x3024 @30 (~1.37 Gb/s/lane), 4032x2272 @30, 2016x1136 @120/240, 2016x1512 @60 (2x2 binning). Stream on 0x0100 = 1. I2C 0x34 (8-bit) = 0x1a. Power order in the module: VIO first, MCLK 24 MHz last, reset released before it.
+- camid runs MCLK at 19.2 MHz (XO, no camcc PLL). For streaming either bring up the camcc PLL for 24 MHz (cleanest, the tables then apply as-is) or patch EXCK_FREQ to 19.2 MHz and scale the PLL multipliers by 1.25.
+
 ### 2026-10-28 21:30 camf1 (kernel94): the front sensor answers: IMX355
 - `camid --front` (1bfeea3): LDO2 MISC1 bit0 = 1 (2.4 V base); VSEL LDO7 0x3c (1.8 V), LDO2 0x82 -> 0x50 (2.8 V), LDO5 0x8c -> 0xa0 (1.2 V), all STATUS 0x02. MCLK2 (0xad05044 / 0xad0505c) on XO, gpio19/20 (cci_i2c, south) 0 -> 0x7, gpio15 (cam_mclk) 0x1 -> 0x44, reset gpio68 (north).
 - CCI0 master 1 at 7-bit 0x1a: reg 0x0016 = bytes `35 03 55` -> **0x0355 = Sony IMX355**; reg 0x0000 = 00 00. rc 0, all powered down after.
