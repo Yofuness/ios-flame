@@ -23,6 +23,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:45 iOSPlus10 (MIT) has iOS Bluetooth on 20H392: we can reuse it
+- github.com/akshaynexus/iOSPlus10 (OnePlus 10 Pro, QCA6490): bluetoothd reaches STACK_READY, Settings switch on, nearby devices listed. MIT licence, so code can be adapted with attribution (CREDITS.md).
+- Their key facts for us: bluetoothd needs an IORegistry `bluetooth` entry with a non-zero local-mac-address (ADT /arm-io/bluetooth) or it exits "No bluetooth on this device"; transport via env BT_HCI_TRANSPORT (they use a kernel control socket; /dev/cu.bluetooth also works); BlueTool stand-in answers result 0; every Apple VSC (OGF 0x3f) needs Command Complete status 0 with >= 2 (they send 8) data bytes or bluetoothd times out and restarts (_BCM_ByteStreamEventParser); 0x2007 and 0x0c6d need rewrites.
+- Our btbridge (userland pty) + BlueTool stand-in now follow those rules; their kernel transport is the fallback if a pty is refused.
+
 ### 2026-10-30 07:20 iOS side: how bluetoothd finds the controller (read-only; research/notes/bt-ios.md)
 - Facts from our 16.7 bluetoothd (strings, research/re/bt/, out of git): it opens /dev/cu.bluetooth or /dev/uart.bluetooth ("No valid serial port found (tried cu.bluetooth and uart.bluetooth)"), reads env BT_HCI_TRANSPORT ("not set - Attempting to read from plist"), and talks to com.apple.BlueTool (job: /usr/sbin/BlueTool -R, mobile). iPhone X ADT: uart1 child "bluetooth,n88", 3 Mbaud, H4. No /etc/bluetool scripts on the root (inside BlueTool).
 - From hakios-sm8150 (16.5, reference only, no licence): BlueTool reply {result: 0, firmware, manufacturer 29}; bluetoothd stops after 0x0c31 unless Supported_Commands octet 18 bit 3 is set (then 0x0c5b needs status 0); 0xfd48 must get the chip's own answer; other OGF 0x3f -> status 0. Their restart loop is unsolved.
