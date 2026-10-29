@@ -20,6 +20,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 21:40 rotation: backboardd's side
+- During `E 3`, backboardd logs `setPersistentProperties:{GraphicsOrientation: 4} ... sending to <BKIOHIDService ... SweetHIDTouch>` (touch coordinates follow the rotation) and `CBUIOrientation 3` to CoreBrightness; nothing about rotating the composited image (that's done by the app's own layer transform on iOS). So with method E the touch mapping rotates while the picture stays portrait: leave the phone at `E 1` unless testing. Next: why Safari's landscape layout doesn't show (Safari logged "Not push traits update to screen for new style 2"); compare a Metal-free app (Settings) and the app's layer tree.
+
 ### 2026-10-28 21:35 rotation: with oslog, method E rotates SpringBoard's and Safari's state; the screen stays portrait
 - New phone tool `oslog` (phone/tools/oslog.c, ActivityStream SPI; `oslog -l -n PROC -t S`).
 - After `E 3` with Safari in front, SpringBoard logs `[EmbeddedPipeline][Accelerometer] did change device orientation to: Ll`, the arbiter re-resolves (home screen supports Pu only; switcher overlay goes Lr), Safari's SBDisplayItemLayoutAttributes get `contentOrientation: landscapeRight (3)`, and an SBApplicationSceneUpdateTransaction runs.
