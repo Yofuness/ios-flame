@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 18:25 why no PUP_DONE: SEC MI2S pins never muxed, no LPASS hw vote (research/notes/amp-clock.md)
+- Amps are on SEC MI2S (dai_mi2s1, port 0x1002, SD0; live.dts:20326). Its pins are LPASS LPI TLMM @0x62b40000: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA (live.dts:23261-23340). sp1 never muxed them nor cast AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST 0x1027C (block 1) that the LPI registers need: the amp had no SCLK, so its PLL (ref = SCLK) can't lock -> no PUP_DONE. CS35L41 STATUS3 bit 1 = PLL_LOCK (to poll); STATUS1 bit 22 undefined in Linux.
+- Next: --afe does hw vote + pin mux (CFG 0xCC/0xCC/0xD0, read back, restored at exit) before the clock set; then sp2.
+
 ### 2026-10-29 18:10 CS35L41: config verified, but no PUP_DONE (amp-check2/3, sp1; kernel98 sweetse9=2 sweetampreset=1; adspboot d161564)
 - d161564: cs35l41.c per research/notes/cs35l41-plan.md (B2 errata + test key, pup/pdn patches 0x2084, 100 ms timeouts, no SP_RATE_CTRL, gain 0.5 dB, boost bypass only, left amp 0x40 only, volume clamp <= -20 dB) and `adspboot --amp-check` / `--amp` (GLOBAL_EN only after the first WRITE_DONE, <= 3 s, IRQ poll every 50 ms, power-down before teardown and on every exit).
 - amp-check without the boot-args: SE9 clocks off -> refused. With sweetse9=2 sweetampreset=1 run too early: no ACK (the kernel releases the resets at ~31 s: `SWEET AMPRESET: after 0xc700 ... 0xca00`). After 31 s: devid 0x35a40 revid 0xb2, PWR_CTRL2 0x3321, IRQ1 status1 0 / status3 0x20000000 / status4 0x3; 19 registers written and verified; GLOBAL_EN never set; restored.
