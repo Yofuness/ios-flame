@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** 🟡 the WCN3990 runs from a phone tool: firmware loaded, BD_ADDR read, LE scan finds 26 devices (btup, 2026-10-30); iOS side not started. **Updated:** 2026-10-30.
+**State:** 🟡 Bluetooth ON in iOS Settings, discoverable as "iPhone", bluetoothd stable (kernel105 btbridge=1 + btbridge, 2026-10-30); LE scan not working in iOS yet (legacy scan commands rejected). **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,13 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 10:10 BLUETOOTH ON IN SETTINGS (bt6, kernel105 btbridge=1; btbridge 629d50c)
+- bt5b root cause: btbridge's poll() on /dev/btbridge never reported POLLIN, so bluetoothd's HCI_Reset/Read_Local_Version sat unread in the kernel ring (kernel "unread by the bridge" grew) -> timeouts, restart every ~21 s. Fix: read the device every pass (O_NONBLOCK).
+- bt6: bluetoothd (pid 303) connects to the kernel control at 108.7 s, sends its init (0c03, 1001, 1002, 1009, 1003, 1004, 2003, 0c01, 2001, 0c56, 0c6d, 2002, 202f, 2031, 2024, 201c, 200f, 1005), all answered; Apple VSCs 0xfce9/0xfce2 answered by the shim (status 0 + 8 bytes). No restart over several minutes.
+- Settings: Bluetooth row "On"; the page shows the switch ON, "This iPhone is discoverable as iPhone", a spinner at DEVICES, no devices listed.
+- Classic inquiry runs (0x0401 -> Command Status 0 -> Inquiry Complete, repeated). LE: the chip answers 0x200b (Set Scan Params) and 0x200c (Set Scan Enable) with 0x0c Command Disallowed; the shim rewrites to 0, so bluetoothd thinks it scans but nothing comes ("controllerSupportsScanRx:0" in its scan agents). iOSPlus10 0338 (legacy LE -> extended LE translation) is the known fix.
+- No reset; 4455 mV.
 
 ### 2026-10-30 09:40 bt5: bluetoothd takes the kernel transport; Settings spinner (kernel105 btbridge=1)
 - Bridge at boot: patch 51.8 s (slow at boot), NVM 2.0 s; logging-off 0xfc17 -> `04 0e 05 01 17 fc 00 14` (status 0); HCI_Reset OK; drain: 0 dropped, 0 overruns (the bt4 framing slips are gone); "kdev: /dev/btbridge fd 4; btbridge: ready, pumping" at ~98 s.
