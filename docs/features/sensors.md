@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:10 ALL SIX SENSORS ANSWER; accel streams (sn1, kernel106; adspboot e9a349e)
+- `--sns-list`: 6 of 6 types: accel + gyro LSM6DSR (STMicro; 26-416 Hz; ±2 g, ±125 dps), mag LIS2MDL (STMicro; 0-100 Hz), pressure BMP380 (Bosch; 1-25 Hz), als + prox TCS3701 (AMS; 10 Hz). So the guessed soc0/registry values were right.
+- `--sns-stream accel --sns-rate 50 --sns-secs 20`: 1072 samples (~54 Hz), x -0.04 y -0.57 z 9.86, |a| 9.88 m/s^2 (phone flat, face up). No timeouts or PD crash; rc 0; no reset; 4455 mV.
+
 ### 2026-10-28 17:15 orientation without sensors: the path (read-only)
 - BackBoardServices BKSAccelerometer (setOrientationEventsEnabled:, currentDeviceOrientation; notify state + a mach port from backboardd); SpringBoard SBDeviceOrientationUpdateManager (_enqueueOrientationUpdateToDeviceOrientation:), SBOrientationLockManager; backboardd's _handleDeviceOrientationChangedHIDEvent: takes kIOHIDEventTypeOrientation (10), subtype CMUsage (1) (backboardd itself is not in the shared cache: its HID matching keys are unknown).
 - AccessibilityUtilities `-[AXBackBoardServer setDeviceOrientation:]` (AssistiveTouch's rotate) sends AXIPCMessage key 0x81b {deviceOrientation: n} to backboardd.
