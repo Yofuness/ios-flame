@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 11:35 audio steps 1-3 (au1, au3; kernel95; adspboot e111a25, c814f18)
+- e111a25: pd-mapper adsp domains (instance 74), CB with ASID + TLBIASID before SCTLR, `smmu --status`, dsp addresses IOVA|3<<32, `boot --rpc --root`. Backups on the phone: /var/local/bin/adspboot.pre-e111, wland.pre-e111. Wi-Fi still joins with the new wland (au1).
+- au1 `adspboot boot`: glink up (IPCRTR, fastrpcglink-apps-dsp, apr_audio_svc ...), "no ready in 10 s", sensor_process chre_utils fatal; no pd-mapper lines: the ADSP's IPCRTR is adspboot's, the locator lived only in wland.
+- c814f18: adspboot answers the ADSP's servreg locator itself (NEW_SERVER svc 64 at 1:11 after HELLO; `--no-pdmap` off). Channel tx limit 64 -> 512 bytes.
+- au3 (4454 mV, ssh 17 s): ADSP asks "avs/audio" -> 1, "tms/pdr_enabled" -> 1, "tms/pddump_disabled" -> 0; then `PD FAILURE "sensor_process": EF:sensor_process:0x1:rcinit_worker:0xf7:sar.cc:27:chre_utils fatal`, still "no ready in 10 s". ADSP services announced: 769, 66, 43, 366, 15, 400, 51, 24.
+- `smmu --rpc --dry` ok; `smmu --rpc`: 0x1b23 -> CB13 via SMR14; `smmu --status`: sGFSR 0, but CB13 FSR 0x400, FAR 0x0001736fd050a02a (before any FastRPC buffer; stale?). Step 5 (root PD attach) not run; analysis running. No reset.
+
 ### 2026-10-29 11:15 why rpc1-3 failed (comparison with hakios-sm7150 + Linux fastrpc; research/notes/audio-sm7150-reference.md)
 - The DSP emits stream 0x1b20 | (addr>>32 & 0xf) and uses the low 32 bits as the IOVA. rpc1 (0x1_062a0000) -> stream 0x1b21 (our identity bank) -> wrong memory -> sensors PD exception. rpc2 (0xe0f80000) / rpc3 (0x80000000) -> stream 0x1b20, no SMR, USFCFG=1 -> SoC reset. CB7 (0x1b23) was never reached. (Inference, ~80%.)
 - hakios makes no SCM/hyp assign for audio/FastRPC memory (only rmtfs): the hypervisor track is likely unnecessary.
