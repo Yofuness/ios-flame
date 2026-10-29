@@ -956,10 +956,15 @@ static void apr_rx(const uint8_t *p, size_t n)
 	memcpy(&h, p, sizeof(h));
 	if (getenv("ADSP_APR_HEX"))	/* af2: GET_STATE replies were 36 B with an odd first word: show the raw packet */
 		hex32("apr: raw", p, n);
-	len = (uint32_t)(n - sizeof(h)) / 4;
+	/* af3: the ADSP's replies carry an 8-word header (hdr_field 0x0081: header length in bits 7:4, in words),
+	 * not our 5-word one; the payload starts after hdr_len words */
+	size_t hl = ((h.hdr_field >> 4) & 0xf) * 4;
+	if (hl < sizeof(h) || hl > n)
+		hl = sizeof(h);
+	len = (uint32_t)(n - hl) / 4;
 	if (len > 64)
 		len = 64;
-	memcpy(pl, p + sizeof(h), len * 4);
+	memcpy(pl, p + hl, len * 4);
 	uint32_t status = len ? pl[h.opcode == APR_BASIC_RSP && len > 1 ? 1 : 0] : 0;
 	printf("apr: rx svc %x op %x token %u status %x (len %zu, from %u/%u port %u%s%x)\n", h.src_svc, h.opcode,
 	       h.token, status, n, h.src_domain, h.src_svc, h.src_port, h.opcode == APR_BASIC_RSP ? ", for op " : "",
@@ -976,7 +981,7 @@ static void apr_rx(const uint8_t *p, size_t n)
 		for (uint32_t i = 0; i < pl[0] && 1 + 2 * i + 1 < len; i++)
 			printf("apr:   svc %x version %x\n", pl[1 + 2 * i], pl[2 + 2 * i]);
 	} else if (h.opcode != APR_BASIC_RSP && len) {
-		hex32("apr: payload", p + sizeof(h), n - sizeof(h));
+		hex32("apr: payload", p + hl, n - hl);
 	}
 	if (apr_step == 1 && !getenv("ADSP_APR_NO_GATE") && (h.opcode == AVCS_GET_STATE_RSP ||
 	    (h.opcode == APR_BASIC_RSP && len && pl[0] == AVCS_GET_STATE)))
