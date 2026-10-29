@@ -32,9 +32,14 @@
 #define SMEM_HOST_ADSP	2
 #define IPC_ADSP_GLINK	24
 #define CHAN		"apr_audio_svc"
-#define LCID		1		/* ours; Linux starts at 1 */
-#define INTENT_SZ	4096
-#define NINTENT		4
+/* ap2: our lcid. adspboot numbers its channels 1..NCHAN (8) and exits without CLOSE, so lcid 1 may still be
+ * bound to one of its channels on the ADSP (apr1: a stale OPEN_ACK for lcid 1 arrived before our OPEN). Default 9;
+ * APRTEST_LCID=1 = the old behaviour. */
+static uint16_t LCID = 9;
+#define INTENT_SZ	1024
+#define NINTENT		8		/* ap2: queued after OPEN_ACK */
+#define MIN_INTENT	4		/* ap2: keep at least this many of ours queued */
+#define NRINT		32		/* ap2: table of the ADSP's intents (was 16) */
 
 #define APR_HDR_FIELD	0x0150		/* SEQ_CMD (1) << 8 | 5 words << 4 | version 0 */
 #define APR_DOMAIN_ADSP	4
@@ -58,8 +63,8 @@ struct apr_hdr {
 } __attribute__((packed));
 
 static int rcid = -1, local_open, remote_open;
-static uint32_t r_iid[16], r_isz[16];	/* the ADSP's free intents */
-static int r_n, our_iid = 100;
+static uint32_t r_iid[NRINT], r_isz[NRINT];	/* the ADSP's free intents */
+static int r_n, our_iid = 100, our_free, open_sent, r_full_logged, closed;
 static uint8_t rxbuf[16384];
 static size_t rx_have;
 static uint32_t rx_iid;
@@ -75,14 +80,20 @@ static void learn(uint16_t cid)
 	}
 }
 
-static void give_intents(int n)
+/* Queue n RX intents of sz bytes on our channel (INTENT(lcid, count){size, iid}). */
+static void give_intents(int n, uint32_t sz)
 {
 	uint32_t e[2 * NINTENT];
+	if (n > NINTENT)
+		n = NINTENT;
 	for (int i = 0; i < n; i++) {
-		e[2 * i] = INTENT_SZ;
+		e[2 * i] = sz;
 		e[2 * i + 1] = (uint32_t)our_iid++;
 	}
 	glink_send(GLINK_CMD_INTENT, LCID, (uint32_t)n, e, 8u * n);
+	our_free += n;
+	printf("aprtest: queued %d rx intents of %u bytes (ids %d..%d, %d ours free)\n", n, sz, our_iid - n,
+	       our_iid - 1, our_free);
 }
 
 static void apr_rx(const uint8_t *p, size_t n)
@@ -137,10 +148,15 @@ static int pump_one(void)
 		break;
 	}
 	case GLINK_CMD_OPEN_ACK:
-		if (h[1] == LCID) {
+		if (h[1] == LCID && !open_sent) {
+			/* ap2: an ACK for an OPEN we did not send (stale, from adspboot or an earlier run) */
+			printf("aprtest: stale OPEN_ACK for lcid %u ignored\n", LCID);
+		} else if (h[1] == LCID && !local_open) {
 			local_open = 1;
 			printf("aprtest: OPEN_ACK for our lcid %u\n", LCID);
-			give_intents(NINTENT);
+			give_intents(NINTENT, INTENT_SZ);
+		} else {
+			printf("aprtest: OPEN_ACK for lcid %u (not ours / repeated)\n", h[1]);
 		}
 		break;
 	case GLINK_CMD_CLOSE:
@@ -149,26 +165,38 @@ static int pump_one(void)
 		if ((int)h[1] == rcid)
 			remote_open = 0;
 		break;
+	case GLINK_CMD_CLOSE_ACK:
+		if (h[1] == LCID)
+			closed = 1;
+		break;
 	case GLINK_CMD_INTENT:
 		n = 8 + 8ull * p2;
 		if (glink_rx_avail() < n)
 			return 0;
 		learn(h[1]);
+		if ((int)h[1] != rcid) {
+			printf("aprtest: %u intents for cid %u (not ours) ignored\n", p2, h[1]);
+			break;
+		}
 		for (uint32_t i = 0; i < p2; i++) {
 			uint32_t e[2];
 			glink_rx_peek(e, 8 + 8 * i, 8);
-			if ((int)h[1] == rcid && r_n < 16) {
+			if (r_n < NRINT) {
 				r_isz[r_n] = e[0];
 				r_iid[r_n++] = e[1];
+				printf("aprtest: remote intent %u (%u bytes), %d free\n", e[1], e[0], r_n);
+			} else if (!r_full_logged++) {
+				/* ap2: not an error; extra ones are just never used */
+				printf("aprtest: remote intent table full (%d), further intents not tracked\n", NRINT);
 			}
 		}
-		printf("aprtest: remote intents +%u (%d free)\n", p2, r_n);
 		break;
 	case GLINK_CMD_RX_INTENT_REQ:
 		learn(h[1]);
 		printf("aprtest: remote asks for an intent of %u bytes\n", p2);
+		/* ap2: the intent first, then the ACK (Linux qcom_glink_handle_intent_req order) */
+		give_intents(1, p2 > INTENT_SZ ? p2 : INTENT_SZ);
 		glink_send(GLINK_CMD_RX_INTENT_REQ_ACK, LCID, 1, NULL, 0);
-		give_intents(1);
 		break;
 	case GLINK_CMD_RX_DONE:
 	case GLINK_CMD_RX_DONE_W_REUSE:
@@ -192,15 +220,19 @@ static int pump_one(void)
 			rx_have += cl[0];
 		}
 		if (!cl[1]) {
+			/* ap2: return the intent, keep >= MIN_INTENT of ours queued */
 			glink_send(GLINK_CMD_RX_DONE, LCID, rx_iid, NULL, 0);
-			give_intents(1);
+			if (our_free > 0)
+				our_free--;
+			printf("aprtest: rx %zu bytes in intent %u (RX_DONE sent)\n", rx_have, rx_iid);
+			if (our_free < MIN_INTENT)
+				give_intents(MIN_INTENT - our_free, INTENT_SZ);
 			apr_rx(rxbuf, rx_have);
 		}
 		break;
 	}
 	case GLINK_CMD_SIGNALS:
 	case GLINK_CMD_READ_NOTIF:
-	case GLINK_CMD_CLOSE_ACK:
 	case GLINK_CMD_RX_INTENT_REQ_ACK:
 		break;
 	default:
@@ -276,6 +308,9 @@ int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	int reset = argc > 1 && !strcmp(argv[1], "-r");
+	const char *lc = getenv("APRTEST_LCID");
+	if (lc && atoi(lc) > 0)
+		LCID = (uint16_t)atoi(lc);
 	if (smem_init())
 		return 1;
 	glink_select(SMEM_HOST_ADSP, IPC_ADSP_GLINK);
@@ -290,6 +325,7 @@ int main(int argc, char **argv)
 
 	static const char name[] = CHAN;
 	glink_send(GLINK_CMD_OPEN, LCID, sizeof(name), name, sizeof(name));
+	open_sent = 1;
 	printf("aprtest: OPEN \"%s\" lcid %u sent\n", CHAN, LCID);
 	if (wait_for(&local_open, 0, 3000)) {
 		printf("aprtest: no OPEN_ACK in 3 s\n");
@@ -329,6 +365,7 @@ int main(int argc, char **argv)
 
 	/* close ours so a rerun starts clean (the ADSP answers CLOSE_ACK and may re-OPEN) */
 	glink_send(GLINK_CMD_CLOSE, LCID, 0, NULL, 0);
-	wait_for(NULL, ~0u, 200);
+	wait_for(&closed, 0, 500);
+	printf("aprtest: CLOSE lcid %u %s\n", LCID, closed ? "acked" : "not acked in 500 ms");
 	return ready ? 0 : 1;
 }
