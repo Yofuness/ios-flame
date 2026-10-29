@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 11:15 why rpc1-3 failed (comparison with hakios-sm7150 + Linux fastrpc; research/notes/audio-sm7150-reference.md)
+- The DSP emits stream 0x1b20 | (addr>>32 & 0xf) and uses the low 32 bits as the IOVA. rpc1 (0x1_062a0000) -> stream 0x1b21 (our identity bank) -> wrong memory -> sensors PD exception. rpc2 (0xe0f80000) / rpc3 (0x80000000) -> stream 0x1b20, no SMR, USFCFG=1 -> SoC reset. CB7 (0x1b23) was never reached. (Inference, ~80%.)
+- hakios makes no SCM/hyp assign for audio/FastRPC memory (only rmtfs): the hypervisor track is likely unnecessary.
+- Their setup: pd-mapper msm/adsp audio_pd/root_pd/sensor_pd at instance 74 (+ avs/audio, tms/pdr_enabled); root PD attach (pd 0) before the sensors PD (pd 2); CB with 39-bit TCR, ASID = bank, TLB invalidate + sync before SCTLR. Speaker on Mi 9T: PRIMARY_MI2S_RX; ours likely SECONDARY_MI2S_RX (0x1002), unchecked.
+- Plan (baby steps, each logged): 1 pd-mapper entries; 2 --dry SMMU plan; 3 CB7 for 0x1b23 only + FSR/sGFSR read-out; 4 dsp addresses = IOVA | 3<<32; 5 root PD attach with one 4 KB page (the reset-risk step); then listener/init2, sensors PD, speaker.
+
 ### 2026-10-29 11:05 references from other ports (survey; research/notes/hackios-survey.md)
 - xorbidden/hakios-sm7150 (Mi 9T, SM7150, no licence: facts only): DSP buffers in kernel memory mapped by its own page tables in a free apps-SMMU bank; the address handed to the DSP is IOVA 0x10000000 | (stream SID low 4 bits) << 32 (audio SID 0x1b21 -> 1<<32, FastRPC 0x1b23 -> 3<<32); one SMR per stream. pd-mapper answers `tms/pdr_enabled` on msm/adsp/root_pd (instance 74); FastRPC attaches the root PD before the sensors PD. Linux fastrpc.c also adds sid << 32. Our rpc3 handed 0x80000000 without SID bits (guess: the DSP used a stream with no SMR -> reset).
 - oosexgang/hakios-xnu-kernel (APSL-2.0): APR ASM/ADM/AFE playback + software speaker guard; userland CoreAudio HAL plug-in (MIT). Not verified by us.
