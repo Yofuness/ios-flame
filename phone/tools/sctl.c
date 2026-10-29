@@ -45,7 +45,10 @@ int main(int argc, char **argv)
 		int v = (int)q;
 		/* values above INT_MAX go as 64 bits (quad sysctls such as kern.sweet_mdp_src) */
 		int big = q > 0x7fffffffull;
-		if (sysctlbyname(argv[1], NULL, NULL, big ? (void *)&q : (void *)&v, big ? sizeof(q) : sizeof(v)) != 0) {
+		int r = sysctlbyname(argv[1], NULL, NULL, big ? (void *)&q : (void *)&v, big ? sizeof(q) : sizeof(v));
+		if (r != 0 && !big)	/* quad sysctls (kern.sweet_mdp_e2) refuse 4-byte writes: retry with 64 bits */
+			r = sysctlbyname(argv[1], NULL, NULL, &q, sizeof(q));
+		if (r != 0) {
 			perror(argv[1]);
 			return 1;
 		}
