@@ -6,8 +6,9 @@ history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
 - Camera black (no camera stack, B17).
-- B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center; now doable with `T`/`W` (methods.md). [phone]
-- B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
+- B26 Tap survey: Notes keyboard, Control Center, cover sheet done (tap2); Settings sub-panes left. [phone]
+- B33 Home swipe: injected bottom-edge swipe doesn't leave the app (tap2); try a slower swipe, then check by finger.
+- B29 Lock-screen flashlight/camera button icons and 5 Control Center tiles render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
 - B8 PhotosFileProvider crashes: 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.

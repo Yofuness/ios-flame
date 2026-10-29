@@ -48,6 +48,13 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 23:40 Tap survey (B26) with fake taps (tap2, kernel98)
+- Landscape touch works: after `R 3`, `T 0.42 0.69` (portrait coords where the landscape "5" sits) typed "5" first try; no `t` touch-mapping step needed.
+- Notes: Welcome -> Continue -> iCloud alert (first "Not Now" tap ignored, second dismissed it) -> compose -> keyboard shows; two taps on "a" typed "Aa". Keyboard typing works.
+- Control Center (swipe down from top-right): opens; media, volume, brightness, orientation lock, mirroring, Focus, flashlight, bell, timer fine; five tiles (connectivity, camera, ...) render as static noise (same family as B29 icon noise).
+- Swipe down from top-left: the cover sheet (lock-screen look with Notification Center); iOS 16 behaviour, two bottom-corner icons are noise (B29).
+- Injected home swipe (`W 0.5 0.995 0.5 0.6 250`) did not leave the app: unknown whether the gesture needs a slower/edge-flagged swipe or the real gesture is broken (not tested by finger).
+
 ### 2026-10-29 23:20 Fake taps work: `T X Y` / `W ...` (tap1, kernel98; SweetMetal2 touch commands)
 - backboardd dispatches IOHID digitizer events (hand + finger child) through an admin IOHIDEventSystemClient, sender = the touchscreen service (0x100000126).
 - tap1: Calculator `T 0.38 0.75` -> "2", `T 0.62 0.75` -> "23"; Settings `W 0.5 0.8 0.5 0.3 300` scrolled the list to Battery..FaceTime. Landscape tap after `R 3` at 0.5,0.5 hit a gap (inconclusive). Location Services stayed on after a reboot (Maps: no alert). No reset; 4438 mV.
