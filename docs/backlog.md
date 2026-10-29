@@ -6,12 +6,11 @@ history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
 - Camera black (no camera stack, B17).
-- B24 Photos: assetsd needs TCC + a sandbox extension; kernel95 (xnu 0219) issues extensions now (Music fixed); re-enable assetsd and test.
 - B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
 - B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
 - B27 App Store stuck on "LOADING" (network/account; may need iCloud).
-- B8 PhotosFileProvider crashes (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
+- B8 PhotosFileProvider crashes (re-check on kernel95: may share the sandbox-extension cause) (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.
 - B12 Sensors: all behind the ADSP's SSC; wait for audio. Fallback: a sysctl that injects rotation events.

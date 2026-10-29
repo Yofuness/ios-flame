@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications; 15 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music fixed/confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
+**State:** ✅ 32 staged apps installed in /Applications; 16 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music, Photos fixed/confirmed 2026-10-29), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -18,7 +18,7 @@ from the backup with plistlib.
 | com.apple.voicemail.vmd | 2026-10-23 | spun one CPU core without cellular | no visual voicemail (no cellular anyway) |
 | com.apple.ReportCrash | 2026-10-23 | busy with TTS synthesizer crashes | no crash reports on the phone; "Failed to send exception EXC_CORPSE_NOTIFY" lines (~400/h) |
 | com.apple.accessibility.axassetsd | 2026-10-23 | crash loop / CPU | accessibility asset downloads |
-| com.apple.assetsd | 2026-10-27 | crash loop (88 per 30 min, SIGABRT) | Photos opens to its first-run sheet (it rendered black before); photo library likely not usable |
+| com.apple.assetsd | 2026-10-27, RE-ENABLED 2026-10-29 | crash loop (88 per 30 min, SIGABRT: 'requires TCCPhotosService access', fixed by kernel95 sandbox extensions) | none now |
 | com.apple.assetsd.nebulad | 2026-10-27 | assetsd helper (camera bursts) | none seen (no camera) |
 | com.apple.driverkitd | 2026-10-27 | crash loop (58 in the long log) | no DriverKit drivers (none used) |
 | com.apple.spotlight.IndexAgent | 2026-10-27 | thought to launch the Spotlight index extensions (it did not) | none seen |
@@ -47,6 +47,10 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 10:10 Photos works: assetsd re-enabled on kernel95 (ph1)
+- Job cache: assetsd entry copied back from launchd.plist.pre-drop (+ StandardErrorPath /var/local/assetsd.err); nebulad stays dropped. Backup: phone /System/Library/xpc/launchd.plist.pre-photos, local work/userland/launchd.plist.pre-photos; new: work/userland/launchd.plist.photos.
+- ph1 (kernel95; ssh up 17 s, 4455 mV): 0 CRASH assetsd (assetsd.err: only CoreData first-run index setup), Photos opens to "No Photos or Videos" and stays up 30 s, 0 CRASH MobileSlideShow. Safari fine.
 
 ### 2026-10-29 10:05 Music works: kernel95 emulates sandbox extensions (sb1; xnu 0219, default args)
 - xnu 0219 (sweet_amfi.c): __mac_syscall("Sandbox") op 5 (issue) copies out a well-formed token (< 0x800, class + data), op 6 (consume) returns handle 1, 2, ...; ops 4 / 0x43 still ENOENT. Boot-arg `sweetsbext=0` restores the old ENOENT. ABI notes: research/notes/sandbox-extension-abi.md.
