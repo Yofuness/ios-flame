@@ -1,7 +1,7 @@
 /*
  * CS35L41 smart amp over SE9 I2C (0x40 left/bottom speaker, 0x41 right): bring-up for a short test tone, no
  * DSP firmware, no speaker protection. Sequence: research/notes/cs35l41-plan.md. Hard limits (enforced here, not
- * by the caller; sp1): only 0x40 is ever written, boost bypass only (VBST = VP), class-D gain 0.5 dB, digital
+ * by the caller; sp1): only 0x40 is ever written, boost bypass by default (VBST = VP; sp8 --amp-boost: internal boost), class-D gain 0.5 dB, digital
  * volume at most -20 dB, GLOBAL_EN only after a clean read-back of every configured field, any IRQ1 error bit
  * shuts the amp down.
  */
@@ -22,6 +22,8 @@ struct cs_amp {
 	uint32_t gain_saved;	/* AMP_GAIN_CTRL before us, restored by cs_power_down */
 	uint32_t err_bits;	/* IRQ1 error bits seen */
 	int probed, configured, verified, up;
+	int out_mute;		/* sp8: AMP_OUT_MUTE set at config, cleared 2 ms after GLOBAL_EN (ios-redfin 0953) */
+	int clk;		/* sp8: SP_RATE_CTRL 0x28 + TST_FS_MON0 16 | 36 << 12 (ios-redfin 0953, Linux set_sysclk) */
 	int nexp;
 	struct cs_exp exp[CS_MAX_EXP];	/* read-back list */
 };
@@ -34,6 +36,7 @@ int cs_verify(struct cs_amp *a);			/* read back every configured field; 0 = all 
 int cs_power_up(struct cs_amp *a);			/* pup patch, GLOBAL_EN, 0 = PUP_DONE; needs cs_verify ok */
 int cs_read(struct cs_amp *a, uint32_t reg, uint32_t *v);	/* sp2: read-only, logged (e.g. CLOCK_DETECT_1) */
 int cs_write(struct cs_amp *a, uint32_t reg, uint32_t v);	/* sp7: one logged write (0x40 only), no read-back list */
+void cs_out_mute(struct cs_amp *a, const char *tag);	/* sp8: read + log AMP_OUT_MUTE */
 void cs_diag(struct cs_amp *a, const char *tag);		/* sp6: RAW IRQ1 1-4, clocks, ASP, PWR_CTRL3; read-only */
 int cs_check(struct cs_amp *a);				/* 0 = no IRQ1 error bit */
 void cs_power_down(struct cs_amp *a);			/* GLOBAL_EN 0, PDN_DONE, pdn patch, AMP_EN 0, gain back */

@@ -3,6 +3,8 @@
  * research/notes/cs35l41-plan.md (Linux cs35l41.c / cs35l41-lib.c / cs35l41.h, master). sp1: boost bypass only
  * (VBST = VP), no boost code; class-D gain 0 (0.5 dB) via the B2 errata, digital volume never above -20 dB; every
  * configured field is read back before GLOBAL_EN can be set; only amp 0x40 is ever written.
+ * sp8: AMP_OUT_MUTE handling, SP_RATE_CTRL / TST_FS_MON0 and the optional internal boost follow the sequence of
+ * ios-redfin (DenialOfGravity/ios-redfin, MIT; xnu patch 0953 configure() / sweet_amp_start()), checked against Linux.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,10 +21,16 @@
 #define PWR_CTRL1	0x00002014	/* bit0 GLOBAL_EN */
 #define PWR_CTRL2	0x00002018	/* bit0 AMP_EN, [5:4] BST_EN 0 off / 1 bypass (FET on, VBST = VP) / 2 boost */
 #define PWR_CTRL3	0x0000201c	/* sp6: was 0x2028 (wrong) */
+#define AMP_OUT_MUTE	0x00002024	/* sp8: bit4 OUT_MUTE */
 #define PROTECT_REL	0x00002034	/* error release bits */
 #define PUP_PDN_PATCH	0x00002084	/* 0x002f1aa0 before GLOBAL_EN, 0x002f1aa3 after power-down (unlocked) */
 #define PLL_CLK_CTRL	0x00002c04	/* [2:0] REFCLK_SEL 0 = BCLK, bit4 REFCLK_EN, [10:5] FREQ, bit11 OPEN_LOOP */
 #define GLOBAL_CLK_CTRL	0x00002c0c	/* [4:0] GLOBAL_FS, 48 kHz = 0x03 */
+#define TST_FS_MON0	0x00002d10	/* sp8: FS1 window [10:0], FS2 [23:12]; test register (unlocked) */
+#define BST_PEAK_CUR	0x00003808	/* sp8: [6:0] IPK */
+#define BST_COEFF	0x00003810	/* sp8: K1 [7:0], K2 [15:8] */
+#define BST_SLOPE_LBST	0x00003814	/* sp8: slope [15:8], LBST [1:0] */
+#define SP_RATE_CTRL	0x00004804	/* sp8: [5:0] ASP_BCLK_FREQ */
 #define SP_ENABLES	0x00004800	/* bit16 ASP_RX1_EN */
 #define SP_FORMAT	0x00004808	/* RX width [31:24], TX width [23:16], FMT [10:8] 2 = I2S, masters bits 0/4, inv 2/6 */
 #define SP_HIZ_CTRL	0x0000480c	/* [1:0] = DT cirrus,asp-sdout-hiz */
@@ -269,14 +277,20 @@ static int otp_unpack(struct cs_amp *a)
 	return err ? -1 : 0;
 }
 
+/* sp8: AMP_OUT_MUTE read and logged */
+void cs_out_mute(struct cs_amp *a, const char *tag)
+{
+	uint32_t v;
+	if (!rd(a, AMP_OUT_MUTE, &v))
+		printf("cs35l41 %#x: AMP_OUT_MUTE %s %08x (bit4 %s)\n", a->addr, tag, v, v & 0x10 ? "muted" : "clear");
+}
+
 int cs_config(struct cs_amp *a, int vol_db, int boost)
 {
 	if (!a->probed || a->addr != AMP_ADDR) {
 		printf("cs35l41 %#x: config refused (%s)\n", a->addr, a->probed ? "only 0x40" : "not probed");
 		return -1;
 	}
-	if (boost)
-		printf("cs35l41 %#x: boost not available in this version: bypass (VBST = VP)\n", a->addr);
 	if (vol_db > VOL_CEIL_DB)
 		vol_db = VOL_CEIL_DB;	/* sp1: hard ceiling */
 	if (vol_db < VOL_FLOOR_DB)
@@ -302,8 +316,26 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 	int g = a->amp_gain < 0 ? 0 : a->amp_gain > AMP_GAIN_MAX ? AMP_GAIN_MAX : a->amp_gain;
 	printf("cs35l41 %#x: analog gain %d (%d.5 dB)\n", a->addr, g, g);
 	err |= upd(a, AMP_GAIN_CTRL, 0x3e0, (uint32_t)g << 5);
-	/* boost bypass: FET on, VBST = VP; no boost-enable path in this version */
-	err |= upd(a, PWR_CTRL2, 0x30, 1u << 4);
+	if (boost) {
+		/*
+		 * sp8 (--amp-boost): internal boost, Linux cs35l41-lib.c cs35l41_boost_config() for the stock DT
+		 * (live.dts: boost-ind-nanohenry 1000 -> LBST 0, boost-cap-microfarad 15 -> range 0, boost-peak-milliamp
+		 * 3700): k1_table[0][0] 0x24, k2_table[0][0] 0x24, slope_table[0] 0x75, IPK (3700 - 1600) / 50 + 0x10 =
+		 * 0x3a; then BST_EN 2. Same values as ios-redfin 0953 configure().
+		 */
+		printf("cs35l41 %#x: boost: K1 0x24 K2 0x24 slope 0x75 LBST 0 IPK 0x3a (3700 mA), BST_EN 2\n", a->addr);
+		err |= upd(a, BST_COEFF, 0xffff, 0x24 | 0x24 << 8);
+		err |= upd(a, BST_SLOPE_LBST, 0xff03, 0x75 << 8 | 0);
+		err |= upd(a, BST_PEAK_CUR, 0x7f, (3700 - 1600) / 50 + 0x10);
+		err |= upd(a, PWR_CTRL2, 0x30, 2u << 4);
+	} else	/* boost bypass: FET on, VBST = VP */
+		err |= upd(a, PWR_CTRL2, 0x30, 1u << 4);
+	if (a->clk) {	/* sp8: SP_RATE_CTRL before the PLL, as Linux cs35l41_component_set_sysclk / ios-redfin 0953 */
+		uint32_t v;
+		err |= upd(a, SP_RATE_CTRL, 0x3f, BCLK_CODE);	/* our 1.536 MHz BCLK code (redfin's 0x28 is 6.144 MHz) */
+		if (!rd(a, SP_RATE_CTRL, &v))
+			printf("cs35l41 %#x: clk: SP_RATE_CTRL read back %08x\n", a->addr, v);
+	}
 	/* PLL from BCLK 1.536 MHz (48 kHz x 16 bit x 2), cs35l41.c:841-856 */
 	err |= upd(a, PLL_CLK_CTRL, 1u << 11, 1u << 11);		/* open loop */
 	err |= upd(a, PLL_CLK_CTRL, 0x7e0, BCLK_CODE << 5);		/* freq */
@@ -311,7 +343,15 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 	err |= upd(a, PLL_CLK_CTRL, 0x7, 0);				/* ref = BCLK */
 	err |= upd(a, PLL_CLK_CTRL, 1u << 4, 1u << 4);
 	err |= upd(a, PLL_CLK_CTRL, 1u << 11, 0);			/* closed loop */
-	err |= upd(a, GLOBAL_CLK_CTRL, 0x1f, 0x03);			/* 48 kHz; SP_RATE_CTRL left alone (slave) */
+	err |= upd(a, GLOBAL_CLK_CTRL, 0x1f, 0x03);			/* 48 kHz; SP_RATE_CTRL: sp8 --amp-clk */
+	if (a->clk > 1) {	/* sp8: FS monitor (--amp-fsmon only: 16|36<<12 is Linux's >6 MHz value, ours is 1.536 MHz), test keys around it (Linux cs35l41_dai_set_sysclk, ios-redfin 0953) */
+		uint32_t v;
+		err |= unlock(a);
+		err |= set(a, TST_FS_MON0, 16 | 36u << 12);
+		if (!rd(a, TST_FS_MON0, &v))
+			printf("cs35l41 %#x: clk: TST_FS_MON0 read back %08x\n", a->addr, v);
+		err |= lock(a);
+	}
 	/* ASP: I2S slave, 16-bit slots, RX1 from slot 0 (left), 16-bit words, SDOUT hi-z 3 (DT) */
 	err |= upd(a, SP_FORMAT, 0xffff0755, 16u << 24 | 16u << 16 | 2u << 8);
 	err |= upd(a, SP_RX_SLOT, 0x3f, 0);
@@ -324,6 +364,11 @@ int cs_config(struct cs_amp *a, int vol_db, int boost)
 	vol = (0x800 - vol) & 0x7ff;
 	printf("cs35l41 %#x: digital volume %d dB (field %#x)\n", a->addr, vol_db, vol);
 	err |= upd(a, AMP_DIG_VOL, 0x7ff << 3, vol << 3);
+	if (a->out_mute) {	/* sp8: output muted until 2 ms after GLOBAL_EN (ios-redfin 0953 configure()) */
+		cs_out_mute(a, "before set");
+		err |= upd(a, AMP_OUT_MUTE, 0x10, 0x10);
+		cs_out_mute(a, "after set");
+	}
 	err |= upd(a, PWR_CTRL2, 1, 1);					/* AMP_EN */
 	return err ? -1 : 0;
 }
@@ -382,9 +427,18 @@ int cs_power_up(struct cs_amp *a)
 	a->up = 1;	/* from the GLOBAL_EN attempt on, cs_power_down runs the full power-down */
 	if (upd(a, PWR_CTRL1, 1, 1))
 		return -1;
+	int t0 = 0;
+	if (a->out_mute) {	/* sp8: unmute 2 ms after GLOBAL_EN, as ios-redfin 0953 sweet_amp_start() */
+		if (!dry)
+			usleep(2000);
+		if (upd(a, AMP_OUT_MUTE, 0x10, 0))
+			return -1;
+		cs_out_mute(a, "after clear");
+		t0 = 2;
+	}
 	int pll_ms = 0;	/* sp2: STATUS3 bit1 PLL_LOCK polled alongside PUP_DONE (lx/cs35l41.h:707) */
 	uint32_t s = 0, s3 = 0;
-	for (int i = 0; i < 100 && !dry; i++) {
+	for (int i = t0; i < 100 && !dry; i++) {
 		usleep(1000);
 		if (rd(a, IRQ1_STATUS1, &s) || rd(a, IRQ1_STATUS3, &s3))
 			return -1;
@@ -433,6 +487,8 @@ void cs_power_down(struct cs_amp *a)
 	if (a->addr != AMP_ADDR || !a->configured)
 		return;
 	if (a->up) {
+		if (a->out_mute)	/* sp8: mute before GLOBAL_EN 0, as ios-redfin 0953 */
+			upd(a, AMP_OUT_MUTE, 0x10, 0x10);
 		upd(a, PWR_CTRL1, 1, 0);
 		int i;
 		for (i = 0; i < 100 && !dry; i++) {

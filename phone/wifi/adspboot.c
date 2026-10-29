@@ -947,11 +947,15 @@ static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16
 	apr_due = now_ms() + 3000;
 }
 
+static int amp_invert_clk;	/* sp8: --amp-invert-clk */
+
 static void afe_clock(uint32_t opcode, int enable)
 {
 	uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_clock_set)] = { 0 };
 	struct afe_param p = { AFE_MODULE_CLOCK_SET, AFE_PARAM_ID_CLOCK_SET, sizeof(struct afe_clock_set), 0 };
-	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000 * 16 * 2, 1 /* COUPLE_NO */, 0, (uint32_t)enable };
+	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000 * 16 * 2,
+				   amp_invert_clk ? 4 /* sp8: INVERT_COUPLE_NO, ios-redfin */ : 1 /* COUPLE_NO */, 0,
+				   (uint32_t)enable };
 	uint32_t size = sizeof(p) + sizeof(c);	/* payload size; address 0/0 and mem_map_handle 0: in band */
 	memcpy(b, &size, 4);
 	memcpy(b + 16, &p, sizeof(p));
@@ -1185,7 +1189,9 @@ static int pcm_dbfs = -20;	/* sp5: tone level, clamped to -40..-6 dBFS */
 #define AMP_TONE_PERIODS	380	/* 3.8 s with --amp: the tone outlasts the amp window */
 #define AMP_TAIL_PERIODS	50	/* off with 0.5 s of tone still to play */
 static int amp_on, amp_check, amp_db = -30, amp_ready, amp_used;
-static struct cs_amp amp = { .addr = 0x40 };
+/* sp8: --amp-unmute / --amp-clk on by default (ios-redfin 0953 sequence), --amp-boost / --amp-invert-clk off */
+static struct cs_amp amp = { .addr = 0x40, .out_mute = 1, .clk = 1 };
+static int amp_boost, amp_mid_read;
 static uint64_t amp_t0, amp_next;
 /* sp6: snapshots at 0.5 / 2.5 s; --amp-pcm-stop-test then stops the PCM refills, reads again 300 ms later, powers
  * down (the stalled stream then ends through the 1 s WRITE_DONE timeout) */
@@ -1241,7 +1247,7 @@ static int amp_prepare(void)
 {
 	if (gi2c_init() || cs_probe(&amp))
 		return -1;
-	if (cs_config(&amp, amp_db, 0) || cs_verify(&amp)) {
+	if (cs_config(&amp, amp_db, amp_boost) || cs_verify(&amp)) {
 		amp_off();
 		return -1;
 	}
@@ -1276,6 +1282,10 @@ static void amp_poll(void)
 		return;
 	amp_next = now_ms() + 50;
 	uint64_t on = now_ms() - amp_t0;
+	if (!amp_mid_read && on >= AMP_MAX_MS / 2) {	/* sp8: AMP_OUT_MUTE once at mid-tone */
+		amp_mid_read = 1;
+		cs_out_mute(&amp, "mid-tone");
+	}
 	if (amp_diag_n == 0 && on >= 500) {
 		amp_diag_n++;
 		cs_diag(&amp, "0.5s");
@@ -2260,6 +2270,20 @@ int main(int argc, char **argv)
 			amp_pcm_stop_test = 1;
 		else if (!strcmp(argv[i], "--amp-check"))	/* sp1: configure + read back only, no GLOBAL_EN, then exit */
 			amp_check = 1;
+		else if (!strcmp(argv[i], "--amp-unmute"))	/* sp8: AMP_OUT_MUTE set at config, cleared after GLOBAL_EN */
+			amp.out_mute = 1;
+		else if (!strcmp(argv[i], "--amp-no-unmute"))
+			amp.out_mute = 0;
+		else if (!strcmp(argv[i], "--amp-clk"))	/* sp8: SP_RATE_CTRL = BCLK code */
+			amp.clk = 1;
+		else if (!strcmp(argv[i], "--amp-fsmon"))	/* sp8: + TST_FS_MON0 16|36<<12 (Linux's >6 MHz value) */
+			amp.clk = 2;
+		else if (!strcmp(argv[i], "--amp-no-clk"))
+			amp.clk = 0;
+		else if (!strcmp(argv[i], "--amp-boost"))	/* sp8: internal boost (BST_EN 2), stock DT values */
+			amp_boost = 1;
+		else if (!strcmp(argv[i], "--amp-invert-clk"))	/* sp8: AFE clock attri INVERT_COUPLE_NO (4) */
+			amp_invert_clk = 1;
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
 			amp_db = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--pcm-dbfs") && i + 1 < argc) {	/* sp5: clamped -40..-6 */
@@ -2345,7 +2369,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
