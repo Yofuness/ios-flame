@@ -1,15 +1,14 @@
-From ef2ed15c126501d42405a68281bc4ae9ebd72b7a Mon Sep 17 00:00:00 2001
+From 18daf92 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
-Date: Thu, 29 Oct 2026 11:36:20 -0400
+Date: Thu, 29 Oct 2026 12:00:00 -0400
 Subject: [PATCH] sunfish: read-only kern.sweet_mdpdump dumps MDP
- SSPP/CTL/LM/INTF/PP and apps SMMU SMR/S2CR for SID 0x800 (0220)
+ SSPP/CTL/LM/INTF/PP; maps MDSS on first read only; sweetmdpdump=0 skips (0220)
 
 ---
  bsd/conf/files                    |   1 +
- bsd/dev/sweet_mdpdump.c           | 180 ++++++++++++++++++++++++++++++
+ bsd/dev/sweet_mdpdump.c           | 163 ++++++++++++++++++++++++++++++++++++++
  iokit/Kernel/arm/SweetBattery.cpp |   2 +
- 3 files changed, 183 insertions(+)
- create mode 100644 bsd/dev/sweet_mdpdump.c
+ 3 files changed, 166 insertions(+)
 
 diff --git a/bsd/conf/files b/bsd/conf/files
 index d68d1a1..6457cfe 100644
@@ -25,15 +24,18 @@ index d68d1a1..6457cfe 100644
  bsd/dev/redwood_net.c		standard
 diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
 new file mode 100644
-index 0000000..ca93630
+index 0000000..f514296
 --- /dev/null
 +++ b/bsd/dev/sweet_mdpdump.c
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,163 @@
 +/*
-+ * 0220: read-only MDP/SMMU state dump (zero-copy plan step 0). kern.sweet_mdpdump
-+ * returns the SSPP, CTL, LM, INTF and PP registers of MDSS (0x0ae00000) and the
-+ * apps SMMU SMR/S2CR entries matching the MDP stream 0x800. 32-bit loads only,
++ * 0220: read-only MDP state dump (zero-copy plan step 0). kern.sweet_mdpdump
++ * returns the SSPP, CTL, LM, INTF and PP registers of MDSS (0x0ae00000). 32-bit loads only,
 + * no writes; MDSS is clocked while the panel scans out. No boot-arg: on demand.
++ * Revised after kernel96 hung (md1): registration maps nothing; the first read
++ * maps MDSS only (ml_io_map, as SweetFramebuffer); SMMU part dropped (adspboot
++ * reads it). The range covers 0x0ae44000 but nothing there is read.
++ * sweetmdpdump=0 skips registration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <stdarg.h>
@@ -44,18 +46,16 @@ index 0000000..ca93630
 +#include <kern/thread_call.h>
 +#include <kern/clock.h>
 +#include <libkern/OSAtomic.h>
++#include <pexpert/pexpert.h>
 +
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 +void sweet_mdpdump_register(void);
 +
 +#define MDP_PA      0x0ae00000u
 +#define MDP_LEN     0x84208u
-+#define SMMU_PA     0x15000000u	/* live.dts apps-smmu reg */
-+#define SMMU_LEN    0x100000u
-+#define MDP_SID     0x800u
 +#define DUMP_MAX    8192
 +
-+static vm_offset_t mdp, smmu;
++static vm_offset_t mdp;
 +static char dump_buf[DUMP_MAX];
 +static int dump_len, dump_busy;
 +
@@ -135,27 +135,6 @@ index 0000000..ca93630
 +	md_words("PP0", 0x71000, 4);
 +	md_words("PP1", 0x71800, 4);
 +
-+	/* SMMUv2 GR0: IDR0 NUMSMRG [7:0]; IDR1 PAGESIZE [31], NUMPAGENDXB [30:28]. */
-+	uint32_t idr0 = md_rd(smmu, 0x20), idr1 = md_rd(smmu, 0x24);
-+	unsigned nsmr = idr0 & 0xffu;
-+	uint32_t pg = (idr1 & (1u << 31)) ? 0x10000u : 0x1000u;
-+	uint32_t cbbase = (1u << (((idr1 >> 28) & 7u) + 1)) * pg;
-+	md_out("SMMU idr0 %08x idr1 %08x nsmr %u cb %#x\n", idr0, idr1, nsmr, cbbase);
-+	for (unsigned n = 0; n < nsmr && n < 128; n++) {
-+		uint32_t smr = md_rd(smmu, 0x800 + 4 * n);
-+		uint32_t id = smr & 0xffffu, mask = (smr >> 16) & 0x7fffu;
-+		if (!(smr & (1u << 31)) || ((MDP_SID ^ id) & ~mask & 0x7fffu)) {
-+			continue;
-+		}
-+		uint32_t s2cr = md_rd(smmu, 0xc00 + 4 * n);
-+		unsigned type = (s2cr >> 16) & 3u, cb = s2cr & 0xffu;
-+		md_out("SMR%u %08x id %#x mask %#x S2CR %08x type %u(%s) cb %u", n, smr, id,
-+		    mask, s2cr, type, type == 0 ? "xlate" : type == 1 ? "bypass" : "fault", cb);
-+		if (type == 0 && cbbase + (cb + 1) * pg <= SMMU_LEN) {
-+			md_out(" sctlr %08x", md_rd(smmu, cbbase + cb * pg));
-+		}
-+		md_out("\n");
-+	}
 +}
 +
 +static int
@@ -168,6 +147,13 @@ index 0000000..ca93630
 +	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
 +		return EBUSY;
 +	}
++	if (!mdp) {
++		mdp = ml_io_map(MDP_PA, round_page(MDP_LEN)); /* first read only */
++	}
++	if (!mdp) {
++		dump_busy = 0;
++		return ENOMEM;
++	}
 +	md_dump();
 +	int err = SYSCTL_OUT(req, dump_buf, dump_len + 1);
 +	dump_busy = 0;
@@ -177,27 +163,23 @@ index 0000000..ca93630
 +/* Manual OID as in 0195 (sweet_spmi.c): permanent nodes panic after lockdown. */
 +SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdpdump,
 +    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
-+    0, 0, sysctl_sweet_mdpdump, "A", "sunfish MDP/SMMU register dump (0220)");
++    0, 0, sysctl_sweet_mdpdump, "A", "sunfish MDP register dump (0220)");
 +
 +static void
 +md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 +{
-+	mdp = ml_io_map(MDP_PA, round_page(MDP_LEN));
-+	smmu = ml_io_map(SMMU_PA, SMMU_LEN);
-+	if (!mdp || !smmu) {
-+		printf("SWEET MDP: MMIO mapping failed\n");
-+		return;
-+	}
 +	sysctl_register_oid(&sysctl__kern_sweet_mdpdump);
 +	printf("SWEET MDP: kern.sweet_mdpdump ready\n");
 +}
 +
-+/* Called from SweetBattery::start, like sweet_camprobe_register(). */
++/* Called from SweetBattery::start, like sweet_camprobe_register(); sweetmdpdump=0 skips. */
 +void
 +sweet_mdpdump_register(void)
 +{
 +	static thread_call_t reg;
-+	if (reg) {
++	int on = 1;
++	(void)PE_parse_boot_argn("sweetmdpdump", &on, sizeof(on));
++	if (!on || reg) {
 +		return;
 +	}
 +	reg = thread_call_allocate(md_register_late, NULL);
@@ -210,7 +192,7 @@ index 0000000..ca93630
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
-index d2574ec..43f646c 100644
+index d2574ec..6a26a08 100644
 --- a/iokit/Kernel/arm/SweetBattery.cpp
 +++ b/iokit/Kernel/arm/SweetBattery.cpp
 @@ -20,6 +20,7 @@ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
@@ -225,10 +207,7 @@ index d2574ec..43f646c 100644
  	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
  	sweet_ampreset_register(); /* 0217: no-op without sweetampreset=1 */
  	sweet_camprobe_register(); /* 0211: no-op without sweetcamprobe=1 */
-+	sweet_mdpdump_register(); /* 0220: read-only kern.sweet_mdpdump */
++	sweet_mdpdump_register(); /* 0220: read-only kern.sweet_mdpdump; sweetmdpdump=0 skips */
  	/* 0197: log the PM6150 PON reason registers once (read only); sweetpon=0 skips. */
  	int pon = 1;
  	(void)PE_parse_boot_argn("sweetpon", &pon, sizeof(pon));
--- 
-2.56.0
-
