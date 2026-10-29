@@ -23,6 +23,13 @@
 ### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
 - Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
 
+### 2026-10-29 19:55 ROTATION WORKS: the app scene follows a direct settings update (rot3, kernel98; SweetMetal2 4963564)
+- iOS 16.7 SpringBoard has no SBApplication -> scene-handle selector; the route: `+[SBSceneManagerCoordinator mainDisplaySceneManager]` -> `-externalForegroundApplicationSceneHandles` -> `-sceneIfExists` (research/notes/rotation-ios16.md; class-dumps in research/re/sb/).
+- P (Calculator in front): handle SBDeviceApplicationSceneHandle currentInterfaceOrientation 1, supported 26; scene sceneID:com.apple.calculator-default, UIApplicationSceneSettings orientation 1, frame 375x812, deviceOrientation 0.
+- `S 3` = `-[FBScene updateSettingsWithBlock:]` setting interfaceOrientation 3 + deviceOrientation 3, frame unchanged: Calculator re-lays out in the landscape scientific layout, upright and full screen (webcam rot3-b); settings stay 3 after 0.5 s and 2 s (no revert); SpringBoard's switcher host view becomes 812x375.
+- `S 3 f` (frame swapped to 812x375) breaks it (half-screen portrait-style layout); `S 1` with the swapped frame left a rotated, clipped layout: keep the scene frame portrait-shaped (375x812).
+- Next: wire the D/E device-orientation path (or a single command / Control Center toggle) to update the front scene, restore the frame on S 1; then sensors would drive it once the ADSP SSC works.
+
 ### 2026-10-29 11:00 rotation: SpringBoard probe P (rot2, kernel95; SweetMetal2 e63cb6d)
 - New `P` command in /var/local/sweet-orient (SpringBoard, read-only): lines go to /var/local/mtl2.log (the per-boot live log did not show them).
 - Calculator in front. After `D 3 0` + `E 3`: activeInterfaceOrientation 3; the SBMainSwitcherWindow's _UISceneLayerHostContainerView becomes 812x375 (was 375x812) with an identity layer transform and sublayerTransform, and that window's interfaceOrientation stays 1. The wallpaper and root-scene host views stay 375x812 portrait. Webcam: keypad unchanged.
