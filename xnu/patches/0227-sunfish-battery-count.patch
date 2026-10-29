@@ -1,0 +1,249 @@
+From a0b0627ed0615d200882bced5d6c9ddbc07ebbd0 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 16:46:46 -0400
+Subject: [PATCH] sunfish: battery coulomb count with sweetbattery=2, 3080 mAh
+ (0227)
+
+Ported from ios-redfin 0966 (MIT).
+---
+ iokit/Kernel/arm/SweetBattery.cpp | 115 ++++++++++++++++++++++++++----
+ 1 file changed, 100 insertions(+), 15 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 6a26a08..fe036b8 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -3,6 +3,13 @@
+  * sweetbattery=1: read-only PM6150 polling every 30 seconds; voltage-derived
+  * SOC is an UNCALIBRATED estimate, not a replacement for the Linux QG algo.
+  * See report.md for binary evidence, register provenance and integration.
++ *
++ * 0227: sweetbattery=2 counts charge, ported from ios-redfin 0966 (MIT,
++ * DenialOfGravity/ios-redfin): poll every 5 s, seed from the QG SDAM
++ * (0xb646 valid, 0xb647 SOC) when within 15 % of the voltage estimate, then
++ * integrate LAST_ADC_I 0x48c2 with a 0.2 %/poll pull toward the voltage
++ * estimate at rest. Unknown QG subtype: voltage mode. Capacity 3080 mAh
++ * (DT google,chg-battery-capacity) in both modes. SPMI reads only.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <device/device_types.h> /* io_buf_ptr_t for private OSKext headers */
+@@ -13,10 +20,14 @@
+ #include <libkern/c++/OSCollectionIterator.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/clock.h>
++#include <mach/mach_time.h>
+ #include <sys/sysctl.h>
+ /* bsd/dev/sweet_spmi.c */
+ extern "C" int sweet_spmi_init(void);
+ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++/* 0227: sunfish cell 3080 mAh; mode 2 polls every 5 s, mode 1 every 30 s */
++static const unsigned kCapacityMah = 3080;
++#define SWEET_POLL_MS (fMode == 2 ? 5000u : 30000u)
+ extern "C" void sweet_torch_register(void); /* 0190 */
+ extern "C" void sweet_ampreset_register(void); /* 0217 */
+ extern "C" void sweet_camprobe_register(void); /* 0211, bsd/dev/sweet_camprobe.c */
+@@ -43,6 +54,9 @@ private:
+ 	int fLastMode;
+ 	int fShown;		/* sunfish: smoothed % shown to iOS, -1 until the first reading */
+ 	unsigned fEmaMv, fPolls;
++	int fMode;		/* 0227: sweetbattery boot-arg, 1 voltage, 2 counting */
++	int64_t fCharge;	/* 0227: coulomb count, uAh; -1 until seeded */
++	uint64_t fLastAbs;	/* 0227: time of the last counted sample */
+ 	uint64_t fPonNextNs;	/* 0198: next PON repeat, 0 = none */
+ 	void putNumber(const char *key, UInt32 value);
+ 	void putBool(const char *key, bool value);
+@@ -92,6 +106,9 @@ SweetBattery::init(OSDictionary *dictionary)
+ 	fShown = -1;
+ 	fEmaMv = 0;
+ 	fPolls = 0;
++	fMode = 0;
++	fCharge = -1;
++	fLastAbs = 0;
+ 	return true;
+ }
+ 
+@@ -121,11 +138,11 @@ void
+ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+     bool capable, bool charging, bool full, bool measured, bool currentValid)
+ {
+-	/* Use consistent mAh units (DT nominal=5020). powerd computes C*100/M. */
+-	const unsigned capacity = (5020u * percent + 50u) / 100u;
++	/* 0227: mAh units, sunfish DT capacity 3080 (was 5020). powerd computes C*100/M. */
++	const unsigned capacity = (kCapacityMah * percent + 50u) / 100u;
+ 	setBatteryInstalled(true);
+ 	setCurrentCapacity(capacity);
+-	setMaxCapacity(5020);
++	setMaxCapacity(kCapacityMah);
+ 	setExternalConnected(external);
+ 	setExternalChargeCapable(capable);
+ 	setIsCharging(charging);
+@@ -139,8 +156,8 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	putBool("FullyCharged", full);
+ 	putBool("AppleRawExternalConnected", external);
+ 	putNumber("AppleRawCurrentCapacity", capacity);
+-	putNumber("AppleRawMaxCapacity", 5020);
+-	putNumber("DesignCapacity", 5020);
++	putNumber("AppleRawMaxCapacity", kCapacityMah);
++	putNumber("DesignCapacity", kCapacityMah);
+ 	putNumber("InstantAmperage", (UInt32)ma);
+ 	/* iOS battery convention: centidegrees C; fixed 25 C, NOT measured. */
+ 	putNumber("Temperature", 2500);
+@@ -157,7 +174,7 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 		const char *keys[] = {kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey,
+ 		    kIOBatteryVoltageKey, kIOBatteryAmperageKey, kIOBatteryCycleCountKey,
+ 		    kIOBatteryFlagsKey};
+-		UInt32 values[] = {capacity, 5020, mv, (UInt32)ma, 0,
++		UInt32 values[] = {capacity, kCapacityMah, mv, (UInt32)ma, 0,
+ 		    (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
+ 		    (charging ? kIOBatteryCharge : 0))};
+ 		for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+@@ -228,6 +245,23 @@ SweetBattery::poll(void)
+ {
+ 	uint8_t type, present, usb, path, charger, error, temperature;
+ 	uint16_t rawVoltage;
++	/* 0227: once, read-only dump of the QG SDAM saved-SOC area to confirm 0x46/0x47 */
++	if (fReal && fPolls == 0) {
++		char line[16 * 3 + 1];
++		unsigned n = 0;
++		for (unsigned i = 0; i < 16; i++) {
++			uint8_t v = 0;
++			const char *hex = "0123456789abcdef";
++			if (sweet_spmi_read(0, 0xb640 + i, &v)) {
++				line[n++] = '?'; line[n++] = '?';
++			} else {
++				line[n++] = hex[v >> 4]; line[n++] = hex[v & 15];
++			}
++			line[n++] = ' ';
++		}
++		line[n] = 0;
++		IOLog("SWEET BATT: SDAM b640: %s\n", line);
++	}
+ 	bool valid = fReal &&
+ 	    !sweet_spmi_read(0, 0x4804, &type) && type == 0x0d &&
+ 	    !sweet_spmi_read(0, 0x4808, &present) && (present & 1u) &&
+@@ -256,7 +290,7 @@ SweetBattery::poll(void)
+ 	/* Inhibit (0) does not by itself establish full capacity. */
+ 	bool full = external && state == 5 && !(error & 2u);
+ 	int ma = 0;
+-	uint8_t subtype;
++	uint8_t subtype = 0;
+ 	uint16_t rawCurrent;
+ 	bool currentValid = !sweet_spmi_read(0, 0x4805, &subtype) &&
+ 	    (subtype == 3 || subtype == 4) && readWord(0x48c2, &rawCurrent) &&
+@@ -278,14 +312,58 @@ SweetBattery::poll(void)
+ 		ocv = (unsigned)((int)mv + adj);
+ 	}
+ 	fEmaMv = fEmaMv ? (fEmaMv * 3u + ocv) / 4u : ocv;
+-	int target = full ? 100 : (int)estimatePercent(fEmaMv);
++	int estimate = full ? 100 : (int)estimatePercent(fEmaMv);
++	int target = estimate;
++	/* 0227: sweetbattery=2, coulomb count as 0966; an unknown subtype stays in voltage mode */
++	bool counting = fMode == 2 && currentValid;
++	if (fMode == 2 && fPolls == 0) {
++		IOLog("SWEET BATT: QG subtype %u -> %s\n", subtype,
++		    currentValid ? "counting" : "voltage (unknown subtype or bad current)");
++	}
++	const int64_t cap = (int64_t)kCapacityMah * 1000;
++	uint64_t nowAbs = mach_absolute_time();
++	if (counting && fCharge < 0) {
++		uint8_t sdamValid = 0, sdamSoc = 0xff;
++		bool sdam = !sweet_spmi_read(0, 0xb646, &sdamValid) &&
++		    !sweet_spmi_read(0, 0xb647, &sdamSoc) && sdamValid == 1 && sdamSoc <= 100;
++		int diff = sdam ? (int)sdamSoc - estimate : 0;
++		bool useSdam = sdam && diff <= 15 && diff >= -15;
++		int seed = useSdam ? (int)sdamSoc : estimate;
++		fCharge = cap * seed / 100;
++		IOLog("SWEET BATT: seeded %d%% from %s (SDAM valid %u soc %u, voltage estimate %d%% at %u mV)\n",
++		    seed, useSdam ? "SDAM" : "voltage", sdamValid, sdamSoc, estimate, fEmaMv);
++	} else if (counting) {
++		uint64_t ns = 0;
++		absolutetime_to_nanoseconds(nowAbs - fLastAbs, &ns);
++		uint64_t ms = ns / 1000000;
++		if (ms > 4 * 5000u) {
++			ms = 4 * 5000u;	/* a stalled poll must not integrate a stale current */
++		}
++		fCharge += (int64_t)ma * (int64_t)ms / 3600;	/* mA * ms -> uAh */
++	}
++	fLastAbs = nowAbs;
++	if (counting) {
++		int counted = (int)((fCharge * 100 + cap / 2) / cap);
++		/* At rest only (no load/charge sag): pull 0.2 % per poll toward the voltage estimate. */
++		if (full) {
++			fCharge = cap;
++		} else if (ma > -100 && ma < 100 && (counted - estimate > 10 || estimate - counted > 10)) {
++			fCharge += (estimate > counted ? 1 : -1) * cap / 500;
++		}
++		if (fCharge < 0) {
++			fCharge = 0;
++		} else if (fCharge > cap) {
++			fCharge = cap;
++		}
++		target = (int)((fCharge * 100 + cap / 2) / cap);
++	}
+ 	if (fShown < 0) {
+ 		fShown = target;
+ 	} else {
+ 		/* Direction from the measured current: a weak USB port can say
+ 		 * "charging" while the battery still drains (-137 mA seen). */
+-		bool gaining = full || (currentValid ? ma > 50 : charging);
+-		bool losing = currentValid ? ma < -50 : !external;
++		bool gaining = full || (currentValid ? ma > (counting ? -50 : 50) : charging);
++		bool losing = currentValid ? ma < (counting ? 50 : -50) : !external;
+ 		if (target > fShown && gaining) {
+ 			fShown++;
+ 		} else if (target < fShown && losing) {
+@@ -297,7 +375,9 @@ SweetBattery::poll(void)
+ 	 * every 20th poll, to find the input-current and fast-charge-current settings.
+ 	 * Blocks: CHGR 0x1000, DCDC 0x1100, BATIF 0x1200, USBIN 0x1300, TYPEC 0x1500, MISC 0x1600.
+ 	 */
+-	if (fPolls == 2 || (fPolls > 2 && (fPolls % 20u) == 0)) {
++	/* 0227: mode 2 polls 6x as often; keep the same wall-clock intervals */
++	const unsigned slow = fMode == 2 ? 6u : 1u;
++	if (fPolls == 2 || (fPolls > 2 && (fPolls % (20u * slow)) == 0)) {
+ 		static const unsigned bases[] = { 0x1000, 0x1100, 0x1200, 0x1300, 0x1500, 0x1600 };
+ 		for (unsigned b = 0; b < sizeof(bases) / sizeof(bases[0]); b++) {
+ 			for (unsigned row = 0; row < 0x80; row += 16) {
+@@ -318,7 +398,11 @@ SweetBattery::poll(void)
+ 			}
+ 		}
+ 	}
+-	if ((fPolls++ % 10u) == 0) {
++	if (fMode == 2 && (fPolls % 12u) == 0) {
++		IOLog("SWEET BATT: pct %d (count %lld mAh, vEst %d%%, I %d mA, mode %s)\n", fShown,
++		    counting ? (long long)(fCharge / 1000) : -1LL, estimate, ma, counting ? "counting" : "voltage");
++	}
++	if ((fPolls++ % (10u * slow)) == 0) {
+ 		IOLog("SWEET BATTERY: %umV %dmA ocv %u ema %u -> target %d%% shown %d%% ext=%d chg=%d\n",
+ 		    mv, ma, ocv, fEmaMv, target, fShown, external, charging);
+ 		uint64_t now;
+@@ -341,7 +425,7 @@ SweetBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
+ 	SweetBattery *self = OSDynamicCast(SweetBattery, owner);
+ 	if (self && self->fRunning) {
+ 		self->poll();
+-		sender->setTimeoutMS(30000);
++		sender->setTimeoutMS(self->fMode == 2 ? 5000u : 30000u);
+ 	}
+ }
+ 
+@@ -353,7 +437,8 @@ SweetBattery::start(IOService *provider)
+ 	}
+ 	int real = 0;
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+-	fReal = real == 1 && sweet_spmi_init() == 0;
++	fReal = (real == 1 || real == 2) && sweet_spmi_init() == 0; /* 0227: 2 = counting */
++	fMode = fReal ? real : 0;
+ 	sweet_torch_register(); /* 0190: no-op without sweettorch=1 */
+ 	sweet_ampreset_register(); /* 0217: no-op without sweetampreset=1 */
+ 	sweet_camprobe_register(); /* 0211: no-op without sweetcamprobe=1 */
+@@ -397,7 +482,7 @@ SweetBattery::start(IOService *provider)
+ 		if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
+ 			fTimerAdded = true;
+ 			fRunning = true;
+-			fTimer->setTimeoutMS(30000);
++			fTimer->setTimeoutMS(SWEET_POLL_MS);
+ 		} else {
+ 			fReal = false;
+ 			poll();
+-- 
+2.56.0
+

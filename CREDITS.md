@@ -46,6 +46,7 @@ what you need to fetch yourself.
   xnu patch 0226 (`bsd/dev/sweet_btbridge.c`, the Bluetooth kernel transport: kernel control
   com.apple.uart.bluetooth, /dev/cu.bluetooth, /dev/btbridge) is adapted from their xnu patches 1010 and 1015
   (Copyright (c) 2026 dipa-studio, MIT; their xnu patches are APSL like ours).
+  xnu patch 0227 (`SweetBattery.cpp` coulomb count, SDAM seed, rest pull) is ported from their xnu patch 0966 (MIT).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)
