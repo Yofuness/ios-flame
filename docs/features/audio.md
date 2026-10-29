@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 DSP boots READY, pd-mapper answered, first FastRPC call (root PD attach) works; sensors PD needs its files; no sound yet. **Updated:** 2026-10-29.
+**State:** 🟡 DSP boots READY and stays up (sleepstate SMP2P entry), root + sensors PD served over FastRPC; no sound yet. **Updated:** 2026-10-29.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 14:05 ADSP survives: SMP2P "sleepstate" entry (au14; kernel95; adspboot f02e2a6)
+- f02e2a6: outbound SMP2P item 429 now has "master-kernel" = 0 and "sleepstate" = 1 (bit 0 = AP awake) before the PAS reset (`--no-sleepstate` = old).
+- au14 (ssh 16 s, 4454 mV): `smp2p out item 429: entries 2: "master-kernel" = 0, "sleepstate" = 1`, READY 114 ms, root + sensors PD attached and served (sns_reg_config, soc0 read ok). No CRASH, no PD FAILURE, no sar.cc line in adspboot's output or the kernel log; ~7 min later the ADSP's SMP2P state is still 6 (ready) — every earlier run went to 7 at 10.1 s.
+- adspboot itself stopped printing after the attach phase (the 120 s watch printed nothing; killed by the runner's timeout). stdout is line-buffered, so it likely blocks in the listener; to fix.
+- Next: fix the adspboot stall; then APR (apr_audio_svc channel) towards a speaker tone.
 
 ### 2026-10-29 13:50 the 10 s fatal decoded (Hexagon disassembly; research/notes/adsp-sarclient.md)
 - llvm-objdump (hexagon) on the reassembled adsp.elf: SarClient init (b13 0xb2164e18) -> SeeHelper::init 0xb20660bc: findSuidSync("resampler"), then findSuidSync("remote_proc_state"), each 40 x 250 ms = 10 s; failure -> "Failed to initialize ASH SEE helper" -> fatal sar.cc.
