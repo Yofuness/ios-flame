@@ -1,7 +1,7 @@
 /*
  * sctl: read or set an integer sysctl (the phone has no sysctl binary).
  *   sctl NAME        print NAME's value (int; string sysctls print as text)
- *   sctl NAME=VALUE  set an int sysctl, then print the value read back
+ *   sctl NAME=VALUE  set an int sysctl (decimal or 0x hex; > INT_MAX is written as 64 bits), then print it back
  * E.g. sctl kern.sweet_torch=50 (xnu 0190/0195, boot with sweettorch=1).
  */
 #include <stdio.h>
@@ -41,8 +41,11 @@ int main(int argc, char **argv)
 	char *eq = strchr(argv[1], '=');
 	if (eq) {
 		*eq = 0;
-		int v = atoi(eq + 1);
-		if (sysctlbyname(argv[1], NULL, NULL, &v, sizeof(v)) != 0) {
+		unsigned long long q = strtoull(eq + 1, NULL, 0);	/* decimal or 0x hex */
+		int v = (int)q;
+		/* values above INT_MAX go as 64 bits (quad sysctls such as kern.sweet_mdp_src) */
+		int big = q > 0x7fffffffull;
+		if (sysctlbyname(argv[1], NULL, NULL, big ? (void *)&q : (void *)&v, big ? sizeof(q) : sizeof(v)) != 0) {
 			perror(argv[1]);
 			return 1;
 		}
