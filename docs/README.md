@@ -12,6 +12,8 @@ feature changes state). Rules: [CLAUDE.md](../CLAUDE.md).
 | [methods.md](methods.md) | tools and methods: boot, test loop, benches, logs, profiling, RE |
 | [reference/](reference/) | register dumps and hardware notes ([adreno618-notes.md](reference/adreno618-notes.md), [charger-regs.md](reference/charger-regs.md)) |
 | [recovery.md](recovery.md) | back to stock Android on the Pixel 4a |
+| [setup.md](setup.md) | from a stock Pixel 4a to the current iOS state, step by step |
+| [device-changes.md](device-changes.md) | every change made on the phone and what reproduces it |
 | [archive/](archive/) | the old status tables ([status-2026-10-28.md](archive/status-2026-10-28.md)), the flame docs ([archive/flame/](archive/flame/)) and the sweet docs ([archive/sweet/](archive/sweet/)) |
 
 Feature files: [apps](features/apps.md), [audio](features/audio.md), [battery](features/battery.md),

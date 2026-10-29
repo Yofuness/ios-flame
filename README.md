@@ -68,6 +68,7 @@ tools/sunfish-install-ssh.sh                          # once
 tools/sunfish-ssh                                     # root shell in iOS
 ```
 
+From a stock Pixel 4a: [docs/setup.md](docs/setup.md); every on-device change: [docs/device-changes.md](docs/device-changes.md).
 Everything else (building, benches, logs, profiling): [docs/methods.md](docs/methods.md).
 Back to Android: [docs/recovery.md](docs/recovery.md).
 
