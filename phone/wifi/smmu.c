@@ -111,6 +111,17 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 #define T_TCR2		0x00000002u	/* PASize 40 bits */
 #define T_MAIR0		0x00000044u	/* attr 0: normal non-cacheable */
 #define T_PAGE		((1ull << 10) | (1ull << 6) | 3)	/* AF | AP 01 (EL0/EL1 RW) | page */
+/*
+ * audio step 7: SMMU_REF=1 in the environment gives the translating bank exactly the SM7150 reference's values
+ * (sound_sm7150.c space_on): walks inner/outer write-back, inner shareable (pm_wr cleans the tables to PoC),
+ * TRE|AFE|ASIDPNE in SCTLR, 16-bit ASIDs, BPSHCFG 3 in CBAR, and its leaf (SH 2, nG). Same table layout.
+ */
+#define R_SCTLR		0x00001127u	/* M | TRE | AFE | CFRE | HUPCF | ASIDPNE */
+#define R_TCR		(25u | 1u << 8 | 1u << 10 | 3u << 12 | 1u << 23)	/* 0x00803519 */
+#define R_TCR2		(1u | 1u << 4 | 7u << 15)	/* PASize 36 bits, AS (16-bit ASID), SEP 7 */
+#define R_MAIR0		0xf404ff44u
+#define R_CBAR		(1u << 16 | 3u << 8 | 0xfu << 12)	/* 0x0001f300 */
+#define R_PAGE		(3ull | 1ull << 6 | 2ull << 8 | 1ull << 10 | 1ull << 11)	/* 0xe43: attr 0, AP 01, SH 2, AF, nG */
 
 int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t iova, uint64_t pa, uint64_t len)
 {
@@ -177,8 +188,11 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 		       (T_PAGE >> 10) & 1 ? "set" : "MISSING");
 		return 0;
 	}
-	int t39 = !getenv("SMMU_T0SZ32");	/* audio step 6 */
-	uint32_t tcr = t39 ? T_TCR39 : T_TCR;
+	int ref = getenv("SMMU_REF") != NULL;	/* audio step 7 */
+	int t39 = ref || !getenv("SMMU_T0SZ32");	/* audio step 6 */
+	uint32_t tcr = ref ? R_TCR : t39 ? T_TCR39 : T_TCR, sctlr = ref ? R_SCTLR : T_SCTLR;
+	uint32_t tcr2 = ref ? R_TCR2 : T_TCR2, mair0 = ref ? R_MAIR0 : T_MAIR0, cbar = ref ? R_CBAR : CB_CBAR;
+	uint64_t page = ref ? R_PAGE : T_PAGE;
 	unsigned l1i = (unsigned)((iova >> 30) & (t39 ? 0x1ff : 3)), l1a = (unsigned)(((iova | T_ALIAS) >> 30) & 0x1ff);
 	uint64_t asid = (uint64_t)cb << 48;	/* audio step 2: ASID = bank number, as the SM7150 reference */
 	uint64_t tbl = pm_alloc(3 * 0x1000, 0x1000);
@@ -194,7 +208,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	d = l3 | 3;
 	pm_wr(l2 + 8 * ((iova >> 21) & 0x1ff), &d, 8);
 	for (uint64_t o = 0; o < len; o += 0x1000) {
-		d = (pa + o) | T_PAGE;
+		d = (pa + o) | page;
 		pm_wr(l3 + 8 * (((iova + o) >> 12) & 0x1ff), &d, 8);
 	}
 	uint64_t gr1 = s + psize, cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
@@ -203,17 +217,17 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	wr64(cbp + 0x20, l1 | asid);			/* TTBR0 */
 	wr64(cbp + 0x28, 0);				/* TTBR1 */
 	wr32(cbp + 0x30, tcr);
-	wr32(cbp + 0x10, T_TCR2);
-	wr32(cbp + 0x38, T_MAIR0);
+	wr32(cbp + 0x10, tcr2);
+	wr32(cbp + 0x38, mair0);
 	wr32(cbp + 0x3c, 0);
 	wr32(gr1 + 0x800 + 4 * cb, CB_CBA2R);
-	wr32(gr1 + 4 * cb, CB_CBAR);
+	wr32(gr1 + 4 * cb, cbar);
 	wr32(cbp + 0x610, (uint32_t)cb);		/* TLBIASID (audio step 2) */
 	wr32(cbp + 0x618, 0);				/* TLBIALL */
 	wr32(cbp + 0x7f0, 0);				/* TLBSYNC */
 	for (int i = 0; i < 1000 && (rd32(cbp + 0x7f4) & 1); i++)
 		delay_ms(1);
-	wr32(cbp, T_SCTLR);				/* SCTLR last */
+	wr32(cbp, sctlr);				/* SCTLR last */
 	uint64_t r1 = 0, r2 = 0, r3a = 0, r3b = 0;
 	pm_rd(l1 + 8 * l1i, &r1, 8);
 	if (t39) {
@@ -225,9 +239,9 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	pm_rd(l3 + 8 * ((iova >> 12) & 0x1ff), &r3a, 8);
 	pm_rd(l3 + 8 * (((iova + len - 1) >> 12) & 0x1ff), &r3b, 8);
 	uint64_t ttbr = ((uint64_t)rd32(cbp + 0x24) << 32) | rd32(cbp + 0x20);
-	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | T_PAGE) && r3b == ((pa + len - 0x1000) | T_PAGE) &&
-		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == tcr && (rd32(cbp + 0x10) & 7) == T_TCR2 &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == T_SCTLR &&
-		 rd32(gr1 + 4 * cb) == CB_CBAR;
+	int ok = r1 == (l2 | 3) && r2 == (l3 | 3) && r3a == (pa | page) && r3b == ((pa + len - 0x1000) | page) &&
+		 ttbr == (l1 | asid) && rd32(cbp + 0x30) == tcr && (rd32(cbp + 0x10) & 7) == (tcr2 & 7) &&	/* TCR2 reads back 0x62: bits 5-6 set by the hardware */ rd32(cbp) == sctlr &&
+		 rd32(gr1 + 4 * cb) == cbar;
 	printf("smmu: %s: CB%d tables %llx: TTBR0 %llx TCR %08x TCR2 %08x SCTLR %08x CBAR %08x; L3 first %llx last %llx"
 	       " -> %s\n", name, cb, (unsigned long long)tbl, (unsigned long long)ttbr, rd32(cbp + 0x30),
 	       rd32(cbp + 0x10), rd32(cbp), rd32(gr1 + 4 * cb), (unsigned long long)r3a, (unsigned long long)r3b,
@@ -261,9 +275,13 @@ void smmu_faults(const char *name, uint32_t sid)
 		uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
 		/* FSR bits 10:9 are FORMAT (0x400 = AArch64 record), not a fault: only 0xc00001fe counts. */
 		uint32_t fsr = rd32(cbp + 0x58);
-		printf("smmu: %s %#x CB%u: FSR %08x (%s) FORMAT %u FAR %08x%08x FSYNR0 %08x\n", name, sid, cb, fsr,
+		/* audio step 7: FSYNR0 decoded; PTWF = the fault came from the table walk itself */
+		uint32_t sy = rd32(cbp + 0x68);
+		printf("smmu: %s %#x CB%u: FSR %08x (%s) FORMAT %u FAR %08x%08x FSYNR0 %08x (PLVL %u WNR %u PNU %u IND %u"
+		       " NSATTR %u PTWF %u AFR %u S1CBNDX %u)\n", name, sid, cb, fsr,
 		       (fsr & 0xc00001feu) ? "FAULT" : "no fault", (fsr >> 9) & 3, rd32(cbp + 0x64), rd32(cbp + 0x60),
-		       rd32(cbp + 0x68));
+		       sy, sy & 3, (sy >> 4) & 1, (sy >> 5) & 1, (sy >> 6) & 1, (sy >> 7) & 1, (sy >> 8) & 1, (sy >> 9) & 1,
+		       (sy >> 16) & 0xff);
 		return;
 	}
 	printf("smmu: %s %#x: no SMR\n", name, sid);
