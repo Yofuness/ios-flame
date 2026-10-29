@@ -1,0 +1,50 @@
+diff --git a/crates/metal2vulkan-runtime/src/shadow.rs b/crates/metal2vulkan-runtime/src/shadow.rs
+index 9e37fb96..d6abf849 100644
+--- a/crates/metal2vulkan-runtime/src/shadow.rs
++++ b/crates/metal2vulkan-runtime/src/shadow.rs
+@@ -1013,6 +1013,29 @@ pub(super) struct ShadowUse {
+     pub(super) area: Option<[u32; 4]>,
+ }
+ 
++/// 0108 (B29, diagnostic): `M2V_SHADOW_REFRESH=always`, read once, logged once into
++/// /dev/console and /var/local/mtl2.log as 0107's lines are.
++fn refresh_always() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| {
++        let on = std::env::var_os("M2V_SHADOW_REFRESH").is_some_and(|v| v == "always");
++        if on {
++            use std::io::Write;
++            let line = format!(
++                "MTL2[{} {}]: B29 M2V_SHADOW_REFRESH=always: shadows copied in before every use\n",
++                std::process::id(),
++                std::env::args().next().unwrap_or_default()
++            );
++            for path in ["/dev/console", "/var/local/mtl2.log"] {
++                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
++                    let _ = file.write_all(line.as_bytes());
++                }
++            }
++        }
++        on
++    })
++}
++
+ /// The rectangle bounding `a` and `b`, each `[x0, y0, x1, y1)`; `None` (anywhere) where either is.
+ fn bounding(a: Option<[u32; 4]>, b: Option<[u32; 4]>) -> Option<[u32; 4]> {
+     let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (a?, b?);
+@@ -1141,8 +1164,15 @@ impl<M: Clone> ShadowSync<M> {
+                 self.copy_back(i, &mut copies);
+             }
+         }
++        let always = refresh_always();
+         for shadow in shadows {
+             let i = self.entry(&shadow.copies);
++            // 0108 (B29, diagnostic): copy in before every command that uses the texture, not
++            // only the encoder's first (a clean image only; a dirty one is copied back above
++            // where touched, else its writes would be lost). On: M2V_SHADOW_REFRESH=always.
++            if always && !self.entries[i].dirty {
++                self.entries[i].current = false;
++            }
+             let overwrites = shadow.overwrites
+                 && !kept
+                     .iter()
