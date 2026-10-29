@@ -5,8 +5,8 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 1. ▶ **Audio via the SM7150 reference** (B16/B23): DSP addresses carry the SMMU stream (IOVA | 3<<32), pd-mapper adsp
-   domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Steps 1-5 on the phone now;
-   then listener/init2, sensors PD, APR speaker path + guard (oosexgang/hakios-xnu-kernel, APSL). (audio.md)
+   domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Done: FastRPC root+sensors PD, ADSP stable (sleepstate),
+   APR, AFE port start. Next: PCM via ASM/ADM, then CS35L41 at -20 dB for a 1 kHz tone (U5). (audio.md)
 2. **Screen rotation** (B20): SpringBoard sizes the app host view landscape but the window stays portrait, no
    transform; Calculator never relayouts. Next: read the app scene settings (iOS 16 accessor). (display.md)
 3. **Zero-copy scanout** (O2; the user liked ios-s9's smoothness): an MDP pipe scans backboardd's surface directly

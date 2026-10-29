@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 DSP boots READY and stays up (sleepstate SMP2P entry), root + sensors PD served over FastRPC; no sound yet. **Updated:** 2026-10-29.
+**State:** 🟡 DSP boots and stays up; FastRPC root + sensors PD served; APR works; the speaker's AFE port (SEC_MI2S_RX) starts; no sound yet (PCM + amps next). **Updated:** 2026-10-29.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 16:45 AFE port starts: SEC_MI2S_RX clock + config + start/stop all status 0 (af2-af4; kernel98; adspboot b8ed3ee, 7d3905c)
+- Bugs fixed: GET_STATE is AVCS_CMD_ADSP_EVENT_GET_STATE 0x1290C (we sent 0x1326C, silently dropped); our APR hdr_field was 0x0150 (CMD_RSP type), now 0x0250 (SEQ_CMD); ADSP replies use an 8-word header (hdr_field 0x0081/0x0181, length in bits 7:4) — we read the payload 12 bytes early (af2: "not ready" was a header word; af3 raw dump: payload word 1 = ready). 10 s ready gate (ADSP_APR_NO_GATE=1 off); 0x100FC fallback removed; ADSP_APR_HEX=1 raw dumps.
+- af4: `apr: adsp state words[0]=1 (ready)`, `apr: fwk 2.9.0.0, 8 services`; AFE (src/dest svc 4): 0x100F3 clock set (SEC_MI2S_IBIT 0x102, 1.536 MHz) ok; 0x100EF I2S config port 0x1002 (48 kHz, 16-bit, stereo, SD0) ok; 0x100E5 DEVICE_START ok; 2 s; 0x100E6 STOP ok; clock off ok. Every APR_BASIC_RSP 0x110E8 status 0. ADSP state 6 after; no crash, no reset; ssh 17 s; 4455 mV.
+- Next: PCM source (ASM shared memory + ADM routing, or AFE loopback) with amps off; then CS35L41 at -20 dB for a 1 kHz tone (U5, the user listens).
 
 ### 2026-10-29 16:15 AFE silent (af1; kernel98; adspboot 2273261 --afe)
 - `--afe`: clock set (AFE_SVC_CMD_SET_PARAM module 0x1028F param 0x10290, clk 0x102 SEC_MI2S_IBIT 1.536 MHz, 68-byte packets from APPS/svc 4) via 0x100F3 then 0x100FC: no reply in 3 s to either; config/start not reached. CORE still answers GET_FWK_VERSION (9 services), GET_STATE 0x1326C still no reply. ADSP stays up (state 6), no SMMU fault, no reset; ssh 17 s; 4455 mV.

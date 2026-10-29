@@ -46,7 +46,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine (Maps, Music, Photos, App Store fixed; 0 crashes per boot on kernel95); Camera black (no camera) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
-| [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up, FastRPC root + sensors processes served (2026-10-29); no sound yet |
+| [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR commands work and the speaker port starts (2026-10-29); no sound yet |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
 | [Bluetooth](docs/features/bluetooth.md) | ⬜ | not started; surveyed: a UART driver + firmware + an iOS shim, 1-3 weeks |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
