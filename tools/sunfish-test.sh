@@ -102,6 +102,8 @@ if [ $noreboot = 0 ]; then
 	waitssh || rescue
 	say "ssh up after $tssh s"
 	mark "ssh up $tssh s"
+	# work/night (the user is asleep, phone in the bedroom): dim 10 after every boot unless DIM says otherwise
+	[ -z "${DIM:-}" ] && [ -f work/night ] && DIM=10
 	[ -n "${DIM:-}" ] && tools/sunfish-dim.sh "$DIM" >/dev/null 2>&1 && mark "dim $DIM"
 else
 	sshok || { say "-n: no SSH"; rescue; }
