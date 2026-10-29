@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 12:55 sensors registry builds; DSP still dies at 10.1 s (au12; adspboot 1530cd3)
+- 1530cd3: persist paths with `..` were refused (EACCES); now normalised; remove/rename inside persist. tools/sunfish-soc0-files.sh: soc_id 365 (DT qcom,msm-id), hw_platform OEM, subtype id 14, version 2621440, revision 1.0 (guesses except soc_id).
+- au12 (ssh 16 s, 4455 mV): both PDs attach/register/init2 0; sensors PD 905 calls (fwrite 206, frename 119, fopen 161 ...); 87 registry files in /var/local/sensors-persist/registry/registry; no file errors left except lowi_lp.conf; no PD FAILURE line, no SMMU fault. ADSP CRASH at 10124 ms: `sensor_process ... sar.cc:27 chre_utils fatal` (same as au10, where the sensors PD was never attached). iOS unaffected, no reset.
+
 ### 2026-10-29 12:40 root + sensors PD listeners serve files (au10, au11; kernel95; adspboot ae98d06)
 - ae98d06: root PD listener after attach (remotectl open adsp_default_listener, register, init2, next2 loop with apps_std); `--sensors` then attaches the sensors PD (pd 2, client tgid+1, second buffer half). Sensors config (51 files from ../restore/fw/sensors/sensors) pushed to /var/local/fw/sensors (phone only).
 - au10 (root only): attach 0, remotectl_open 0, register 0, init2 0, apps_std handle 11; only request `fopen_with_env ADSP_LIBRARY_PATH:.//lowi//lowi_lp.conf` -> missing; ADSP CRASH after 10149 ms (sar.cc:27 chre_utils fatal).
