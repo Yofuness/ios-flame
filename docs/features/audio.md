@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 15:45 aprtest as a second process: ADSP glink assert again (apr2; kernel98; aprtest e89860d)
+- e89860d: aprtest on its own lcid 9, ignores stale OPEN_ACK, 8 x 1024 RX intents, CLOSE at exit. apr2: plain `adspboot boot` (glink up, 6 channels), aprtest: OPEN "apr_audio_svc" lcid 9 sent, no OPEN_ACK in 3 s; ADSP state 7 `glink_channel_migration.c:667:Assertion status == GLINK_STATUS_SUCCESS failed`. No reset.
+- Conclusion: a second process on adspboot's glink edge does not work; APR moves into adspboot (`--apr`, same edge loop as FastRPC).
+
 ### 2026-10-29 15:10 APR step 1 (aprtest): no reply, ADSP glink assert (apr1; kernel98)
 - Plan: research/notes/apr-plan.md (aprtest.c = transport + core queries; apr_tone.c = AFE/PCM/CS35L41; fixes: AFE clock opcode 0x100F3 vs 0x100FC, ASM+ADM path as in the reference).
 - apr1: plain `adspboot` (READY 121 ms), then `aprtest`: OPEN_ACK apr_audio_svc (lcid 1, rcid 5); tx GET_STATE 0x1326c, GET_FWK_VERSION 0x1292c, GET_VERSIONS 0x12905: no reply; ADSP INTENTs fill our table (16); ADSP state 7: `glink_core_intent.c:874:Assertion lc_intent != NULL failed`. No reset. Likely: aprtest queues no RX intents of its own on the channel. Fix in progress.
