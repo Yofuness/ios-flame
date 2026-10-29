@@ -34,6 +34,9 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 07:50 notes moved out of the scratchpad
+- The FastRPC source excerpts (downstream adsprpc.c, upstream fastrpc.c, quic listener + apps_std) are now in research/notes/fastrpc/ (gitignored); the camx IMX363 decode is in research/notes/camx/.
+
 ### 2026-10-29 06:10 rpc3: translated 32-bit buffer also resets the SoC (U8 option a, the user's go)
 - New smmu.c smmu_translate(): AArch64 S1 bank, 4 KB pages, T0SZ 32, IOVA 0x80000000+512 KB -> a pm_alloc buffer (managed DRAM above 4 GB), MAIR0 0x44 (normal NC), SCTLR 0x61 (terminate on fault). This SMMU has no ATS ops (ID0 0x4c017e4f: ATOSNS), so it checks by read-back; TCR2 reads back 0x62 for 0x02 (bits 5-6 set by the hardware). `adspboot smmu --rpc` with the DSP off: CB9, L3 106364443..1063e3443, all six FastRPC SIDs (SMR9-14) -> CB9; phone fine.
 - rpc3 (rebooted, kernel94): the same mapping at boot (CB8, buffer 0x106288000, DSP sees 0x80000000), PAS boot, 6 channels, attach sent (ctx 1012, 516 bytes) -> **SoC reset to fastboot** right after, as in rpc2. No SMMU fault line in the kernel log before the reset. Recovery rcv2: 4433 mV, SSH 25 s, lock screen, brightness 0x1.

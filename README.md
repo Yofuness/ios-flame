@@ -19,16 +19,17 @@ iOS root lives in the `userdata` partition.
 > mostly switched off (permissive AMFI and sandbox, stub keystore), and many parts are missing. Do not put
 > anything personal on it.
 
-## Status (2026-10-28, updated 16:00)
+## Status (2026-10-29)
 
-States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/README.md](docs/README.md).
+States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Each row links to the feature file with the details; the
+plan is [docs/plan.md](docs/plan.md).
 
 | Area | State | Summary |
 |---|---|---|
 | [Boot](docs/features/boot.md) | ✅ | RAM-only `fastboot boot`; iOS 16.7.16 (iPhone X userland) root on userdata |
 | [CPU](docs/features/cpu.md) | ✅ | 8 cores; A55 1804 MHz, A76 2208 MHz |
 | [Storage](docs/features/storage.md) | ✅ | /private/var on a 94 GB HFSX volume (ufsroot1) via /private/etc/fstab; direct (uncached) I/O fixed |
-| [USB network](docs/features/usb-network.md) | ✅ | Ethernet 192.168.7.2, live kernel log |
+| [USB network](docs/features/usb-network.md) | ✅ | Ethernet 192.168.7.2, live kernel log; boot to SSH ~25 s |
 | [SSH](docs/features/ssh.md) | ✅ | dropbear + dash + toybox |
 | [Display](docs/features/display.md) | ✅ | 1080x2340, GPU-composited (Metal → Turnip), vsync-paced |
 | [Smoothness](docs/features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping |
@@ -40,12 +41,12 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 | [Buttons](docs/features/buttons.md) | ✅ | power, volume down, volume up |
 | [Flashlight](docs/features/flashlight.md) | ✅ | Control Center button turns the LED on and off |
 | [Clock](docs/features/clock.md) | ✅ | PM6150 RTC |
-| [Wi-Fi](docs/features/wifi.md) | 🟡 | joins at boot from a config file; iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining from Settings untested |
+| [Wi-Fi](docs/features/wifi.md) | ✅ | joins the home network at boot (from a config file on the phone); iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining a new network from Settings is untested |
 | [Battery](docs/features/battery.md) | 🟡 | real reading; % shows no jumps at idle, discharge unchecked |
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed in /Applications |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
-| [Audio](docs/features/audio.md) | 🟡 | speaker amps answer, the audio DSP boots and runs; sound not yet (the DSP needs a file service from iOS first) |
+| [Audio](docs/features/audio.md) | 🟡 | speaker amps answer, the audio DSP boots and runs; no sound yet: the DSP needs memory shared through the hypervisor (it resets the phone otherwise) |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
 | [Bluetooth](docs/features/bluetooth.md) | ⬜ | not started; surveyed: a UART driver + firmware + an iOS shim, 1-3 weeks |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
@@ -53,7 +54,7 @@ States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Details in [docs/R
 
 ## Quick start
 
-Safety rules (from [AGENTS.md](AGENTS.md)):
+Safety rules (all rules: [CLAUDE.md](CLAUDE.md)):
 - Never flash ABL, XBL, TZ, modem or other firmware partitions.
 - Never relock the bootloader on modified software.
 - Stop booting below 3600 mV (`fastboot getvar battery-voltage`).
@@ -78,7 +79,7 @@ Back to Android: [docs/recovery.md](docs/recovery.md).
 | `shim/` | The bare-metal shim ABL boots; it acts as iBoot |
 | `phone/` | Code that runs in iOS: `tools/` (debug tools), `wifi/` (wland), `metal2/` + `turnip/` (Metal on Turnip), `metal/`, `gpu/` |
 | `tools/` | Host tools: boot, live log, SSH and file access, benches, GPU debugging |
-| `docs/` | [README.md](docs/README.md) (feature index), [features/](docs/features/), [journal/](docs/journal/) (one file per day), [plan.md](docs/plan.md), [archive/](docs/archive/), [reference/](docs/reference/) |
+| `docs/` | [README.md](docs/README.md) (docs index), [features/](docs/features/), [journal/](docs/journal/) (one file per day), [plan.md](docs/plan.md), [archive/](docs/archive/), [reference/](docs/reference/) |
 
 ## Credits and license
 

@@ -38,7 +38,7 @@ esac
 
 T0=$(date +%s) tboot=0 tssh=0
 say() { echo "$(date +%T) test $TAG: $*"; }
-mark() { echo "=== $TAG $* $(date '+%F %T')" >> "$LOG"; }
+mark() { echo "=== $TAG $* $(date '+%F %T')" | tee -a "$ROOT/../logs/boots/current.log" >> "$LOG"; }
 # sunfish-ssh puts its own options first; a 2 s connect timeout needs ssh directly.
 # Each probe is bounded: a first session that connects and then loses packets used to hang ~13 s (2026-10-28).
 sshok() {

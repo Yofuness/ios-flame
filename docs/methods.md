@@ -39,7 +39,10 @@ Subagents that run these: `.claude/agents/` (phone-runner, ci-builder, implement
 ### Where the data comes from
 - **Live kernel log:**
   - `tools/sunfish-livelog.sh ../logs/usb-live.log` runs on the PC in the background and appends every kernel log
-    line from the phone. It also brings up the USB network link (phone 192.168.7.2).
+    line from the phone. It also brings up the USB network link (phone 192.168.7.2). Since 2026-10-29 it also
+    writes one file per boot, `../logs/boots/YYYYMMDD-HHMMSS.log` (a new file when the kernel uptime drops back
+    under 30 s), with `../logs/boots/current.log` pointing at the newest; search that one. Logs up to 2026-10-29:
+    `../logs/archive/usb-live-to-2026-10-29.log.gz`.
   - If SSH says "No route to host", this listener is probably not running.
   - Every boot or bench script writes a `=== NAME ...` marker line into it. Slice the log between markers with
     `grep -n '=== NAME'`, or `sed -n '/=== bench X start/,/=== bench X end/p'`.

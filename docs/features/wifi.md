@@ -1,5 +1,5 @@
 # Wi-Fi
-**State:** 🟡 wland joins the home network at boot from /var/local/wlan.conf; the iOS join from Settings (wifid) still fails. **Updated:** 2026-10-28.
+**State:** ✅ wland joins the home network at boot from /var/local/wlan.conf (the user: enough for daily use, 2026-10-29); joining a new network from Settings (wifid) is untested. **Updated:** 2026-10-29.
 
 ## How to use
 - wland reads /var/local/wlan.conf (mode 600, phone only, never in git) at every boot (since 2026-10-28). Install: `tools/sunfish-install-wifi.sh`. Guarded join test: `tools/sunfish-wifitest.sh` (WIFI_PSK via env only).
@@ -18,6 +18,9 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-29 05:06 state ✅: the boot join is enough (the user)
+- The user reports the phone auto-joins their Wi-Fi at every boot; U2 (join from Settings) dropped. com.apple.wifi.known-networks.plist still absent; a join to a new network from Settings stays untested.
 
 ### 2026-10-28 14:55 k76: iOS shows Wi-Fi (xnu 0199, sweetwifiev=1)
 - kernel76, 4456 mV. The status-bar Wi-Fi icon shows on every frame (lock screen, Settings, home); Settings' Wi-Fi row reads the home network's name. wifid set 22 / set 20: 0 / 0 (no fight with wland). get 103 answered (1164 bytes). nettest: DNS 60 ms, TCP 66 ms, HTTP 200 in 497 ms. The Wi-Fi page itself was not opened (`openapp prefs:root=WIFI` refused).
