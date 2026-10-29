@@ -48,6 +48,12 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 23:55 Settings panes by fake taps (tap3, tap3b; kernel98)
+- tap3 got stuck (Notes left in landscape with the keyboard, `openapp` ignored); a fresh boot cleared it. tap3b: `openapp` is ignored while the screen is locked (Auto-Lock is 1 minute); `W 0.5 0.99 0.5 0.5 600` goes from the lock screen to the home screen.
+- Settings rows (portrait y): Wi-Fi 0.37, Bluetooth 0.42, Sounds 0.57, General 0.78, Display & Brightness 0.89; back = `T 0.08 0.075`.
+- Wi-Fi pane fine (joined network, list); Bluetooth "Unavailable" (B15, expected); General > About fine (iOS 16.7.16, iPhone X, serial N/A); Display & Brightness fine; Sounds fine except one garbled row label. Panes are slow to appear. Battery, Location Services, Wallpaper not reached (locked).
+- Next: Auto-Lock -> Never (Display & Brightness, by taps) so tests don't lock; then the 3 missing panes and the home swipe from inside an app.
+
 ### 2026-10-29 23:40 Tap survey (B26) with fake taps (tap2, kernel98)
 - Landscape touch works: after `R 3`, `T 0.42 0.69` (portrait coords where the landscape "5" sits) typed "5" first try; no `t` touch-mapping step needed.
 - Notes: Welcome -> Continue -> iCloud alert (first "Not Now" tap ignored, second dismissed it) -> compose -> keyboard shows; two taps on "a" typed "Aa". Keyboard typing works.
