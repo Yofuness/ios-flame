@@ -18,6 +18,7 @@
  *                     (audio step 5), then serve its listener (apps_std files, step 6) for --watch seconds
  *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
+ *                     sp2: first an LPASS core hw vote + LPI pin mux (gpio8-10), undone at the end; --no-lpi skips both
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
@@ -884,6 +885,12 @@ static void apr_next(int ok)
 #define AFE_PARAM_ID_I2S_CONFIG	0x0001020d
 #define AFE_PORT_SEC_MI2S_RX	0x1002
 #define AFE_CLK_SEC_MI2S_IBIT	0x102
+/* sp2: LPASS core hw vote, then the LPI TLMM mux of the SEC MI2S pins, before the clock set (research/notes/amp-clock.md;
+ * layout as apr_tone.c --lpi-pins). Pins restored after the clock off, before the devote. `--no-lpi` skips both. */
+#define AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST 0x0001027c
+#define AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST 0x0001027d
+#define AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST 0x0001027e
+#define LPI_PA			0x62b40000ull	/* LPI TLMM, gpio n CFG at + 0x1000 * n (live.dts:22897) */
 
 struct afe_param {
 	uint32_t module, param;
@@ -903,8 +910,11 @@ struct afe_i2s {		/* afe_param_id_i2s_cfg */
 	uint16_t data_format, reserved;
 } __attribute__((packed));
 
-enum { AFE_IDLE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD, AFE_STOP, AFE_CLK_OFF, AFE_DONE };
+enum { AFE_IDLE, AFE_VOTE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD, AFE_STOP, AFE_CLK_OFF, AFE_DEVOTE,
+       AFE_DONE };
 static int afe_on, afe_step, afe_clk_ok, afe_started;
+static int no_lpi, hw_handle = -1, lpi_set;	/* sp2 */
+static uint32_t lpi_saved[3];
 static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response we wait for */
 
 static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16_t len)
@@ -938,11 +948,53 @@ static void afe_clock(uint32_t opcode, int enable)
 
 static void pcm_start(void);
 
+/* sp2: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA, no pull (live.dts:23261-23340). 0 = all read back. */
+static int lpi_pins(int on)
+{
+	static const uint32_t want[3] = { 0xcc, 0xcc, 0xd0 };
+	int bad = 0;
+	for (int i = 0; i < 3; i++) {
+		uint64_t pa = LPI_PA + 0x1000u * (8 + i);
+		uint32_t cur = rd32(pa), v = on ? want[i] : lpi_saved[i];
+		if (on)
+			lpi_saved[i] = cur;
+		wr32(pa, v);
+		uint32_t back = rd32(pa);
+		printf("lpi: gpio%d cfg %#llx: %#x -> %#x, read back %#x%s\n", 8 + i, (unsigned long long)pa, cur, v, back,
+		       back == v ? "" : " MISMATCH");
+		bad |= back != v;
+	}
+	lpi_set = on;
+	return bad;
+}
+
+static void lpi_restore(void)	/* atexit too: pins back even if the devote never runs */
+{
+	if (lpi_set)
+		lpi_pins(0);
+}
+
 /* Run the step afe_step now holds; AFE_HOLD only arms the 2 s timer (--pcm: runs the PCM sequence instead). */
 static void afe_run(void)
 {
 	uint16_t port = AFE_PORT_SEC_MI2S_RX;
 	switch (afe_step) {
+	case AFE_VOTE: {	/* sp2: {u32 hw_block_id = 1, char name[8]} as apr_tone hw_vote */
+		uint8_t b[12] = { 1, 0, 0, 0, 'a', 'd', 's', 'p', 'b', 't', 0, 0 };
+		afe_send(0, AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST, b, sizeof(b));
+		break;
+	}
+	case AFE_DEVOTE: {
+		lpi_restore();	/* sp2: pins back while the core is still voted */
+		if (hw_handle < 0) {
+			afe_step = AFE_DONE;
+			afe_run();
+			break;
+		}
+		uint32_t b[2] = { 1, (uint32_t)hw_handle };
+		afe_send(0, AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST, b, sizeof(b));
+		break;
+	}
 	case AFE_CLK_F3: afe_clock(AFE_SVC_CMD_SET_PARAM, 1); break;
 	case AFE_CLK_FC: afe_clock(AFE_SVC_CMD_SET_PARAM_V2, 1); break;
 	case AFE_CFG: {
@@ -988,6 +1040,22 @@ static void afe_next(int ok, uint32_t status)
 	int s = afe_step;
 	if (afe_op)
 		printf("afe: step %d op %x: %s (status %x)\n", s, afe_op, ok ? "ok" : "FAILED", status);
+	if (s == AFE_VOTE) {	/* sp2 */
+		printf("afe: LPASS core hw vote %s, handle %d\n", ok ? "ok" : "FAILED", hw_handle);
+		if (!ok)
+			afe_step = AFE_DONE;
+		else if (lpi_pins(1)) {
+			printf("lpi: read-back mismatch: AFE aborted before the clock set\n");
+			afe_step = AFE_DEVOTE;
+		} else
+			afe_step = AFE_CLK_F3;
+		afe_run();
+		return;
+	}
+	if (s == AFE_DEVOTE) {
+		printf("afe: LPASS core hw devote (handle %d) %s\n", hw_handle, ok ? "ok" : "FAILED");
+		hw_handle = -1;
+	}
 	if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && !ok)
 		afe_step = AFE_DONE;	/* ap5: no 0x100FC fallback, clock set only via 0x100F3 */
 	else if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && ok) {
@@ -1003,6 +1071,8 @@ static void afe_next(int ok, uint32_t status)
 		afe_step = s + 1;
 	if (afe_step == AFE_CLK_OFF && !afe_clk_ok)
 		afe_step = AFE_DONE;
+	if (afe_step == AFE_DONE && s < AFE_DEVOTE && (hw_handle >= 0 || lpi_set))
+		afe_step = AFE_DEVOTE;	/* sp2: every end after the vote passes the pin restore + devote */
 	afe_run();
 }
 
@@ -1096,7 +1166,11 @@ static void amp_start(void)
 		return;
 	amp_used = 1;
 	printf("amp: power up (%d dB)\n", amp_db);
-	if (cs_power_up(&amp)) {
+	uint32_t cd;
+	cs_read(&amp, 0x14000, &cd);	/* sp2: CLOCK_DETECT_1 before GLOBAL_EN (logged by cs_read) */
+	int r = cs_power_up(&amp);
+	cs_read(&amp, 0x14000, &cd);	/* and after */
+	if (r) {
 		amp_off();
 		return;
 	}
@@ -1428,7 +1502,10 @@ static void apr_rx(const uint8_t *p, size_t n)
 	else if (apr_step >= 1 && apr_step <= 3 && (h.opcode == apr_q[apr_step - 1] + 1 ||
 	    (h.opcode == APR_BASIC_RSP && len && pl[0] == apr_q[apr_step - 1])))
 		apr_next(h.opcode != APR_BASIC_RSP);
-	else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && afe_op && h.opcode == APR_BASIC_RSP && len > 1 &&
+	else if (afe_step == AFE_VOTE && h.opcode == AFE_CMD_RSP_REMOTE_LPASS_CORE_HW_VOTE_REQUEST && len) {
+		hw_handle = (int)pl[0];	/* sp2: the response carries the client handle */
+		afe_next(1, 0);
+	} else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && afe_op && h.opcode == APR_BASIC_RSP && len > 1 &&
 	    pl[0] == afe_op)
 		afe_next(pl[1] == 0, pl[1]);
 	else if (pcm_step > P_IDLE && pcm_step < P_DONE)
@@ -1444,7 +1521,7 @@ static void apr_poll(void)
 			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
 			afe_step = AFE_DONE;
 		} else if (afe_on && afe_step == AFE_IDLE) {
-			afe_step = AFE_CLK_F3;
+			afe_step = no_lpi ? AFE_CLK_F3 : AFE_VOTE;	/* sp2 */
 			afe_run();
 		} else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && now_ms() >= apr_due) {
 			if (afe_op)
@@ -1875,6 +1952,8 @@ int main(int argc, char **argv)
 			apr_on = 1;
 		else if (!strcmp(argv[i], "--afe"))	/* ap4: AFE port start without amps; implies --apr */
 			apr_on = afe_on = 1;
+		else if (!strcmp(argv[i], "--no-lpi"))	/* sp2: no LPASS hw vote, no LPI pin mux */
+			no_lpi = 1;
 		else if (!strcmp(argv[i], "--pcm"))	/* ap6: ASM + ADM PCM to the AFE port, amps untouched; implies --afe */
 			apr_on = afe_on = pcm_on = smmu = 1;
 		else if (!strcmp(argv[i], "--amp"))	/* sp1: left amp on for the --pcm tone; implies --pcm */
@@ -1913,6 +1992,7 @@ int main(int argc, char **argv)
 	fastrpc_sensors(sensors);
 	if (amp_db > -20)
 		amp_db = -20;	/* sp1: ceiling (cs_config clamps too) */
+	atexit(lpi_restore);	/* sp2: runs after amp_off (atexit is LIFO) */
 	atexit(amp_off);	/* sp1: every exit path powers the amp down */
 	if (amp_check) {
 		int r = amp_prepare();
@@ -1951,7 +2031,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N]] [--amp-check [--amp-db N]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi]] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--amp [--amp-db N]] [--amp-check [--amp-db N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

@@ -31,6 +31,7 @@ int cs_config(struct cs_amp *a, int vol_db, int boost);	/* errata, ASP I2S 48k/1
 							 * boost is ignored (bypass only) */
 int cs_verify(struct cs_amp *a);			/* read back every configured field; 0 = all match */
 int cs_power_up(struct cs_amp *a);			/* pup patch, GLOBAL_EN, 0 = PUP_DONE; needs cs_verify ok */
+int cs_read(struct cs_amp *a, uint32_t reg, uint32_t *v);	/* sp2: read-only, logged (e.g. CLOCK_DETECT_1) */
 int cs_check(struct cs_amp *a);				/* 0 = no IRQ1 error bit */
 void cs_power_down(struct cs_amp *a);			/* GLOBAL_EN 0, PDN_DONE, pdn patch, AMP_EN 0, gain back */
 

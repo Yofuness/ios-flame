@@ -29,7 +29,9 @@
 #define AMP_DIG_VOL	0x00006000	/* [13:3] signed, 0.125 dB, 0 = 0 dB; bit15 kept (reset value) */
 #define AMP_GAIN_CTRL	0x00006c04	/* PCM gain [9:5]; 0 = 0.5 dB (B2 errata), reset value restored at the end */
 #define IRQ1_STATUS1	0x00010010	/* W1C */
+#define IRQ1_STATUS3	0x00010018	/* sp2: bit1 PLL_LOCK */
 #define IRQ1_STATUS4	0x0001001c
+#define IRQ3_PLL_LOCK	(1u << 1)
 #define IRQ_PUP_DONE	(1u << 24)
 #define IRQ_PDN_DONE	(1u << 23)
 #define IRQ_AMP_SHORT	(1u << 31)
@@ -69,6 +71,11 @@ static int rd(struct cs_amp *a, uint32_t reg, uint32_t *v)
 	*v = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
 	printf("cs35l41 %#x: read %08x = %08x\n", a->addr, reg, *v);	/* sp1: every access logged */
 	return 0;
+}
+
+int cs_read(struct cs_amp *a, uint32_t reg, uint32_t *v)
+{
+	return rd(a, reg, v);
 }
 
 static int wr(struct cs_amp *a, uint32_t reg, uint32_t v)
@@ -273,23 +280,28 @@ int cs_power_up(struct cs_amp *a)
 	a->up = 1;	/* from the GLOBAL_EN attempt on, cs_power_down runs the full power-down */
 	if (upd(a, PWR_CTRL1, 1, 1))
 		return -1;
+	int pll_ms = 0;	/* sp2: STATUS3 bit1 PLL_LOCK polled alongside PUP_DONE (lx/cs35l41.h:707) */
+	uint32_t s = 0, s3 = 0;
 	for (int i = 0; i < 100 && !dry; i++) {
-		uint32_t s;
 		usleep(1000);
-		if (rd(a, IRQ1_STATUS1, &s))
+		if (rd(a, IRQ1_STATUS1, &s) || rd(a, IRQ1_STATUS3, &s3))
 			return -1;
+		if ((s3 & IRQ3_PLL_LOCK) && !pll_ms)
+			printf("cs35l41 %#x: PLL_LOCK first after %d ms\n", a->addr, pll_ms = i + 1);
 		if (s & IRQ_ERRORS) {
 			printf("cs35l41 %#x: IRQ1 error bits %08x at power-up\n", a->addr, s & IRQ_ERRORS);
 			a->err_bits |= s & IRQ_ERRORS;
 			return -1;
 		}
 		if (s & IRQ_PUP_DONE) {
-			printf("cs35l41 %#x: PUP_DONE after %d ms\n", a->addr, i + 1);
+			printf("cs35l41 %#x: PUP_DONE after %d ms (STATUS1 %08x STATUS3 %08x, PLL_LOCK %s)\n", a->addr, i + 1,
+			       s, s3, pll_ms ? "seen" : "never");
 			return wr(a, IRQ1_STATUS1, IRQ_PUP_DONE) ? -1 : 0;
 		}
 	}
 	if (!dry)
-		printf("cs35l41 %#x: no PUP_DONE in 100 ms\n", a->addr);
+		printf("cs35l41 %#x: no PUP_DONE in 100 ms (STATUS1 %08x STATUS3 %08x, PLL_LOCK %s)\n", a->addr, s, s3,
+		       pll_ms ? "seen" : "never");
 	return dry ? 0 : -1;
 }
 
