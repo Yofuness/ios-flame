@@ -1,13 +1,14 @@
 #!/bin/sh
 # Listen for a test tone from the phone's speaker with a PC microphone (U5 without the user; 2026-10-29).
-# Iriun gives video only on Linux; the Sonix USB camera mic (default) or the laptop mic do the listening.
+# Iriun gives video only on Linux. Default: the laptop mic (lid closed; a 1 kHz tone from the laptop speakers read
+# ~50x above the neighbours). The Sonix webcam mic heard the same tone only ~5x (distorted, weak).
 #   tools/sunfish-tone-detect.sh SECONDS [FREQ_HZ] [PULSE_SOURCE]
 # Prints per 0.5 s window: rms, energy at FREQ and at FREQ +-150 Hz (Goertzel); "TONE" when FREQ is >= 8x both.
 # The recording is kept only in /tmp and deleted at the end.
 set -eu
 secs=${1:?seconds}
 freq=${2:-1000}
-src=${3:-alsa_input.usb-Sonix_Technology_Co.__Ltd._USB_Camera_SN0001-02.mono-fallback}
+src=${3:-alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source}
 wav=$(mktemp /tmp/tone-XXXXXX.wav)
 trap 'rm -f "$wav"' EXIT
 timeout "$((secs + 1))" parecord --device="$src" --rate=48000 --channels=1 --format=s16le --file-format=wav "$wav" || true
