@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** 🟡 the WCN3990 answers over its UART (HCI reset + version, btup, 2026-10-30); firmware download next; iOS side not started. **Updated:** 2026-10-30.
+**State:** 🟡 the WCN3990 runs from a phone tool: firmware loaded, BD_ADDR read, LE scan finds 26 devices (btup, 2026-10-30); iOS side not started. **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,12 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 06:50 LE SCAN WORKS: 26 devices (bt3, kernel98; btup 51134a5)
+- Root cause of bt2's garbled reply: the chip also sends H4 ACL packets (handle 0xedc, ~497 B: the QCA debug log); the old parser (btup.c event(), old lines 420-440) skipped to the next 0x04 byte and framed "events" out of ACL payload. New reader parses events + ACL, resyncs one byte at a time, counts S_RX_FIFO_WR_ERR overruns.
+- `btup fw /var/local/fw/bt --scan 10`: patch 210348 B in 20.0 s, NVM 4722 B; HCI_Reset OK; drain 0 events, 0 dropped, 0 overruns; Read_BD_ADDR OK (address not recorded in git); local version: HCI 9 (5.0), LMP 9, manufacturer 0x1d (Qualcomm), subversion 0x2be.
+- Classic inquiry 10.24 s: complete, status 0, 0 devices (nothing discoverable nearby, or inquiry needs more work). LE passive scan 10 s: 26 devices, 1 with a name (a smart-light brand), RSSI -47 to -98; 7 ACL packets, 0 bytes dropped, 0 overruns. rc 0, no reset.
+- Next: the iOS side: bluetoothd's transport (H4 over a tty, BlueTool boot script); research first (RE bluetoothd/BlueTool on our root; hakios-sm8150 vayu_bt.c as reference).
 
 ### 2026-10-30 06:20 Firmware loads; BD_ADDR read garbled (bt2, kernel98)
 - `btup fw /var/local/fw/bt`: patch 210348 B in 866 segments, 20.1 s; NVM 4722 B, 20 segments, 0.6 s ("hci tag 82 01 11 -> ibs off, baud 115200"); HCI_Reset after -> `04 0e 04 01 03 0c 00` OK.
