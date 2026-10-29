@@ -8,7 +8,9 @@
  *   btup power        ldoa10 1800 mV vote, pins qup03, clocks, UART, pulses 0xC0 (2400) + 0xFC (115200); RX 500 ms
  *   btup hci-reset    power + HCI_Reset (01 03 0c 00), expects 04 0e 04 01 03 0c 00
  *   btup version      power + EDL patch version request (01 00 fc 01 19): product / patch / ROM / SoC id
- *   btup fw DIR       power + version + DIR/crbtfw21.tlv + DIR/crnv21.bin, HCI reset, Read_BD_ADDR
+ *   btup fw DIR       power + version + DIR/crbtfw21.tlv + DIR/crnv21.bin, HCI reset, 500 ms event drain,
+ *                     Read_BD_ADDR, Read_Local_Version; stays powered
+ *   btup fw DIR --scan N   the above, then classic inquiry (10.24 s) and an LE passive scan of N s
  *   btup off          0xC0 pulse, drop our ldoa10 vote and the SE3 clock vote (not the Wi-Fi rails)
  * Every step logs, the first error stops. The xtal/core/pa rails (ldoc1/ldoc2/ldoc10) are wland's: run Wi-Fi first.
  *
@@ -331,6 +333,8 @@ static int tx(const uint8_t *b, unsigned n)
 	return 0;
 }
 
+static unsigned rx_overruns;
+
 /* bytes received within ms (stops early when max is reached) */
 static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
 {
@@ -349,7 +353,10 @@ static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
 			for (uint32_t k = 0; k < valid && got < max; k++)
 				b[got++] = (uint8_t)(v >> (8 * k));
 		}
-		sw(S_IRQ_CLEAR, sr(S_IRQ_STATUS));
+		uint32_t s = sr(S_IRQ_STATUS);
+		if (s & (1u << 25))		/* S_RX_FIFO_WR_ERR: the FIFO overflowed, bytes lost (bt3) */
+			rx_overruns++;
+		sw(S_IRQ_CLEAR, s);
 	}
 	return got;
 }
@@ -413,33 +420,105 @@ static int power(void)
 	return 0;
 }
 
-/* H4 event reassembly */
-static uint8_t rxb[1024];
-static unsigned rxn;
+/* H4 reassembly (bt3): the chip also sends ACL packets (QCA debug log, handle 0x2edc, ~485 bytes) between events;
+ * the old reader skipped to the next 0x04 byte and so framed "events" out of ACL payload. Now: 0x04 event and 0x02 ACL
+ * are parsed by their headers, any other byte is dropped one at a time (counted) until a type byte lines up. */
+static uint8_t rxb[8192];
+static unsigned rxn, rx_dropped, acl_pkts, acl_bytes;
 
-static unsigned event(uint8_t *ev, unsigned max, unsigned ms)
+static void pump(unsigned ms)
 {
-	for (unsigned waited = 0;; waited += 5) {
-		unsigned skip = 0;
-		while (skip < rxn && rxb[skip] != 0x04)
-			skip++;
-		if (skip) {
-			hex("dropped", rxb, skip);
-			memmove(rxb, rxb + skip, rxn -= skip);
+	if (sizeof(rxb) - rxn < 64) {
+		printf("h4: buffer full, %u bytes discarded\n", rxn);
+		rx_dropped += rxn;
+		rxn = 0;
+	}
+	rxn += rx(rxb + rxn, sizeof(rxb) - rxn, ms);
+}
+
+/* next complete H4 packet (type 02/04) within ms; copies up to max bytes, returns its full length, 0 on timeout */
+static unsigned pkt(uint8_t *p, unsigned max, unsigned ms)
+{
+	double end = now_s() + ms / 1000.0;
+	unsigned drop = 0;
+	for (;;) {
+		unsigned need = 0;
+		while (rxn) {
+			if (rxb[0] == 0x04 && rxn >= 3)
+				need = 3u + rxb[2];
+			else if (rxb[0] == 0x02 && rxn >= 5)
+				need = 5u + (rxb[3] | rxb[4] << 8);
+			else if (rxb[0] == 0x04 || rxb[0] == 0x02)
+				break;			/* header still incomplete */
+			if (need > 2048 || (rxb[0] != 0x04 && rxb[0] != 0x02)) {
+				drop++;
+				rx_dropped++;
+				memmove(rxb, rxb + 1, --rxn);
+				need = 0;
+				continue;
+			}
+			break;
 		}
-		if (rxn >= 3 && rxn >= 3u + rxb[2]) {
-			unsigned n = 3u + rxb[2];
-			memcpy(ev, rxb, n < max ? n : max);
-			memmove(rxb, rxb + n, rxn -= n);
-			return n;
+		if (drop) {
+			printf("h4: resync, %u bytes dropped (%u total)\n", drop, rx_dropped);
+			drop = 0;
 		}
-		if (waited >= ms)
+		if (need && rxn >= need) {
+			memcpy(p, rxb, need < max ? need : max);
+			memmove(rxb, rxb + need, rxn -= need);
+			return need;
+		}
+		if (now_s() >= end)
 			return 0;
-		rxn += rx(rxb + rxn, sizeof(rxb) - rxn, 5);
+		pump(2);
 	}
 }
 
-/* command; the reply is the next event about this opcode (complete 0e / status 0f), or any event for 0xfc00 */
+/* next event; ACL packets are counted and skipped */
+static unsigned event(uint8_t *ev, unsigned max, unsigned ms)
+{
+	static uint8_t p[2100];
+	double end = now_s() + ms / 1000.0;
+	for (;;) {
+		double left = (end - now_s()) * 1000;
+		unsigned n = pkt(p, sizeof(p), left > 0 ? (unsigned)left : 0);
+		if (!n)
+			return 0;
+		if (p[0] == 0x02) {
+			if (!acl_pkts++)
+				printf("acl: handle %#x len %u (first; QCA debug log, skipped)\n",
+				       (p[1] | p[2] << 8) & 0xfff, n - 5);
+			acl_bytes += n;
+			continue;
+		}
+		memcpy(ev, p, n < max ? n : max);
+		return n;
+	}
+}
+
+static void decode(const uint8_t *ev, unsigned n)
+{
+	if (n >= 7 && ev[1] == 0x0e)
+		printf("event: Command Complete op %#06x status %#x (%u bytes)\n", ev[4] | ev[5] << 8, ev[6], n);
+	else if (n >= 7 && ev[1] == 0x0f)
+		printf("event: Command Status op %#06x status %#x\n", ev[5] | ev[6] << 8, ev[3]);
+	else if (n >= 3 && ev[1] == 0xff)
+		hex("event: vendor", ev, n);
+	else
+		hex("event", ev, n);
+}
+
+static void drain(unsigned ms)
+{
+	uint8_t ev[260];
+	unsigned k = 0;
+	for (unsigned n; (n = event(ev, sizeof(ev), ms)); k++)
+		decode(ev, n);
+	printf("drain: %u events in %u ms; acl %u packets %u bytes, dropped %u, fifo overruns %u\n", k, ms, acl_pkts,
+	       acl_bytes, rx_dropped, rx_overruns);
+}
+
+/* command; the reply is the Command Complete/Status for this opcode (others printed), or any event for 0xfc00 */
 static unsigned cmd(uint16_t op, const uint8_t *p, uint8_t n, uint8_t *ev, unsigned max, unsigned ms)
 {
 	uint8_t out[4 + 255] = { 0x01, (uint8_t)op, (uint8_t)(op >> 8), n };
@@ -447,13 +526,15 @@ static unsigned cmd(uint16_t op, const uint8_t *p, uint8_t n, uint8_t *ev, unsig
 		memcpy(out + 4, p, n);
 	if (tx(out, 4u + n) || !ms)
 		return 0;
-	for (unsigned tries = 0;; tries++) {
-		unsigned got = event(ev, max, ms);
+	double end = now_s() + ms / 1000.0;
+	for (;;) {
+		double left = (end - now_s()) * 1000;
+		unsigned got = event(ev, max, left > 0 ? (unsigned)left : 0);
 		uint16_t of = got >= 6 && ev[1] == 0x0e ? (uint16_t)(ev[4] | ev[5] << 8) :
 			      got >= 7 && ev[1] == 0x0f ? (uint16_t)(ev[5] | ev[6] << 8) : 0xffff;
-		if (!got || op == 0xfc00 || of == op || tries == 3)
+		if (!got || op == 0xfc00 || of == op)
 			return got;
-		hex("other event", ev, got);
+		decode(ev, got);
 	}
 }
 
@@ -543,6 +624,25 @@ static int download(const char *name, const uint8_t *d, unsigned size, int skip)
 	return 0;
 }
 
+static int info(void)
+{
+	uint8_t ev[260];
+	unsigned got = cmd(0x1009, NULL, 0, ev, sizeof(ev), 2000);
+	if (got < 13 || ev[1] != 0x0e || ev[6] != 0) {
+		hex("Read_BD_ADDR reply", ev, got);
+		return fail("Read_BD_ADDR failed");
+	}
+	printf("bd_addr: %02x:%02x:%02x:%02x:%02x:%02x\n", ev[12], ev[11], ev[10], ev[9], ev[8], ev[7]);
+	got = cmd(0x1001, NULL, 0, ev, sizeof(ev), 2000);
+	if (got < 15 || ev[1] != 0x0e || ev[6] != 0) {
+		hex("Read_Local_Version reply", ev, got);
+		return fail("Read_Local_Version failed");
+	}
+	printf("local version: hci %u rev %#x lmp %u manufacturer %#x subversion %#x\n", ev[7], ev[8] | ev[9] << 8,
+	       ev[10], ev[11] | ev[12] << 8, ev[13] | ev[14] << 8);
+	return 0;
+}
+
 static int firmware(const char *dir)
 {
 	unsigned psz = 0, nsz = 0;
@@ -577,19 +677,141 @@ static int firmware(const char *dir)
 	delay_ms(50);
 	if (hci_reset())
 		goto out;
-	uint8_t ev[260];
-	unsigned got = cmd(0x1009, NULL, 0, ev, sizeof(ev), 1000);
-	hex("Read_BD_ADDR reply", ev, got);
-	if (got < 13 || ev[1] != 0x0e || ev[6] != 0) {
-		fail("Read_BD_ADDR failed");
+	drain(500);				/* bt3: let the post-reset burst (vendor events, debug log ACL) pass */
+	if (info())
 		goto out;
-	}
-	printf("bd_addr: %02x:%02x:%02x:%02x:%02x:%02x\n", ev[12], ev[11], ev[10], ev[9], ev[8], ev[7]);
 	rc = 0;
 out:
 	free(p);
 	free(nv);
 	return rc;
+}
+
+/* ---- scan (bt3): classic inquiry, then LE passive scan; addresses de-duplicated ---- */
+
+static struct dev { uint8_t a[6], le; int8_t rssi; char name[33]; unsigned seen; } devs[128];
+static unsigned ndev;
+
+static void eir_name(const uint8_t *d, unsigned n, char *name)
+{
+	for (unsigned i = 0; i + 1 < n && d[i];) {
+		unsigned l = d[i];
+		if (i + 1 + l > n)
+			break;
+		if ((d[i + 1] == 0x08 || d[i + 1] == 0x09) && l > 1 && (!name[0] || d[i + 1] == 0x09)) {
+			unsigned k = l - 1 < 32 ? l - 1 : 32;
+			for (unsigned j = 0; j < k; j++)
+				name[j] = d[i + 2 + j] >= 0x20 && d[i + 2 + j] < 0x7f ? (char)d[i + 2 + j] : '?';
+			name[k] = 0;
+		}
+		i += 1 + l;
+	}
+}
+
+static void found(const uint8_t *a, int le, int rssi, const uint8_t *eir, unsigned eirn)
+{
+	struct dev *d = NULL;
+	for (unsigned i = 0; i < ndev; i++)
+		if (devs[i].le == le && !memcmp(devs[i].a, a, 6))
+			d = &devs[i];
+	int fresh = !d;
+	if (!d && ndev < sizeof(devs) / sizeof(devs[0])) {
+		d = &devs[ndev++];
+		memset(d, 0, sizeof(*d));
+		memcpy(d->a, a, 6);
+		d->le = (uint8_t)le;
+	}
+	if (!d)
+		return;
+	d->seen++;
+	d->rssi = (int8_t)rssi;
+	char had = d->name[0];
+	if (eir)
+		eir_name(eir, eirn, d->name);
+	if (fresh || (!had && d->name[0]))
+		printf("%s %02x:%02x:%02x:%02x:%02x:%02x rssi %d%s%s\n", le ? "le" : "classic", a[5], a[4], a[3], a[2],
+		       a[1], a[0], rssi, d->name[0] ? " name " : "", d->name);
+}
+
+static int scan(unsigned secs)
+{
+	uint8_t ev[260];
+	/* event mask with LE Meta (bit 61) and the inquiry events, as Linux sets it */
+	static const uint8_t mask[8] = { 0xff, 0xff, 0xfb, 0xff, 0x07, 0xf8, 0xbf, 0x3d };
+	unsigned got = cmd(0x0c01, mask, 8, ev, sizeof(ev), 2000);
+	if (got < 7 || ev[1] != 0x0e || ev[6])
+		return fail("Set_Event_Mask failed");
+	static const uint8_t mode = 2;		/* inquiry results with RSSI or extended (EIR) */
+	got = cmd(0x0c45, &mode, 1, ev, sizeof(ev), 2000);
+	if (got < 7 || ev[1] != 0x0e || ev[6])
+		printf("scan: Write_Inquiry_Mode status %#x (results may come without RSSI)\n", got >= 7 ? ev[6] : 0xff);
+	static const uint8_t inq[5] = { 0x33, 0x8b, 0x9e, 0x08, 0x00 };	/* GIAC, 8 x 1.28 s, no limit */
+	got = cmd(0x0401, inq, 5, ev, sizeof(ev), 2000);
+	if (got < 7 || ev[1] != 0x0f || ev[3])
+		return fail("Inquiry not started");
+	printf("scan: classic inquiry 10.24 s\n");
+	double end = now_s() + 15;
+	for (;;) {
+		double left = (end - now_s()) * 1000;
+		got = left > 0 ? event(ev, sizeof(ev), (unsigned)left) : 0;
+		if (!got) {
+			printf("scan: no Inquiry Complete within 15 s\n");
+			break;
+		}
+		const uint8_t *e = ev + 3;
+		unsigned num = got > 3 ? e[0] : 0;
+		if (ev[1] == 0x01) {
+			printf("scan: inquiry complete, status %#x\n", e[0]);
+			break;
+		} else if (ev[1] == 0x02 && got >= 3 + 1 + num * 14u) {	/* arrays: addr, psrm, res x2, cod, clk */
+			for (unsigned i = 0; i < num; i++)
+				found(e + 1 + 6 * i, 0, 0, NULL, 0);
+		} else if (ev[1] == 0x22 && got >= 3 + 1 + num * 14u) {	/* addr, psrm, res, cod, clk, rssi */
+			for (unsigned i = 0; i < num; i++)
+				found(e + 1 + 6 * i, 0, (int8_t)e[1 + 13 * num + i], NULL, 0);
+		} else if (ev[1] == 0x2f && got >= 3 + 15u) {
+			found(e + 1, 0, (int8_t)e[14], e + 15, got - 18);
+		} else
+			decode(ev, got);
+	}
+	static const uint8_t lep[7] = { 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00 };	/* passive, 10 ms / 10 ms */
+	got = cmd(0x200b, lep, 7, ev, sizeof(ev), 2000);
+	if (got < 7 || ev[1] != 0x0e || ev[6])
+		return fail("LE Set Scan Parameters failed");
+	static const uint8_t on[2] = { 1, 1 }, offv[2] = { 0, 0 };
+	got = cmd(0x200c, on, 2, ev, sizeof(ev), 2000);
+	if (got < 7 || ev[1] != 0x0e || ev[6])
+		return fail("LE Set Scan Enable failed");
+	printf("scan: le passive %u s\n", secs);
+	end = now_s() + secs;
+	for (double left; (left = (end - now_s()) * 1000) > 0;) {
+		got = event(ev, sizeof(ev), (unsigned)left);
+		if (!got)
+			break;
+		if (ev[1] != 0x3e || got < 5 || ev[3] != 0x02) {
+			decode(ev, got);
+			continue;
+		}
+		/* LE Advertising Report: num, then per report type, addr type, addr, data len, data, rssi */
+		const uint8_t *r = ev + 5, *lim = ev + (got < sizeof(ev) ? got : sizeof(ev));
+		for (unsigned i = 0; i < ev[4] && r + 9 <= lim; i++) {
+			unsigned dl = r[8];
+			if (r + 9 + dl + 1 > lim)
+				break;
+			found(r + 2, 1, (int8_t)r[9 + dl], r + 9, dl);
+			r += 10 + dl;
+		}
+	}
+	got = cmd(0x200c, offv, 2, ev, sizeof(ev), 2000);
+	printf("scan: le disable status %#x\n", got >= 7 && ev[1] == 0x0e ? ev[6] : 0xff);
+	unsigned c = 0, l = 0, named = 0;
+	for (unsigned i = 0; i < ndev; i++) {
+		devs[i].le ? l++ : c++;
+		named += !!devs[i].name[0];
+	}
+	printf("scan: %u devices (%u classic, %u le, %u named); acl %u packets, dropped %u bytes, fifo overruns %u\n",
+	       ndev, c, l, named, acl_pkts, rx_dropped, rx_overruns);
+	return 0;
 }
 
 static int off(void)
@@ -619,7 +841,7 @@ int main(int argc, char **argv)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	if (argc < 2) {
-		fprintf(stderr, "usage: btup status|uart-loop|power|hci-reset|version|fw DIR|off\n");
+		fprintf(stderr, "usage: btup status|uart-loop|power|hci-reset|version|fw DIR [--scan SECONDS]|off\n");
 		return 2;
 	}
 	const char *m = argv[1];
@@ -636,8 +858,11 @@ int main(int argc, char **argv)
 		rc = power() || hci_reset();
 	else if (!strcmp(m, "version"))
 		rc = power() || version();
-	else if (!strcmp(m, "fw") && argc > 2)
-		rc = power() || version() || firmware(argv[2]);
+	else if (!strcmp(m, "fw") && argc > 2) {
+		/* bt3: --scan N in the same run (the chip loses the patch at power-off) */
+		unsigned secs = argc > 4 && !strcmp(argv[3], "--scan") ? (unsigned)atoi(argv[4]) : 0;
+		rc = power() || version() || firmware(argv[2]) || (secs && scan(secs));
+	}
 	else if (!strcmp(m, "off"))
 		rc = off();
 	else {
