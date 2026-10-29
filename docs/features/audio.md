@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 19:30 OTP trims + on-window diagnostics: amp clean, still unheard (sp6, sp7; adspboot 1018f0f)
+- 1018f0f: CS35L41 OTP unpack (OTPID 0x8 -> Linux otp_map_1, 98 trim fields written, test-key unlocked), PWR_CTRL3 = 0x201C, diag reads at 0.5 s / 2.5 s, `--amp-pcm-stop-test`.
+- sp6: `--amp-check` with OTP: 98 trims, read-back ok. The play run right after it on the same boot exited early at `adsp: vote lcx.lvl level [5]=384 -> 5` (the AOSS vote failed; quirk: don't run --amp-check before a play run on one boot).
+- sp7 (play alone; tone -6 dBFS, -20 dB, gain 10.5 dB, OTP trims): READY 120 ms; PLL_LOCK + PUP_DONE 1 ms; diag identical at 0.5 s, 2.5 s and with the PCM stopped: raw1 41406000 raw2 0a000000 raw3 2000000f raw4 02000002, CLOCK_DETECT_1 0, NG 0x33/0x303 (off), SP_ENABLES 0x10000, SP_FORMAT 0x10100200, PWR_CTRL3 0x01000010; amp on 2932 ms, no errors. Laptop mic: no tone. Registers can't tell "playing" from "silent input".
+- Parked until the user listens (U5) or a loopback capture (amp ASP TX of ASPRX1/VMON -> SEC_MI2S_TX capture) is built.
+
 ### 2026-10-29 19:05 louder runs, PC mic hears nothing (sp4, sp5; adspboot 6016dce, e2e60a5)
 - sp4: -20 dB digital (cap), tone -20 dBFS, gain 0.5 dB: PLL lock + PUP_DONE 1 ms, 3057 ms on, no errors; laptop mic: no 1 kHz (an rms rise 7-23 s was room noise, not in the amp window).
 - 6016dce `--amp-gain N` (0x6C04 [9:5], clamp 0..10 = 10.5 dB, verified, reset value restored); e2e60a5 `--pcm-dbfs N` (clamp -40..-6).
