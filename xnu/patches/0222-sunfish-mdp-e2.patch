@@ -1,0 +1,144 @@
+From 282ba09bd90185414b08bbd267897452ca67590d Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 12:00:53 -0400
+Subject: [PATCH] sunfish: kern.sweet_mdp_e2 points VIG0 at a contiguous DRAM
+ copy outside the splash carveout (0222)
+
+---
+ bsd/dev/sweet_mdpdump.c | 99 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 98 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
+index ff071ab..c31f356 100644
+--- a/bsd/dev/sweet_mdpdump.c
++++ b/bsd/dev/sweet_mdpdump.c
+@@ -9,6 +9,10 @@
+  * 0221: kern.sweet_mdp_src (RW quad): a write points VIG0 SRC0_ADDR at another
+  * address inside the splash carveout and flushes VIG0 + CTL in CTL0 (zero-copy step A);
+  * a read returns SRC0_ADDR. Also skipped by sweetmdpdump=0.
++ * 0222: kern.sweet_mdp_e2 (zero-copy E2: does VIG0 read DRAM outside the carveout?):
++ * 1 copies the splash frame into a contiguous buffer below 4 GB, inverts its top 300 rows,
++ * cleans it to PoC; 2 points VIG0 at it; 0 points VIG0 back at 0x9c000000 (the buffer is
++ * kept). A read returns the buffer PA (0 if none). Also skipped by sweetmdpdump=0.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <stdarg.h>
+@@ -20,8 +24,12 @@
+ #include <kern/clock.h>
+ #include <libkern/OSAtomic.h>
+ #include <pexpert/pexpert.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ void sweet_mdpdump_register(void);
+ 
+ #define MDP_PA      0x0ae00000u
+@@ -220,12 +228,101 @@ SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdp_src,
+     CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
+     0, 0, sysctl_sweet_mdp_src, "QU", "sunfish VIG0 source address (0221)");
+ 
++/* 0222: E2 buffer, allocated once and never freed (the MDP may still scan it out). */
++#define E2_ROWBYTES     4352u
++#define E2_INV_ROWS     300u
++static vm_offset_t e2_va, e2_splash_va;
++static uint64_t e2_pa;
++
++static int
++md_e2_alloc(void)
++{
++	vm_size_t len = round_page(SPLASH_FB_LEN);
++	if (!e2_va) {
++		/* contiguous, below 4 GB (max page number 0xfffff) */
++		if (kmem_alloc_contig(kernel_map, &e2_va, len, PAGE_MASK, 0xfffff, 0,
++		    KMA_DATA | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++			e2_va = 0;
++			return ENOMEM;
++		}
++		e2_pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)e2_va));
++	}
++	if (!e2_splash_va) {
++		e2_splash_va = ml_io_map(SPLASH_PA, SPLASH_FB_LEN);	/* read only here */
++		if (!e2_splash_va) {
++			return EIO;
++		}
++	}
++	const volatile uint64_t *src = (const volatile uint64_t *)e2_splash_va;
++	uint64_t *dst = (uint64_t *)e2_va;
++	for (uint64_t i = 0; i < SPLASH_FB_LEN / 8; i++) {
++		dst[i] = src[i];
++	}
++	for (uint64_t i = 0; i < (uint64_t)E2_INV_ROWS * E2_ROWBYTES / 8; i++) {
++		dst[i] ^= 0x00ffffff00ffffffull;	/* invert RGB, keep alpha */
++	}
++	flush_dcache64((addr64_t)e2_pa, (unsigned)SPLASH_FB_LEN, TRUE);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	printf("SWEET MDP: e2 buffer PA %#llx size %#llx\n", e2_pa, SPLASH_FB_LEN);
++	return 0;
++}
++
++static int
++sysctl_sweet_mdp_e2 SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
++		return EBUSY;
++	}
++	uint64_t v = e2_pa;	/* quad: a PA above 2 GB would read negative as int */
++	int err = SYSCTL_OUT(req, &v, sizeof(v));
++	if (err || !req->newptr) {
++		goto out;
++	}
++	err = SYSCTL_IN(req, &v, sizeof(v));
++	if (err) {
++		goto out;
++	}
++	dump_len = 0;
++	if (v == 1) {
++		err = md_e2_alloc();
++		goto out;
++	}
++	if (v != 0 && v != 2) {
++		err = EINVAL;
++		goto out;
++	}
++	if (v == 2 && !e2_pa) {
++		err = ENXIO;
++		goto out;
++	}
++	if (md_rd(CTL0_FLUSH) == 0xffffffffu) {
++		err = EIO;
++		goto out;
++	}
++	uint64_t addr = v == 2 ? e2_pa : SPLASH_PA;
++	md_wr(VIG0_SRC0_ADDR, (uint32_t)addr);
++	md_wr(CTL0_FLUSH, CTL0_FLUSH_BITS);
++	printf("SWEET MDP: e2 VIG0 src %#llx (flush %#x)\n", addr, CTL0_FLUSH_BITS);
++	delay_for_interval(20, NSEC_PER_MSEC);
++	printf("SWEET MDP: e2 after 20 ms src %#x flush %#x\n",
++	    md_rd(VIG0_SRC0_ADDR), md_rd(CTL0_FLUSH));
++out:
++	dump_busy = 0;
++	return err;
++}
++
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdp_e2,
++    CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_mdp_e2, "QU", "sunfish E2 VIG0 buffer outside the carveout (0222)");
++
+ static void
+ md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ {
+ 	sysctl_register_oid(&sysctl__kern_sweet_mdpdump);
+ 	sysctl_register_oid(&sysctl__kern_sweet_mdp_src);	/* 0221 */
+-	printf("SWEET MDP: kern.sweet_mdpdump, kern.sweet_mdp_src ready\n");
++	sysctl_register_oid(&sysctl__kern_sweet_mdp_e2);	/* 0222 */
++	printf("SWEET MDP: kern.sweet_mdpdump, kern.sweet_mdp_src, kern.sweet_mdp_e2 ready\n");
+ }
+ 
+ /* Called from SweetBattery::start, like sweet_camprobe_register(); sweetmdpdump=0 skips. */
+-- 
+2.56.0
+
