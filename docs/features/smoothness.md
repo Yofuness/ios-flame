@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:55 auto flip (kernel104): garbled once, clean once; zero-copy parked
+- zc6 (sweetfb_zerocopy=2): "auto flip on" at 32.9 s, 357 flips, 0 skipped, but every frame garbled (vertical stripes on the wallpaper, apps unreadable). No reset.
+- zc7 (same boot args): auto flip at 34.4 s; lock screen clean (only the B29 lock buttons striped). Registers equal the working manual setup: QS OP_MODE 0x20034401, steps 0x215555/0x215015, SSPP SRC_SIZE 0x09840465, OUT 0x09240438, ystride 0x1200, REQ_PIXELS 0x09840465, SRC0 0x9cb00000; re-entering mode 2 only changed SRC0. zc6's garbage not explained (apps were open there; zc7 only looked at the lock screen).
+- Parked (the user's rule: usable before fast): zero-copy gives no fps gain (A/B), manual flip works (zc4), auto flip is flaky. Default stays off. To resume: reproduce zc6 with apps open on kernel104 and dump the regs while garbled; then a heavy-app A/B where the freed GPU time could matter. The fps limit itself is O7.
+
 ### 2026-10-30 02:35 Where the ~21 fps comes from (read-only; research/notes/fps-limit.md)
 - Facts (5 s "SWEET GPU" lines in the zc5 swipe windows): backboardd GPU per submit 25-30 ms average, longest 55-66 ms, GPU busy only 35-49 %, in both modes. Present blit adds 2.5 ms per present. Our code has no ~20 Hz pacing (60 Hz tick SweetFramebuffer.cpp:104/405-442; SwapWait returns at once outside flip mode).
 - Inference: CA renders on a tick (10-15 ms CPU), submits, the GPU takes 25-30 ms (blur/backdrop passes up to 66 ms), one frame in flight, swap on the next tick -> 2-3 ticks per frame = ~21/s. CPU and GPU never overlap.

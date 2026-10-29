@@ -7,14 +7,15 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 1. **Audio via the SM7150 reference** (B16/B23): DSP addresses carry the SMMU stream (IOVA | 3<<32), pd-mapper adsp
    domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Done: FastRPC, ADSP stable, APR, AFE, PCM stream, CS35L41
    powers up (PLL lock, PUP_DONE, OTP trims). Unheard by the PC mic: waits for U5 (the user listens) or a loopback capture. (audio.md)
-2. ▶ **Zero-copy scanout** (O2; the user liked ios-s9's smoothness): an MDP pipe scans backboardd's surface directly
-   instead of our GPU blit. E3c flip mode works (kernel103, ~27 flips/s in scroll); next: fpsbench A/B, auto flip mode at boot. (smoothness.md)
 
-Done 2026-10-29: rotation incl. landscape touch (`R 3`/`R 1`; auto-rotate waits for sensors B12), Notes keyboard typing, fake taps/swipes for tests (`T`/`W`, methods.md), Location Services on (`L 1`), rotation follows app switches (rot12), rotation via the front scene's settings (Calculator landscape), r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
+Done 2026-10-30: zero-copy flip mode works (kernel103 manual, no fps gain; parked, O2/O7). Done 2026-10-29: rotation incl. landscape touch (`R 3`/`R 1`; auto-rotate waits for sensors B12), Notes keyboard typing, fake taps/swipes for tests (`T`/`W`, methods.md), Location Services on (`L 1`), rotation follows app switches (rot12), rotation via the front scene's settings (Calculator landscape), r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
 button, SE9 I2C + amps, boot-arg defaults.
 
-3. **B34 openapp ignored, B35 no Location Services row, B33 home swipe** (quick checks).
+2. ▶ **Audio self-check without the user**: does the CS35L41 report what it plays (VMON/IMON or ASP TX feedback), so the
+   speaker can be verified from SSH? Read-only research first. (audio.md)
+3. **B35 no Location Services row, B33 home swipe, B34 openapp ignored** (quick checks with fake taps).
+4. **O7 fps: pin backboardd's render thread to the A76 cores** (cheap try, ~1 h). (smoothness.md)
 
 ## Questions for you (Claude took the recommended path meanwhile)
 - (none open)
