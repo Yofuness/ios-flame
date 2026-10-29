@@ -7,6 +7,10 @@
  *   adspboot [boot]   votes, load adsp.mdt + .bNN, PAS init / mem setup / auth-and-reset, SMP2P ready, glink
  *   adspboot status   read-only: SMP2P state, glink items, crash reason
  *   adspboot shutdown PAS shutdown (boot does it first too); boot takes --watch S (20) and --no-early
+ *   adspboot boot --rpc [--watch 120]  also serve FastRPC (fastrpc.c): attach to the sensors PD on
+ *                     fastrpcglink-apps-dsp, run adsp_default_listener and answer its apps_std file calls
+ *                     from /var/local/fw/sensors (+ /var/local/sensors-persist); keeps serving after ready,
+ *                     summary at the end. Implies --smmu.
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
  *                     FastRPC, 0x1b2f USB audio) through translation-off banks, as wland does for WLAN; boot --smmu too
  *
@@ -25,6 +29,7 @@
 #include "smem.h"
 #include "glink.h"
 #include "smmu.h"
+#include "fastrpc.h"
 
 #define PAS_ADSP	1
 #define ADSP_PA		0x96b00000ull
@@ -408,13 +413,15 @@ struct chan {
 	char name[32];
 	uint16_t rcid, lcid;
 	uint32_t r_iid[16], r_isz[16];
-	int r_n, ndata;
+	int r_n, ndata, up;
 	uint8_t pend[NPEND][64];
 	uint32_t pend_len[NPEND];
 	int npend;
 };
 static struct chan ch[NCHAN];
 static int nch, edge_up, ver_seen, our_iid = 100;
+static int rpc_on, rpc_started, ready_seen;
+static struct chan *rpc_chan;
 static uint8_t rxbuf[16384];
 static size_t rx_have;
 static uint32_t rx_iid;
@@ -580,6 +587,7 @@ static int pump_one(void)
 			if (ch[i].lcid == h[1]) {
 				printf("adsp: %s: OPEN_ACK (lcid %u)\n", ch[i].name, h[1]);
 				give_intents(&ch[i], 4);
+				ch[i].up = 1;
 			}
 		break;
 	case GLINK_CMD_CLOSE:
@@ -634,6 +642,8 @@ static int pump_one(void)
 			give_intents(c, 1);
 			if (!strcmp(c->name, "IPCRTR"))
 				qrtr_rx(c, rxbuf, rx_have);
+			else if (rpc_on && c == rpc_chan)
+				fastrpc_rx(rxbuf, rx_have);
 			else if (c->ndata++ < 4) {
 				char tag[48];
 				snprintf(tag, sizeof(tag), "%s data", c->name);
@@ -681,6 +691,24 @@ static int edge_open(int ms)
 }
 
 /* Pump the edge for ms; with stop, poll SMP2P each second: 1 = ready, 2 = err-fatal, 0 = time up. */
+static void rpc_send(const void *p, size_t n)
+{
+	chan_send(rpc_chan, p, n);
+}
+
+/* --rpc: start the FastRPC listener once fastrpcglink-apps-dsp is open both ways. */
+static void rpc_poll(void)
+{
+	if (!rpc_on || rpc_started)
+		return;
+	for (int i = 0; i < nch; i++)
+		if (ch[i].up && !strcmp(ch[i].name, "fastrpcglink-apps-dsp")) {
+			rpc_chan = &ch[i];
+			rpc_started = 1;
+			fastrpc_start(rpc_send);
+		}
+}
+
 static int edge_loop(int ms, int stop, uint64_t t0)
 {
 	uint64_t end = now_ms() + (uint64_t)ms, next = 0;
@@ -692,6 +720,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			printf("adsp: glink rx garbage: stop parsing\n");
 			return 0;
 		}
+		rpc_poll();
 		if (stop && now_ms() >= next) {
 			next = now_ms() + 1000;
 			uint32_t v;
@@ -700,9 +729,11 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 				crash_reason();
 				return 2;
 			}
-			if (smp2p_in(&v) == 0 && (v & 2)) {
+			if (smp2p_in(&v) == 0 && (v & 2) && !ready_seen) {
 				printf("adsp: READY after %llu ms (state %x)\n", (unsigned long long)(now_ms() - t0), v);
-				return 1;
+				ready_seen = 1;
+				if (!rpc_on)
+					return 1;	/* --rpc: keep serving until the watch ends or a crash */
 			}
 		}
 		usleep(2000);
@@ -714,7 +745,7 @@ static int glink_watch(int secs)
 {
 	if (edge_open(secs * 1000))
 		return -1;
-	edge_loop(5000, 0, 0);
+	edge_loop(rpc_on ? secs * 1000 : 5000, 0, 0);
 	printf("adsp: glink %s, %d channels\n", ver_seen ? "up" : "no version from the ADSP", nch);
 	return ver_seen ? 0 : -1;
 }
@@ -760,6 +791,8 @@ int main(int argc, char **argv)
 			early = 0;
 		else if (!strcmp(argv[i], "--smmu"))
 			smmu = 1;
+		else if (!strcmp(argv[i], "--rpc"))
+			rpc_on = smmu = 1;
 		else if (!strcmp(argv[i], "--dry"))
 			smmu_dry = 1;
 		else if (!strcmp(argv[i], "--sid") && i + 2 < argc) {
@@ -779,7 +812,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--dry] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--smmu] [--rpc] [--dry] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
@@ -800,10 +833,15 @@ int main(int argc, char **argv)
 		int st = 0;
 		if (early && edge_open(2000) == 0) {
 			st = edge_loop(watch * 1000, 1, t0);
+			if (st == 0 && ready_seen)
+				st = 1;
 			printf("adsp: early watch: %s, %d channels\n", st == 1 ? "ready" : st == 2 ? "crash" : "time up",
 			       nch);
-			if (st == 2)
+			if (st == 2) {
+				if (rpc_on)
+					fastrpc_summary();
 				return 1;
+			}
 		}
 		int t;
 		for (t = 0; st != 1 && t < 100; t++) {
@@ -828,5 +866,8 @@ int main(int argc, char **argv)
 			printf("adsp: ready after %d00 ms (state %x)\n", t, v);
 		}
 	}
-	return glink_watch(10) ? 1 : 0;
+	int rc = glink_watch(rpc_on ? watch : 10) ? 1 : 0;
+	if (rpc_on)
+		fastrpc_summary();
+	return rc;
 }

@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 partial: amps answer on I²C, the ADSP boots and runs, no sound yet (sensor PD needs a FastRPC file listener). **Updated:** 2026-10-28.
+**State:** 🟡 partial: amps answer on I²C, the ADSP boots and runs, no sound yet (sensor PD needs a FastRPC file listener). **Updated:** 2026-10-29.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 05:20-05:31 FastRPC listener: first runs (rpc1, rpc2); rpc2 reset the phone (kernel94)
+- New phone/wifi/fastrpc.c (790 lines, written by the implementer agent from the downstream adsprpc.c / quic fastrpc sources): `adspboot boot --rpc --watch S` (implies --smmu) serves `fastrpcglink-apps-dsp`: attach to the sensors PD (handle 1 method 0, in: tgid, pd 2, pid 0), then remotectl_open("adsp_default_listener"), listener_init2, the next2 loop with apps_std fopen/fread/readdir/stat/... from /var/local/fw/sensors (vendor.img /etc/sensors, 51 files staged) and a writable /var/local/sensors-persist. 13 guesses listed in the source (`guess:`).
+- rpc1 (fresh boot, 4426 mV): SMMU 8/8 ok, PAS boot as before, 6 channels, attach sent (DMA buffer pm_alloc 0x1062a0000, 516 bytes, ctx 1012). No response. Crash reason changed: `err_qdi.c:1040:EX:sensor_process:0x1:frpck_0_0:0x93:PC=0xb21b0b8c` (EX = an exception in the PD's FastRPC thread) instead of rcinit's `chre_utils fatal`. So the message reaches the sensor PD and something in it makes it fault. All 8 ADSP banks: FSR 0x400 only (FORMAT, sticky), no translation/permission fault.
+- Guess for rpc2: the buffer above 4 GB. rpc2 (rebooted, 4431 mV): buffer at 0xe0f80000 (the unused top of radio.c's unmanaged pool). **The SoC reset into fastboot right after the attach was sent** (last log line uptime 68.9 s; the partial rpc2.log ends at `rpc: -> h 1 m 0 ... ctx 1012`). Phone work on audio stopped (project rule after a hard reset). Recovery boot rcv1 fine (SSH 25 s, lock screen, brightness 0x1).
+- Reverted to the pm_alloc buffer (rpc1 behaviour, no reset). The 0xe0... pool is not safe for DSP access (likely an XPU/hyp stage-2 violation -> reset); never give the DSP memory outside managed DRAM.
+- Open: why the PD faults on the rpc1 message. Leads, read-only: (1) the attach message shape for sensorspd (pid/tid, tid session bit, ctx index bits) against a real Android trace; (2) whether the DSP needs the buffer hyp-assigned to it (downstream hyp_assign_phys for the adsp heap / remote heap) or in a 32-bit IOVA window (DMA mask), not a raw PA.
 ### 2026-10-29 05:15 apps SMMU: all audio-DSP streams mapped (U7, the user's go, 2026-10-29)
 - New phone/wifi/smmu.c: radio.c's WLAN SMMU code (in use every boot) taken out and given a SID parameter; `adspboot smmu [--dry] [--sid SID MASK]`, and `adspboot boot --smmu` does it before the PAS boot. Runtime only: gone after a reboot.
 - Dry run (kernel94, uptime ~27100 s): sCR0 002d0406, 79 SMRs, 61 banks; 0x1b20/0xf would take SMR7 + CB6; no existing SMR overlaps.
