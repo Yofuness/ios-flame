@@ -5,6 +5,10 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
+- B24 Notes, Photos, Camera, Wallet black, Maps grey: not the mtl2-clients list (Notes/Photos never ask the bridge; listing all five stalled backboardd -> UIWDT kill). Next: Maps listed alone; for Notes, what draws its layer (CA remote layer / IOSurface errors in oslog). [phone]
+- B25 Music SIGSEGV on launch: strlen(NULL) in -[MPMediaLibrary _MediaLibrary_coreLibrary] (no music library path); library dir and medialibraryd both present; next: disassemble MediaPlayer at bt0+140 for the NULL source.
+- B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
+- B27 App Store stuck on "LOADING" (network/account; may need iCloud).
 - B1 mtl2.log never rotated: fix built, check on the next install. [phone]
 - B8 PhotosFileProvider crashes (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
