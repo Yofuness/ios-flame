@@ -20,6 +20,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 21:35 rotation: with oslog, method E rotates SpringBoard's and Safari's state; the screen stays portrait
+- New phone tool `oslog` (phone/tools/oslog.c, ActivityStream SPI; `oslog -l -n PROC -t S`).
+- After `E 3` with Safari in front, SpringBoard logs `[EmbeddedPipeline][Accelerometer] did change device orientation to: Ll`, the arbiter re-resolves (home screen supports Pu only; switcher overlay goes Lr), Safari's SBDisplayItemLayoutAttributes get `contentOrientation: landscapeRight (3)`, and an SBApplicationSceneUpdateTransaction runs.
+- MobileSafari logs `Setting device orientation to 3`, `Scene will change interface orientation: landscapeRight (3)`, a scene-settings diff `orientation = landscapeRight (3)`, and `-[WKWebView _endAnimatedResize]`. The framebuffer shows 32 + 27 swaps in those 10 s.
+- The webcam still shows the portrait layout (f3/f4). So the whole iOS-side chain works with method E; what's left is between the app's landscape scene and the composited screen (backboardd's display/scene transform vs our SweetFramebuffer / CA render path). Next: compare the app's layer bounds/transform in backboardd (CA debug) and check whether our IOMFB reports a display orientation/rotation property CA uses.
+
 ### 2026-10-28 21:45 rotation method E (traits pipeline callback): called, still no rotation (parked)
 - RE (investigator, SpringBoard image in the shared cache): on iOS 16 app scenes follow the Traits arbiter, whose only device-orientation input is the BKSAccelerometer delegate callback `-[SBTraitsEmbeddedDisplayPipelineManager accelerometer:didChangeDeviceOrientation:]` (it rebuilds `_orientationInputs` via `_orientationInputsForDeviceOrientation:` and `_noteInputsDidChangeAnimated:reason:`); nothing calls it without an accelerometer. Orientation events are enabled only while `_isBacklightOn` (or prefersAlwaysOnOrientation).
 - SweetMetal2 method E (`E N`): swizzles `initWithArbiter:sceneDelegate:` to capture the manager (captured: `E pipeline manager 0x28...`) and calls the callback with its own `_accelerometer`. After `D 3 0` + `E 3`: logged `E 3 (accelerometer 0x28...)`, Safari still portrait (webcam e3). With `_isBacklightOn` forced YES (it already was 1) + `_updateOrientationEventsEnabledState`: still portrait (e3b).
