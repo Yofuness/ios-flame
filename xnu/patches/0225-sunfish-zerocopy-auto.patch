@@ -1,0 +1,218 @@
+From b3e2c26b749dd26a5edf058b64c49522f834ba8e Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 14:59:37 -0400
+Subject: [PATCH] sunfish: zero-copy auto flip mode with sweetfb_zerocopy=2
+ (0225)
+
+---
+ bsd/dev/sweet_mdpdump.c               | 113 ++++++++++++++++++++++----
+ iokit/Kernel/arm/SweetFramebuffer.cpp |   9 ++
+ iokit/Kernel/arm/SweetSurface.cpp     |  10 +++
+ 3 files changed, 114 insertions(+), 18 deletions(-)
+
+diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
+index 619d0b0..7494730 100644
+--- a/bsd/dev/sweet_mdpdump.c
++++ b/bsd/dev/sweet_mdpdump.c
+@@ -23,6 +23,8 @@
+  * (sweet_mdp_zc_flip from SweetFramebuffer::swap; other frames are skipped) and
+  * SwapWait polls the flush. 0 leaves it (flip off first, ABL revert, one fb redraw).
+  * kern.sweet_zc_stats (string) reads the counters.
++ * 0225: sweetfb_zerocopy=2 enters flip mode by itself once both slots are owned
++ * (sweet_mdp_zc_auto_flip; retried from swaps) and leaves it when a slot is freed.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <stdarg.h>
+@@ -503,27 +505,15 @@ sweet_mdp_zc_wait(void)
+ 	OSIncrementAtomic((volatile SInt32 *)&zc_waits_to);
+ }
+ 
++/*
++ * 0225: set zc mode v (0, 1, 2) after the boot-arg/range checks; the body of the
++ * kern.sweet_zc_scan write, shared with the sweetfb_zerocopy=2 auto flip. Can block.
++ */
+ static int
+-sysctl_sweet_zc_scan SYSCTL_HANDLER_ARGS
++zc_set_mode(int v)
+ {
+-#pragma unused(oidp, arg1, arg2)
+-	int v = zc_scan_state, zc = 0;
+ 	uint32_t pa = 0, bpr = 0;
+-	int err = SYSCTL_OUT(req, &v, sizeof(v));
+-	if (err || !req->newptr) {
+-		return err;
+-	}
+-	err = SYSCTL_IN(req, &v, sizeof(v));
+-	if (err) {
+-		return err;
+-	}
+-	(void)PE_parse_boot_argn("sweetfb_zerocopy", &zc, sizeof(zc));
+-	if (!zc) {
+-		return EPERM;
+-	}
+-	if (v < 0 || v > 2) {   /* 0224: 2 = flip mode */
+-		return EINVAL;
+-	}
++	int err;
+ 	if (v == 1 && !sweet_surface_zc_slot(&pa, &bpr)) {
+ 		return EBUSY;
+ 	}
+@@ -565,6 +555,93 @@ sysctl_sweet_zc_scan SYSCTL_HANDLER_ARGS
+ 	return err;
+ }
+ 
++int sweet_mdp_zc_enter_flip(void);
++int
++sweet_mdp_zc_enter_flip(void)
++{
++	return zc_set_mode(2);
++}
++
++/*
++ * 0225 (sweetfb_zerocopy=2): auto flip once both slots are owned. On failure
++ * (MDP not mapped yet, EBUSY, ENOMEM) zc_auto_pending makes the next swaps retry,
++ * at most once per second, until it succeeds.
++ */
++static volatile int zc_auto_pending;
++static uint64_t zc_auto_last;
++
++void sweet_mdp_zc_auto_flip(void);
++void
++sweet_mdp_zc_auto_flip(void)
++{
++	uint32_t ids[2] = {0, 0}, bpr = 0;
++	if (zc_flip) {
++		zc_auto_pending = 0;
++		return;
++	}
++	clock_get_uptime(&zc_auto_last);
++	int err = sweet_mdp_zc_enter_flip();
++	if (err) {
++		zc_auto_pending = 1;
++		printf("sweet zc: auto flip failed %d\n", err);
++		return;
++	}
++	zc_auto_pending = 0;
++	(void)sweet_surface_zc_slots(ids, &bpr);
++	printf("sweet zc: auto flip on (slot0 id %u slot1 id %u)\n", ids[0], ids[1]);
++}
++
++/* 0225: from swap(): retry a failed auto flip, at most once per second. */
++void sweet_mdp_zc_auto_retry(void);
++void
++sweet_mdp_zc_auto_retry(void)
++{
++	uint64_t now, ns;
++	if (!zc_auto_pending) {
++		return;
++	}
++	clock_get_uptime(&now);
++	absolutetime_to_nanoseconds(now - zc_auto_last, &ns);
++	if (ns >= NSEC_PER_SEC) {
++		sweet_mdp_zc_auto_flip();
++	}
++}
++
++/* 0225: a slot surface is going away: leave flip mode (revert regs, redraw). */
++void sweet_mdp_zc_leave_flip(uint32_t id);
++void
++sweet_mdp_zc_leave_flip(uint32_t id)
++{
++	if (!zc_flip) {
++		return;
++	}
++	int err = zc_set_mode(0);
++	printf("sweet zc: slot surface id %u freed in flip mode, left flip mode (%d)\n", id, err);
++}
++
++static int
++sysctl_sweet_zc_scan SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int v = zc_scan_state, zc = 0;
++	int err = SYSCTL_OUT(req, &v, sizeof(v));
++	if (err || !req->newptr) {
++		return err;
++	}
++	err = SYSCTL_IN(req, &v, sizeof(v));
++	if (err) {
++		return err;
++	}
++	(void)PE_parse_boot_argn("sweetfb_zerocopy", &zc, sizeof(zc));
++	if (!zc) {
++		return EPERM;
++	}
++	if (v < 0 || v > 2) {   /* 0224: 2 = flip mode */
++		return EINVAL;
++	}
++	return zc_set_mode(v);
++}
++
+ /* 0224 */
+ static int
+ sysctl_sweet_zc_stats SYSCTL_HANDLER_ARGS
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index ac6cc05..80acd56 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -65,6 +65,9 @@ void sweet_mdp_zc_skip(const char *why);
+ void sweet_mdp_zc_wait(void);
+ uint32_t sweet_surface_zc_pa(uint32_t id);
+ void sweet_fb_zc_redraw(void);
++/* 0225: sweetfb_zerocopy=2 auto flip (sweet_mdpdump.c) */
++void sweet_mdp_zc_auto_retry(void);
++int sweet_surface_zc_slots(uint32_t ids[2], uint32_t *bpr);
+ }
+ #define SWEET_FB_GPU_ROWBYTES           4352    /* the 2D engine writes 64-byte multiples */
+ 
+@@ -892,6 +895,12 @@ sweet_fb_zc_swap(const uint8_t *rec)
+ 		sweet_mdp_zc_skip(why);
+ 		return true;
+ 	}
++	uint32_t ids[2], bpr;
++	if (sweet_fb_zc == 2 && sweet_surface_zc_slots(ids, &bpr) == 2) {
++		/* 0225: both slots owned, flip not on yet: retry, and drop (slot0 is the fb) */
++		sweet_mdp_zc_auto_retry();
++		return true;
++	}
+ 	return false;
+ }
+ 
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 8469190..0826fcd 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -91,6 +91,9 @@ static uint64_t      sweet_surface_wired;       /* bytes of buffer surfaces */
+ #define SWEET_ZC_SLOT_LEN               0xB00000u	/* zc1: backboardd surfaces are bpr 4608, 0xab8000 */
+ #define SWEET_ZC_FORMAT_BGRA            0x42475241
+ extern "C" void bzero_phys(addr64_t src64, vm_size_t bytes);
++/* 0225: sweetfb_zerocopy=2 auto flip (sweet_mdpdump.c) */
++extern "C" void sweet_mdp_zc_auto_flip(void);
++extern "C" void sweet_mdp_zc_leave_flip(uint32_t id);
+ static int           sweet_zc_on = -1;          /* boot-arg, parsed on first create */
+ static SweetSurface *sweet_zc_slot_surface[2];  /* not retained; cleared in free() (0224: 2 slots) */
+ static uint32_t      sweet_zc_logged;
+@@ -110,6 +113,9 @@ SweetSurface::free()
+ 		}
+ 		IOLockUnlock(sweet_surface_lock);
+ 		IOLog("sweet zc: slot%u released (surface id %u)\n", zcSlot - 1, id);
++		if (sweet_zc_on == 2) {
++			sweet_mdp_zc_leave_flip(id);    /* 0225: VIG0 must not scan a freed slot */
++		}
+ 	}
+ 	OSSafeReleaseNULL(kernelMap);
+ 	OSSafeReleaseNULL(memory);
+@@ -891,6 +897,10 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 		} else {
+ 			IOLog("sweet zc: slot%u surface id %u %ux%u bpr %u size 0x%x\n",
+ 			    s->zcSlot - 1, s->id, s->width, s->height, s->bytesPerRow, s->allocSize);
++			uint32_t ids[2], bpr;
++			if (sweet_zc_on == 2 && sweet_surface_zc_slots(ids, &bpr) == 2) {
++				sweet_mdp_zc_auto_flip();       /* 0225: both slots owned */
++			}
+ 		}
+ 	} else if (ret == kIOReturnSuccess) {
+ 		IOBufferMemoryDescriptor *mem = NULL;
+-- 
+2.56.0
+
