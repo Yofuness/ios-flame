@@ -48,6 +48,12 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 10:00 TCC works, sandbox extensions don't: shared cause of Music and Photos (b24e, b24f; kernel94)
+- Photos with MobileSlideShow in mtl2-clients: same SIGABRT (same pc/lr/far) as without; not Metal. Reverted.
+- b24f: assetsd re-enabled for one boot with StandardErrorPath /var/local/assetsd.err: `*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'assetsd requires TCCPhotosService access'` (12 assetsd crashes, 4 MobileSlideShow). Job cache restored from launchd.plist.pre-assetsd (applies next boot). /var/mobile/Media/PhotoData has only Thumbnails/.
+- Music (b25 capture): tccd `Granting ... com.apple.Music ... kTCCServiceMediaLibrary via entitlement 'com.apple.private.tcc.allow'`, AUTHREQ_RESULT authValue=2 authReason=11, then `Failed to issue sandbox extension for class: com.apple.tcc.kTCCServiceMediaLibrary`. The client then reports not authorized.
+- Cause: our Sandbox MAC policy stub (xnu patch 0050, sweet_amfi.c:292-310) returns ENOENT for __mac_syscall("Sandbox") op 5 (extension issue) and op 6 (consume). Next: emulate issue/consume in the kernel (ABI research running). Likely unlocks Music, Photos (assetsd) and any other TCC-gated service.
+
 ### 2026-10-29 09:50 B24: black apps re-checked on a fresh boot (b24d, kernel94; ssh up 17 s, 4456 mV)
 - Notes: works ("Welcome to Notes", drawn correctly; `MTL2[MobileNotes]: not listed` = CPU rendering is fine). Wallet: works (empty-state screen). Their black screens in the survey came from the session state, not the apps.
 - Photos: SIGABRT at launch (74.621, reason none) right after `exec fileproviderd`; assetsd is disabled (crash loop, 2026-10-27), likely the cause.

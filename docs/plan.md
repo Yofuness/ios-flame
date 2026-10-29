@@ -5,7 +5,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 1. ▶ **Quick backlog items:** B28 AegirPoster
-   (listing it garbles the clock; find why); B24 Photos (assetsd crash loop). (Parked: B25 Music "app not authorized", B29 noisy lock buttons.)
+   (listing it garbles the clock; find why); ▶ B24/B25 sandbox extensions (TCC grants, kernel stub refuses the token: Music, Photos). (Parked: B29 noisy lock buttons.)
 2. **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
    compositing side (backboardd display transform / our framebuffer). (display.md)
 3. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign

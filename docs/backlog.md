@@ -5,8 +5,8 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B24 Photos SIGABRT at launch (assetsd disabled since 2026-10-27, crash loop); Camera black (B17). Notes, Wallet, Maps fixed/OK 2026-10-29.
-- B25 Music SIGSEGV: MPMediaLibrary init says "app not authorized for access" -> nil library -> strlen(NULL). A TCC MediaLibrary row did not help; next: disassemble the authorization check (parked 2026-10-29).
+- B24 Photos SIGABRT: assetsd 'requires TCCPhotosService access' (same cause as B25); Camera black (B17).
+- B25 Music + B24 Photos: TCC grants, but sandbox extension issue fails (kernel Sandbox stub ENOENT for ops 5/6, patch 0050) -> clients see no access. Fix: emulate issue/consume in the kernel (in progress 2026-10-29).
 - B26 Survey not done for tap-only paths: Settings sub-panes, Notes keyboard, Notification/Control Center. [phone]
 - B28 AegirPoster crash loop at idle lock (~300-630 s, then stops): no Metal device. Listing it stops the loop but garbles the lock-screen clock (bridge texture/format issue); reverted. Next: what the clock texture needs (mtl2.log for AegirPoster, the A008 surface format 0x41303038).
 - B29 Lock-screen flashlight/camera button icons render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md).
