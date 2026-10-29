@@ -3,9 +3,10 @@
 #   - /var/local/bin/btbridge, /var/local/bin/bluetool-stub (from tools/build-userland-linux.sh)
 #   - launchd.plist (backup /System/Library/xpc/launchd.plist.pre-btbridge, first run only):
 #     com.apple.BlueTool ProgramArguments -> [/var/local/bin/bluetool-stub] (MachServices kept);
-#     com.apple.bluetoothd env BT_HCI_TRANSPORT=H4, BT_BAUDRATE=115200;
+#     com.apple.bluetoothd env BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the kernel control of
+#     xnu 0226, boot-arg btbridge=1; ios-redfin 1015's string at our baud), BT_BAUDRATE=115200;
 #     job org.iosonpixel.btbridge (RunAtLoad, root; log /var/local/btbridge.log, off: /var/local/btbridge.off)
-# Idempotent. Needs btup's firmware in /var/local/fw/bt (tools/sunfish-install-bt.sh). Reboot to apply.
+# Idempotent. Needs a kernel with xnu 0226 booted with btbridge=1 (btbridge opens /dev/btbridge). Needs btup's firmware in /var/local/fw/bt (tools/sunfish-install-bt.sh). Reboot to apply.
 #   tools/sunfish-install-btbridge.sh [--undo]    --undo: put the .pre-btbridge launchd.plist back
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,7 +44,7 @@ print('com.apple.BlueTool:', bt['ProgramArguments'], 'MachServices', list(bt.get
 d = by_label.get('com.apple.bluetoothd')
 if d is None:
     sys.exit('no com.apple.bluetoothd job in launchd.plist')
-d.setdefault('EnvironmentVariables', {}).update({'BT_HCI_TRANSPORT': 'H4', 'BT_BAUDRATE': '115200'})
+d.setdefault('EnvironmentVariables', {}).update({'BT_HCI_TRANSPORT': 'H4BC:POSIX:com.apple.uart.bluetooth,115200', 'BT_BAUDRATE': '115200'})
 print('com.apple.bluetoothd env:', d['EnvironmentVariables'])
 jobs['/System/Library/LaunchDaemons/org.iosonpixel.btbridge.plist'] = {
     'Label': 'org.iosonpixel.btbridge',

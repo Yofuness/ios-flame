@@ -23,6 +23,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:50 xnu 0226 kernel bridge (from ios-redfin 1010 + 1015, MIT) built: kernel105 (untested)
+- `btbridge=1`: kernel control com.apple.uart.bluetooth (stream, not privileged, one client) + /dev/cu.bluetooth = /dev/uart.bluetooth (one pipe), /dev/btbridge (userland end, our btbridge), /dev/btwake (dummy); 16 KiB rings, termios stored. `btbridge=3`: nodes only. Off by default. Not taken: redfin 0982 nubs (our ADT node is seen), 1016 Skywalk privilege (A2DP, later).
+- btbridge now opens /dev/btbridge (`-p` = old pty); bluetoothd env BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (rerun sunfish-install-btbridge.sh).
+
 ### 2026-10-30 08:30 bt4: bluetoothd has no plain H4 driver; bridge bring-up fails at boot (kernel98, ADT bluetooth node)
 - Installed (sunfish-install-btbridge.sh): BlueTool job -> bluetool-stub, bluetoothd env BT_HCI_TRANSPORT=H4 BT_BAUDRATE=115200, job org.iosonpixel.btbridge; backup launchd.plist.pre-btbridge. ADT /arm-io/bluetooth (work/boot/sunfish-hi.adt; old one .pre-bt).
 - bluetoothd (oslog): "DeviceTree transport = 0x00000003" (ADT node seen), "Searching for driver: H4" -> "FATAL ERROR - HCI Driver H4 could not be matched" -> "Transport layer initialization failed" -> crash reason=102, restart every ~10-20 s. So 16.7 bluetoothd has no plain-tty H4 driver: the pty route is dead; it needs the kernel control com.apple.uart.bluetooth (H4BC:POSIX:..., iOSPlus10 0332 / redfin 1015).

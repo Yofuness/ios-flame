@@ -1,11 +1,14 @@
 /*
  * btbridge: hands the WCN3990 Bluetooth controller to iOS bluetoothd (docs/features/bluetooth.md plan stages 2-3,
- * research/notes/bt-ios.md). Loads the firmware as `btup fw` does (bt_uart.c), then opens a pty, links
- * /dev/cu.bluetooth (or /dev/uart.bluetooth) to its slave and pumps H4 packets both ways between the pty master and
- * the polled SE3 UART. bluetoothd job: BT_HCI_TRANSPORT=H4 BT_BAUDRATE=115200 (the line stays at 115200, termios on
- * the pty is ignored).
+ * research/notes/bt-ios.md). Loads the firmware as `btup fw` does (bt_uart.c), then opens /dev/btbridge, the
+ * userland end of the kernel's Bluetooth transport (xnu 0226, boot-arg btbridge=1: bluetoothd connects to the kernel
+ * control com.apple.uart.bluetooth or opens /dev/cu.bluetooth, both the other end), and pumps H4 packets both ways
+ * between it and the polled SE3 UART (as ios-redfin's btd --bridge does). bluetoothd job:
+ * BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the line stays at 115200; termios is ignored).
  *
- *   btbridge [-n] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); DIR: firmware (/var/local/fw/bt)
+ *   btbridge [-n] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); DIR: firmware
+ *                                 (/var/local/fw/bt); -p: the old pty instead of /dev/btbridge (/dev/cu.bluetooth ->
+ *                                 pty slave; bluetoothd 20H392 has no tty H4 driver, bt4: kept for comparison)
  * Log: /var/local/btbridge.log (the previous run's: .prev). Off: /var/local/btbridge.off. Runs in the foreground
  * (launchd job org.iosonpixel.btbridge, tools/sunfish-install-btbridge.sh).
  *
@@ -43,8 +46,9 @@
 #define DEBUG_HANDLE	0xedc
 #define VSC_DATA	8
 #define READY		"/private/var/tmp/btbridge.pid"
+#define KDEV		"/dev/btbridge"
 
-static int shim = 1, master = -1;
+static int shim = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
 static int cmds_known, chip_err_rd, chip_err_wr;
 static uint16_t last_op;
@@ -66,7 +70,7 @@ static void up(const uint8_t *p, unsigned n)
 		if (w > 0) {
 			at += (unsigned)w;
 		} else if (w < 0 && errno != EAGAIN && errno != EINTR) {
-			printf("pty: write: %s (%u bytes lost)\n", strerror(errno), n - at);
+			printf("host: write: %s (%u bytes lost)\n", strerror(errno), n - at);
 			return;
 		} else {
 			poll(&(struct pollfd){ .fd = master, .events = POLLOUT }, 1, 100);
@@ -268,6 +272,18 @@ static int open_pty(void)
 	return s;
 }
 
+/* /dev/btbridge (xnu 0226): the kernel pipes it to com.apple.uart.bluetooth and /dev/cu.bluetooth */
+static int open_kdev(void)
+{
+	master = open(KDEV, O_RDWR | O_NONBLOCK);
+	if (master < 0) {
+		printf("kdev: open %s: %s (boot with btbridge=1, kernel with xnu 0226)\n", KDEV, strerror(errno));
+		return -1;
+	}
+	printf("kdev: %s fd %d; bluetoothd: com.apple.uart.bluetooth or /dev/cu.bluetooth\n", KDEV, master);
+	return 0;
+}
+
 static void wait_wifi(void)
 {
 	char line[256];
@@ -293,10 +309,12 @@ int main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-n"))
 			shim = 0;
+		else if (!strcmp(argv[i], "-p"))
+			use_pty = 1;
 		else if (!strcmp(argv[i], "-d") && i + 1 < argc)
 			dir = argv[++i];
 		else {
-			fprintf(stderr, "usage: btbridge [-n] [-d DIR]\n");
+			fprintf(stderr, "usage: btbridge [-n] [-p] [-d DIR]\n");
 			return 2;
 		}
 	}
@@ -310,7 +328,8 @@ int main(int argc, char **argv)
 		dup2(1, 2);
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	printf("btbridge: start, shim %s, firmware %s\n", shim ? "on" : "off (-n)", dir);
+	printf("btbridge: start, shim %s, firmware %s, host side %s\n", shim ? "on" : "off (-n)", dir,
+	       use_pty ? "pty (-p)" : KDEV);
 	unlink(READY);
 	pm_init();
 	wait_wifi();
@@ -328,7 +347,7 @@ int main(int argc, char **argv)
 		printf("btbridge: no controller, stop\n");
 		return 1;
 	}
-	if (open_pty() < 0)
+	if (use_pty ? open_pty() < 0 : open_kdev() < 0)
 		return 1;
 	FILE *rf = fopen(READY, "w");
 	if (rf) {

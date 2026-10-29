@@ -42,6 +42,9 @@ what you need to fetch yourself.
   Command Disallowed / Unknown Command rewrites and bluetool-stub's wait for the bridge and btaddress echo follow
   their `phone/bt/btd.c` and `bluetool.c` (rules re-implemented, no code copied). The CS35L41 sp8 options in
   `phone/wifi/cs35l41.c` (AMP_OUT_MUTE, SP_RATE_CTRL/TST_FS_MON0, boost values) follow their xnu patch 0953.
+  xnu patch 0226 (`bsd/dev/sweet_btbridge.c`, the Bluetooth kernel transport: kernel control
+  com.apple.uart.bluetooth, /dev/cu.bluetooth, /dev/btbridge) is adapted from their xnu patches 1010 and 1015
+  (Copyright (c) 2026 dipa-studio, MIT; their xnu patches are APSL like ours).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)
