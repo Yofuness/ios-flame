@@ -6,8 +6,9 @@
  * between it and the polled SE3 UART (as ios-redfin's btd --bridge does). bluetoothd job:
  * BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the line stays at 115200; termios is ignored).
  *
- *   btbridge [-n] [-L] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
- *                                 extended LE translation (bt7, bt_lext.c); DIR: firmware
+ *   btbridge [-n] [-L] [-W] [-R] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
+ *                                 extended LE translation (bt7, bt_lext.c); -W: no chip watchdog (bt8); -R: no rx
+ *                                 sequencer restart after an overrun (bt8, bt_uart.c); DIR: firmware
  *                                 (/var/local/fw/bt); -p: the old pty instead of /dev/btbridge (/dev/cu.bluetooth ->
  *                                 pty slave; bluetoothd 20H392 has no tty H4 driver, bt4: kept for comparison)
  * Log: /var/local/btbridge.log (the previous run's: .prev). Off: /var/local/btbridge.off. Runs in the foreground
@@ -30,8 +31,13 @@
  *     bluetoothd's 0x204a. Off: -L.
  * When the chip is ready, btbridge writes its pid to /private/var/tmp/btbridge.pid (bluetool-stub waits for it).
  * Always: ACL from handle 0xedc (the QCA debug log) is dropped, not forwarded.
+ * bt8: SIGTERM/SIGINT power the chip off, close the host side and remove the pid file. Watchdog (-W: off): a host
+ * command the chip leaves unanswered for 2 s (HCI_Reset 0x0c03 at once, others after 3 in a row) -> bring-up again
+ * (off, power, version, firmware); a pending HCI_Reset is then answered locally with status 0 (U9: chip silent
+ * after RX overruns, bluetoothd retried forever).
  */
 #include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
@@ -52,12 +58,26 @@
 #define VSC_DATA	8
 #define READY		"/private/var/tmp/btbridge.pid"
 #define KDEV		"/dev/btbridge"
+#define WD_SECS		2.0
+#define WD_MISSES	3
 
 static int shim = 1, lext = 1, use_pty, master = -1;	/* master: the pty master (-p) or /dev/btbridge */
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
 static int cmds_known, chip_err_rd, chip_err_wr;
 static uint16_t last_op;
 static uint8_t last_sub;
+static const char *fw_dir = "/var/local/fw/bt";
+static volatile sig_atomic_t stop_sig;
+/* bt8 watchdog: the oldest host command still waiting for a chip event */
+static int watchdog = 1;
+static uint16_t wd_op;
+static double wd_since;
+static unsigned wd_misses, n_recover;
+
+static void on_signal(int sig)
+{
+	stop_sig = sig;
+}
 
 static void hexline(const char *dir, const uint8_t *b, unsigned n, unsigned max)
 {
@@ -243,6 +263,10 @@ static void host_input(void)
 		else if (n_acl_up++ < 8 || n_acl_up % 256 == 0)
 			printf("-> %s handle %#x len %u\n", hb[0] == 0x02 ? "acl" : "sco", (hb[1] | hb[2] << 8) & 0xfff,
 			       need - (hb[0] == 0x02 ? 5 : 4));
+		if (!done && hb[0] == 0x01 && !wd_op) {
+			wd_op = hb[1] | hb[2] << 8;
+			wd_since = now_s();
+		}
 		if (!done && tx(hb, need)) {
 			printf("uart: tx of %u bytes failed\n", need);
 			failed = 0;
@@ -266,9 +290,63 @@ static void chip_input(void)
 		if (n_acl_down++ < 8 || n_acl_down % 256 == 0)
 			printf("<- acl handle %#x len %u\n", h, n - 5);
 		up(p, n);
-	} else if (chip_evt(p, n)) {
-		up(p, n);
+	} else {
+		if (n >= 3 && (p[1] == 0x0e || p[1] == 0x0f)) {
+			wd_op = 0;		/* bt8: the chip answers */
+			wd_misses = 0;
+		}
+		if (chip_evt(p, n))
+			up(p, n);
 	}
+}
+
+/* off, power, version, firmware: up to 3 tries; 0 when the chip is ready */
+static int bring_up_chip(void)
+{
+	for (int k = 1; k <= 3 && !stop_sig; k++) {
+		failed = 0;
+		if (!(power() || version() || firmware(fw_dir)))
+			return 0;
+		printf("btbridge: bring-up %d failed\n", k);
+		off();
+		sleep(5);
+	}
+	return -1;
+}
+
+/* bt8 watchdog: a host command unanswered for WD_SECS -> HCI_Reset at once, others after WD_MISSES in a row */
+static void watchdog_check(void)
+{
+	if (!watchdog || !wd_op || now_s() - wd_since < WD_SECS)
+		return;
+	uint16_t op = wd_op;
+	wd_op = 0;
+	wd_misses++;
+	printf("watchdog: op %#06x unanswered for %.0f s (%u in a row)\n", op, WD_SECS, wd_misses);
+	if (op != 0x0c03 && wd_misses < WD_MISSES)
+		return;
+	n_recover++;
+	double t0 = now_s();
+	printf("watchdog: recovery %u: chip silent (uart dropped %u, overruns %u), bring-up again\n", n_recover,
+	       rx_dropped, rx_overruns);
+	off();
+	sleep(1);
+	int rc = bring_up_chip();
+	wd_misses = 0;
+	printf("watchdog: recovery %u %s after %.1f s\n", n_recover, rc ? "FAILED" : "done", now_s() - t0);
+	if (!rc && op == 0x0c03)
+		answer(0x0c03, 0, (const uint8_t[1]){ 0 }, 0);	/* bluetoothd's pending HCI_Reset: the chip was just reset */
+}
+
+static void stop_bridge(void)
+{
+	printf("btbridge: signal %d, stop: chip off\n", (int)stop_sig);
+	off();
+	if (master >= 0)
+		close(master);
+	unlink(READY);
+	printf("stats: cmd %u evt %u local %u; uart dropped %u, overruns %u, rx restarts %u, recoveries %u\n", n_cmd,
+	       n_evt, n_local, rx_dropped, rx_overruns, rx_restarts, n_recover);
 }
 
 /* pty + device link; returns the slave fd (kept open: raw mode, and no EIO on the master while no client is there) */
@@ -333,18 +411,21 @@ static void wait_wifi(void)
 
 int main(int argc, char **argv)
 {
-	const char *dir = "/var/local/fw/bt";
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-n"))
 			shim = 0;
 		else if (!strcmp(argv[i], "-L"))
 			lext = 0;
+		else if (!strcmp(argv[i], "-W"))
+			watchdog = 0;
+		else if (!strcmp(argv[i], "-R"))
+			rx_restart = 0;
 		else if (!strcmp(argv[i], "-p"))
 			use_pty = 1;
 		else if (!strcmp(argv[i], "-d") && i + 1 < argc)
-			dir = argv[++i];
+			fw_dir = argv[++i];
 		else {
-			fprintf(stderr, "usage: btbridge [-n] [-L] [-p] [-d DIR]\n");
+			fprintf(stderr, "usage: btbridge [-n] [-L] [-W] [-R] [-p] [-d DIR]\n");
 			return 2;
 		}
 	}
@@ -358,22 +439,21 @@ int main(int argc, char **argv)
 		dup2(1, 2);
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	printf("btbridge: start, shim %s, lext %s, firmware %s, host side %s\n", shim ? "on" : "off (-n)",
-	       shim && lext ? "on" : "off (-L)", dir, use_pty ? "pty (-p)" : KDEV);
+	printf("btbridge: start, shim %s, lext %s, watchdog %s, rx restart %s, firmware %s, host side %s\n",
+	       shim ? "on" : "off (-n)", shim && lext ? "on" : "off (-L)", watchdog ? "on" : "off (-W)",
+	       rx_restart ? "on" : "off (-R)", fw_dir, use_pty ? "pty (-p)" : KDEV);
+	/* bt8: SIGTERM/SIGINT stop cleanly (chip off, pid file removed); no SA_RESTART so sleeps end early */
+	struct sigaction sa = { .sa_handler = on_signal };
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGINT, &sa, NULL);
 	unlink(READY);
 	pm_init();
 	wait_wifi();
-	int ok = 0;
-	for (int k = 1; k <= 3 && !ok; k++) {
-		failed = 0;
-		ok = !(power() || version() || firmware(dir));
-		if (!ok) {
-			printf("btbridge: bring-up %d failed\n", k);
-			off();
-			sleep(5);
+	if (stop_sig || bring_up_chip()) {
+		if (stop_sig) {
+			stop_bridge();
+			return 0;
 		}
-	}
-	if (!ok) {
 		printf("btbridge: no controller, stop\n");
 		return 1;
 	}
@@ -387,18 +467,21 @@ int main(int argc, char **argv)
 	}
 	printf("btbridge: ready, pumping\n");
 	double stats = now_s() + 60;
-	for (;;) {
+	while (!stop_sig) {
 		/* bt5b: poll() on /dev/btbridge never reported POLLIN (bluetoothd's commands piled up unread in the kernel
 		 * ring), so on the kernel device read every pass (O_NONBLOCK: EAGAIN when empty) */
 		struct pollfd pf = { .fd = master, .events = POLLIN };
 		if (!use_pty || (poll(&pf, 1, 0) > 0 && (pf.revents & POLLIN)))
 			host_input();
 		chip_input();
+		watchdog_check();
 		if (now_s() > stats) {
 			printf("stats: cmd %u evt %u local %u acl up %u down %u debug-log %u; host dropped %u, uart dropped %u, "
-			       "overruns %u\n", n_cmd, n_evt, n_local, n_acl_up, n_acl_down, n_dbg, host_dropped, rx_dropped,
-			       rx_overruns);
+			       "overruns %u, rx restarts %u, recoveries %u\n", n_cmd, n_evt, n_local, n_acl_up, n_acl_down, n_dbg,
+			       host_dropped, rx_dropped, rx_overruns, rx_restarts, n_recover);
 			stats = now_s() + 60;
 		}
 	}
+	stop_bridge();
+	return 0;
 }

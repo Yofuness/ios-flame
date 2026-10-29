@@ -33,6 +33,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
+- U5b speaker beep on the BOTTOM amp (0x41; earlier tests drove the earpiece amp): ear at the bottom grille, then at the earpiece. ~3 min.
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
 - D5 [DONE 2026-10-29] fake taps/swipes (`T`/`W` in /var/local/sweet-orient): tests no longer need a finger.

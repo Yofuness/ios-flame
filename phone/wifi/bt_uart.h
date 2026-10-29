@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 extern int failed;
-extern unsigned rx_overruns, rx_dropped, acl_pkts, acl_bytes;
+extern unsigned rx_overruns, rx_restarts, rx_dropped, acl_pkts, acl_bytes;
+extern int rx_restart;			/* bt8: restart a stopped rx sequencer after an overrun (default 1) */
 
 double now_s(void);
 void hex(const char *what, const uint8_t *b, unsigned n);

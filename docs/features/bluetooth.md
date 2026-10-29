@@ -23,6 +23,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 14:50 btbridge watchdog + SIGTERM, xnu 0231 Skywalk privileges (kernel108; untested)
+- btbridge: SIGTERM/SIGINT -> chip off, close /dev/btbridge, remove the pid file; watchdog (-W off): an unanswered HCI_Reset (2 s) or 3 unanswered commands -> off + bring-up again, a local Command Complete for the pending reset; bt_uart restarts the RX sequencer after an overrun if it stopped (-R off).
+- xnu 0231 (from ios-redfin 1016, MIT): PRIV_SKYWALK_REGISTER_USER_PIPE / _KERNEL_PIPE / _LOW_LATENCY_CHANNEL for platform binaries or holders of the matching entitlements (AirPods/A2DP crash); sweetskypipe=0 off.
+
 ### 2026-10-30 13:45 PAIRING WORKS: Xbox controller connected (U9 by the user; kernel107, btbridge)
 - First try: the Settings switch only spun. btbridge log: bluetoothd sent scan disable (0x200c->0x2042 lext), then HCI_Reset + Read_Local_Version, and the chip never answered after the bridge had dropped 71 bytes with 4 RX FIFO overruns (polled UART at 115200). btbridge's SIGTERM was ignored (needed kill -9). Restarting btbridge (power cycle + firmware, 20 s) fixed it.
 - Second try: an Xbox controller paired and showed connected (stats: acl up 183 / down 316 packets, cmd 598, evt 1693; 42 bytes dropped, 1 overrun).

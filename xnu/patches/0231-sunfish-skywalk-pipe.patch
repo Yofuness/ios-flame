@@ -1,0 +1,75 @@
+From 3eecefdc7527e8305e803267d4672af69d462722 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 17:41:05 -0400
+Subject: [PATCH] sunfish: Skywalk pipe privileges for entitled daemons,
+ sweetskypipe=0 off (ios-redfin 1016, MIT) (0231)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/kern/sweet_amfi.c | 40 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index de26e29..8d4012f 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -26,6 +26,7 @@
+ #include <kern/clock.h>
+ #include <kern/debug.h>
+ #include <kern/kalloc.h>
++#include <IOKit/IOBSD.h>
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
+ #include <machine/atomic.h>
+@@ -494,10 +495,47 @@ static struct {
+ } sweet_priv_logged[SWEET_PRIV_LOG_MAX];
+ static int sweet_priv_logged_count;
+ 
++/*
++ * 0231 (ios-redfin 1016, MIT): Skywalk nexus privileges. bluetoothd registers a
++ * user-pipe nexus for A2DP audio (AudioSkywalkPipe); denied, os_channel_create_extended
++ * returns NULL and bluetoothd crashes in os_channel_get_fd(NULL) (AirPods pairing).
++ * Granted to platform binaries or holders of the matching entitlement.
++ * Boot-arg sweetskypipe=0 turns it off.
++ */
++static const struct {
++	int priv;
++	const char *ent;
++} sweet_priv_ents[] = {
++	{ PRIV_SKYWALK_REGISTER_USER_PIPE, "com.apple.private.skywalk.register-user-pipe" },
++	{ PRIV_SKYWALK_REGISTER_KERNEL_PIPE, "com.apple.private.skywalk.register-kernel-pipe" },
++	{ PRIV_SKYWALK_LOW_LATENCY_CHANNEL, "com.apple.private.skywalk.low-latency-channel" },
++};
++
++static bool
++sweet_priv_entitled(int priv)
++{
++	static int enabled = -1;
++	if (enabled < 0) {
++		int v = 1;
++		(void)PE_parse_boot_argn("sweetskypipe", &v, sizeof(v));
++		enabled = v != 0;
++	}
++	if (!enabled) {
++		return false;
++	}
++	for (size_t i = 0; i < sizeof(sweet_priv_ents) / sizeof(sweet_priv_ents[0]); i++) {
++		if (sweet_priv_ents[i].priv == priv) {
++			return csproc_get_platform_binary(current_proc()) ||
++			       IOCurrentTaskHasEntitlement(sweet_priv_ents[i].ent);
++		}
++	}
++	return false;
++}
++
+ static int
+ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
+ {
+-	if (priv == PRIV_WORK_INTERVAL) {
++	if (priv == PRIV_WORK_INTERVAL || sweet_priv_entitled(priv)) {
+ 		return 0;
+ 	}
+ 	char name[20];
+-- 
+2.56.0
+

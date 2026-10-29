@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 14:50 0x40 is the TOP (earpiece) amp; bottom amp 0x41 now driven (ep1, sp10; kernel107)
+- research/notes/speaker-silent.md: DT cs35l41@40 uses reset_pin_top (pm6150l gpio8) + irq_pin_top (gpio64); cs35l41@41 (prefix "R") reset_pin_bottom (gpio11) + irq_pin_bottom (gpio65). So all earlier tests drove the earpiece amp while the user listened at the bottom grille. Routing, gate, mute, rails, LPI pins and the SEC_MI2S_RX backend all match the DT; the sp8 SD1 loopback zeros prove nothing (stock tx-lines = 0).
+- New USB measurement mic (EM-01, analog profile; laptop tone ~150x): ep1 (0x40, boost, -20 dB) and sp10 (0x41 bypass, -20 dB, `--amp-addr 0x41`: DEVID 0x35a40, PUP_DONE 3 ms, PLL_LOCK, on 3026 ms, no fault): mic 0 tone windows both times (mic placement relative to the phone unknown).
+- cs35l41.c now allows 0x40 and 0x41 (AMP_OK), same caps (-20 dB, 3 s). Next: the user listens at the bottom speaker with 0x41 (U5b).
+
 ### 2026-10-30 13:20 U5 by the user: silent in both modes (kernel107, sweetse9=2 sweetampreset=1)
 - u5a (bypass) and u5b (--amp-boost, stock DT values): amp power up -20 dB, PUP_DONE 3 ms, PLL_LOCK, on ~3.0 s, no faults; the user listened with an ear at the speaker: nothing, not even a click. So the speaker is really silent: the fault is upstream of (or inside) the amp, not the PC mic.
 - The user added a USB measurement microphone (speaker-calibration type, no calibration file) on the laptop for later tests.

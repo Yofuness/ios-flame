@@ -49,6 +49,8 @@ what you need to fetch yourself.
   xnu patches 0228-0230 (the sensor HID services in `iokit/Kernel/arm/hid/SweetHID.cpp` and `SweetMotion.h`,
   `bsd/dev/sweet_motion.c` = /dev/redwood-motion and `poke m`, the orientation sensor-time child) are ported from
   their xnu patches 0971, 0972 and 1031 (MIT).
+  xnu patch 0231 (Skywalk pipe privileges in `bsd/kern/sweet_amfi.c`, the bluetoothd crash when audio devices
+  connect) is ported from their xnu patch 1016 (MIT).
   xnu patch 0227 (`SweetBattery.cpp` coulomb count, SDAM seed, rest pull) is ported from their xnu patch 0966 (MIT).
   `phone/sensors/` (pb, sns, sensor, motion.h, test_sensd.c: the SNS/SEE sensor client and its host tests) is
   copied from their `phone/sensors/` (Copyright (c) 2026 dipa-studio, MIT, `phone/sensors/LICENSE.redfin`);

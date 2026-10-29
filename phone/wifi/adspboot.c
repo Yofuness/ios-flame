@@ -2319,6 +2319,8 @@ int main(int argc, char **argv)
 			amp_boost = 1;
 		else if (!strcmp(argv[i], "--amp-invert-clk"))	/* sp8: AFE clock attri INVERT_COUPLE_NO (4) */
 			amp_invert_clk = 1;
+		else if (!strcmp(argv[i], "--amp-addr") && i + 1 < argc)	/* ep1: 0x41 = bottom loudspeaker */
+			amp.addr = (uint8_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
 			amp_db = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--pcm-dbfs") && i + 1 < argc) {	/* sp5: clamped -40..-6 */
@@ -2413,7 +2415,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

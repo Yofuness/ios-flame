@@ -323,7 +323,8 @@ int tx(const uint8_t *b, unsigned n)
 	return 0;
 }
 
-unsigned rx_overruns;
+unsigned rx_overruns, rx_restarts;
+int rx_restart = 1;
 
 /* bytes received within ms (stops early when max is reached) */
 static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
@@ -344,8 +345,18 @@ static unsigned rx(uint8_t *b, unsigned max, unsigned ms)
 				b[got++] = (uint8_t)(v >> (8 * k));
 		}
 		uint32_t s = sr(S_IRQ_STATUS);
-		if (s & (1u << 25))		/* S_RX_FIFO_WR_ERR: the FIFO overflowed, bytes lost (bt3) */
+		if (s & (1u << 25)) {		/* S_RX_FIFO_WR_ERR: the FIFO overflowed, bytes lost (bt3) */
 			rx_overruns++;
+			/* bt8 (U9: chip silent after 4 overruns): if the rx sequencer stopped with the overrun, start
+			 * it again here instead of a full re-init. rx_restart = 0 (btbridge -R) turns it off. */
+			if (rx_restart && !(sr(GENI_STATUS) & (1u << 12))) {
+				sw(S_IRQ_CLEAR, s);
+				sw(S_CMD0, START_READ);
+				rx_restarts++;
+				printf("uart: rx sequencer stopped after overrun %u: restarted (%u)\n", rx_overruns,
+				       rx_restarts);
+			}
+		}
 		sw(S_IRQ_CLEAR, s);
 	}
 	return got;

@@ -57,7 +57,7 @@
 #define BCLK_CODE	0x1b		/* 1.536 MHz (cs35l41.c:66 PLL table) */
 #define VOL_CEIL_DB	(-20)		/* sp1: hard ceiling, whatever the caller passes */
 #define VOL_FLOOR_DB	(-102)		/* tlv minimum 0x4cf */
-#define AMP_ADDR	0x40		/* sp1: the only amp ever written */
+#define AMP_OK(x)	((x) == 0x40 || (x) == 0x41)	/* ep1: 0x40 = top (earpiece, DT reset_pin_top), 0x41 = bottom loudspeaker */
 
 static int dry;
 
@@ -92,8 +92,8 @@ int cs_read(struct cs_amp *a, uint32_t reg, uint32_t *v)
 
 static int wr(struct cs_amp *a, uint32_t reg, uint32_t v)
 {
-	if (a->addr != AMP_ADDR) {	/* sp1: never write 0x41 */
-		printf("cs35l41 %#x: write %08x refused (only %#x)\n", a->addr, reg, AMP_ADDR);
+	if (!AMP_OK(a->addr)) {	/* ep1: 0x40/0x41 only (was 0x40 only: the DT shows 0x40 is the earpiece amp) */
+		printf("cs35l41 %#x: write %08x refused (only 0x40/0x41)\n", a->addr, reg);
 		return -1;
 	}
 	printf("cs35l41 %#x: %swrite %08x = %08x\n", a->addr, dry ? "[dry] " : "", reg, v);
@@ -287,8 +287,8 @@ void cs_out_mute(struct cs_amp *a, const char *tag)
 
 int cs_config(struct cs_amp *a, int vol_db, int boost)
 {
-	if (!a->probed || a->addr != AMP_ADDR) {
-		printf("cs35l41 %#x: config refused (%s)\n", a->addr, a->probed ? "only 0x40" : "not probed");
+	if (!a->probed || !AMP_OK(a->addr)) {
+		printf("cs35l41 %#x: config refused (%s)\n", a->addr, a->probed ? "only 0x40/0x41" : "not probed");
 		return -1;
 	}
 	if (vol_db > VOL_CEIL_DB)
@@ -418,7 +418,7 @@ int cs_check(struct cs_amp *a)
 
 int cs_power_up(struct cs_amp *a)
 {
-	if (!a->verified || a->addr != AMP_ADDR || a->err_bits) {	/* sp1: no GLOBAL_EN without a clean read-back */
+	if (!a->verified || !AMP_OK(a->addr) || a->err_bits) {	/* sp1: no GLOBAL_EN without a clean read-back */
 		printf("cs35l41 %#x: power-up refused (verified %d, errors %08x)\n", a->addr, a->verified, a->err_bits);
 		return -1;
 	}
@@ -484,7 +484,7 @@ void cs_diag(struct cs_amp *a, const char *tag)
 
 void cs_power_down(struct cs_amp *a)
 {
-	if (a->addr != AMP_ADDR || !a->configured)
+	if (!AMP_OK(a->addr) || !a->configured)
 		return;
 	if (a->up) {
 		if (a->out_mute)	/* sp8: mute before GLOBAL_EN 0, as ios-redfin 0953 */
