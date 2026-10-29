@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 17:40 PCM plays the full 3 s through ASM/ADM/AFE (pc3; kernel98; adspboot bba8a7c)
+- bba8a7c: remote intents kept with an in-use flag; the ADSP's RX_DONE_W_REUSE frees them again (RX_DONE deletes); grants logged; 1 s heartbeat during PCM (`--intent-once` = old behaviour).
+- pc3: setup ok (handle b0a52a28, copp 0); `pcm: done: ok; 308 periods written, 308 done (0 errors) in 3055 ms, 0 underflows`; teardown (pause, close, ADM close, unmap) and AFE stop/clock off all status 0. apr_audio_svc: 116 remote intents, none stuck; rx 325 / rx_done_reuse 325. ADSP state 6 after; no SMMU fault; no reset; ssh 17 s; 4456 mV. Amps off: no sound expected.
+- Next: CS35L41 (the only step with hardware risk): read-only ID/status first, then the left amp at -20 dB digital volume, boost bypass, 3 s, IRQ status before/after, tone-detect with the laptop mic.
+
 ### 2026-10-29 17:25 PCM 2x longer, still stalls (pc2; adspboot 2e4ad03)
 - 2e4ad03: 512 remote intents per channel (pc1 had dropped 39 the ADSP gave), 64-packet tx queue, RX_DONE_W_REUSE for our intents, >= 8 local intents.
 - pc2: setup all ok; 113 written, 105 WRITE_DONE in 1053 ms (was 53), then stall; t=30 s apr_audio_svc: remote intents 0, local 8, tx queued 14, intent reqs 14 (never granted); teardown no replies. ADSP state 6, no SMMU fault, no reset.
