@@ -17,6 +17,7 @@
  *   adspboot boot --rpc --root --unsafe  attach to the root PD (pd 0), print the reply and the SMMU fault state
  *                     (audio step 5), then serve its listener (apps_std files, step 6) for --watch seconds
  *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
+ *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
  *                     CLOSEd at exit only with ADSP_CLOSE=1 (apr3: closing the FastRPC channel crashed the ADSP: fastrpc_port_s.c:176)
@@ -782,6 +783,139 @@ static void apr_next(int ok)
 		printf("apr: queries done\n");
 }
 
+/*
+ * ap4: `--afe` (implies --apr): step 2 of apr-plan.md, the SECONDARY_MI2S_RX port alone (no amps, ASM, ADM or PCM).
+ * After the queries: bit clock on (AFE_SVC_CMD_SET_PARAM 0x100F3, else the V2 0x100FC), I2S config, DEVICE_START,
+ * 2 s hold, DEVICE_STOP, clock off. Each step waits up to 3 s for its APR basic response; the first non-zero status
+ * ends the sequence, but stop and clock off still run once start/clock on succeeded. Layouts: hakios
+ * sound_sm7150.c afe_service_param/afe_port_param, afe_clock_set, afe_i2s (= Linux apr_audio-v2.h).
+ */
+#define APR_SVC_AFE		0x4
+#define AFE_SVC_CMD_SET_PARAM	0x000100f3
+#define AFE_SVC_CMD_SET_PARAM_V2 0x000100fc
+#define AFE_PORT_CMD_SET_PARAM_V2 0x000100ef
+#define AFE_PORT_CMD_DEVICE_START 0x000100e5
+#define AFE_PORT_CMD_DEVICE_STOP 0x000100e6
+#define AFE_MODULE_CLOCK_SET	0x0001028f
+#define AFE_PARAM_ID_CLOCK_SET	0x00010290
+#define AFE_MODULE_AUDIO_DEV_INTERFACE 0x0001020c
+#define AFE_PARAM_ID_I2S_CONFIG	0x0001020d
+#define AFE_PORT_SEC_MI2S_RX	0x1002
+#define AFE_CLK_SEC_MI2S_IBIT	0x102
+
+struct afe_param {
+	uint32_t module, param;
+	uint16_t size, reserved;
+} __attribute__((packed));
+
+struct afe_clock_set {		/* afe_clk_set: version, clk_id, freq, u16 attri, u16 root, enable (20 B) */
+	uint32_t version, id, hz;
+	uint16_t attribute, root;
+	uint32_t enable;
+} __attribute__((packed));
+
+struct afe_i2s {		/* afe_param_id_i2s_cfg */
+	uint32_t version;
+	uint16_t bits, channel_mode, mono_stereo, ws_src;
+	uint32_t rate;
+	uint16_t data_format, reserved;
+} __attribute__((packed));
+
+enum { AFE_IDLE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD, AFE_STOP, AFE_CLK_OFF, AFE_DONE };
+static int afe_on, afe_step, afe_clk_ok, afe_started;
+static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response we wait for */
+
+static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16_t len)
+{
+	uint8_t pkt[sizeof(struct apr_hdr) + 64];
+	struct apr_hdr h = {
+		.hdr_field = APR_HDR_FIELD, .pkt_size = (uint16_t)(sizeof(h) + len),
+		.src_svc = APR_SVC_AFE, .src_domain = APR_DOMAIN_APPS, .src_port = 0,
+		.dest_svc = APR_SVC_AFE, .dest_domain = APR_DOMAIN_ADSP, .dest_port = dest_port,
+		.token = 0x100u + (uint32_t)afe_step, .opcode = opcode,
+	};
+	memcpy(pkt, &h, sizeof(h));
+	memcpy(pkt + sizeof(h), pl, len);
+	printf("afe: step %d tx op %x (%u B)\n", afe_step, opcode, (unsigned)h.pkt_size);
+	chan_send(apr_chan, pkt, h.pkt_size);
+	afe_op = opcode;
+	apr_due = now_ms() + 3000;
+}
+
+static void afe_clock(uint32_t opcode, int enable)
+{
+	uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_clock_set)] = { 0 };
+	struct afe_param p = { AFE_MODULE_CLOCK_SET, AFE_PARAM_ID_CLOCK_SET, sizeof(struct afe_clock_set), 0 };
+	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000 * 16 * 2, 1 /* COUPLE_NO */, 0, (uint32_t)enable };
+	uint32_t size = sizeof(p) + sizeof(c);	/* payload size; address 0/0 and mem_map_handle 0: in band */
+	memcpy(b, &size, 4);
+	memcpy(b + 16, &p, sizeof(p));
+	memcpy(b + 16 + sizeof(p), &c, sizeof(c));
+	afe_send(0, opcode, b, sizeof(b));
+}
+
+/* Run the step afe_step now holds; AFE_HOLD only arms the 2 s timer. */
+static void afe_run(void)
+{
+	uint16_t port = AFE_PORT_SEC_MI2S_RX;
+	switch (afe_step) {
+	case AFE_CLK_F3: afe_clock(AFE_SVC_CMD_SET_PARAM, 1); break;
+	case AFE_CLK_FC: afe_clock(AFE_SVC_CMD_SET_PARAM_V2, 1); break;
+	case AFE_CFG: {
+		uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_i2s)] = { 0 };
+		struct afe_param p = { AFE_MODULE_AUDIO_DEV_INTERFACE, AFE_PARAM_ID_I2S_CONFIG, sizeof(struct afe_i2s), 0 };
+		struct afe_i2s c = { 1, 16, 1 /* SD0 */, 1 /* stereo */, 1 /* ws internal */, 48000, 0, 0 };
+		uint16_t size = sizeof(p) + sizeof(c);
+		memcpy(b, &port, 2);
+		memcpy(b + 2, &size, 2);
+		memcpy(b + 16, &p, sizeof(p));
+		memcpy(b + 16 + sizeof(p), &c, sizeof(c));
+		afe_send(port, AFE_PORT_CMD_SET_PARAM_V2, b, sizeof(b));
+		break;
+	}
+	case AFE_START:
+	case AFE_STOP: {
+		uint16_t b[2] = { port, 0 };
+		afe_send(port, afe_step == AFE_START ? AFE_PORT_CMD_DEVICE_START : AFE_PORT_CMD_DEVICE_STOP, b, sizeof(b));
+		break;
+	}
+	case AFE_HOLD:
+		printf("afe: port started, holding 2 s\n");
+		afe_op = 0;
+		apr_due = now_ms() + 2000;
+		break;
+	case AFE_CLK_OFF: afe_clock(afe_clk_op, 0); break;
+	default:
+		afe_op = 0;
+		printf("afe: done (clock %s via %x, start %s)\n", afe_clk_ok ? "ok" : "failed", afe_clk_op,
+		       afe_started ? "ok" : "not done");
+	}
+}
+
+/* A step finished: ok = basic response status 0. Picks the next step (stop/clock off always run once needed). */
+static void afe_next(int ok, uint32_t status)
+{
+	int s = afe_step;
+	if (afe_op)
+		printf("afe: step %d op %x: %s (status %x)\n", s, afe_op, ok ? "ok" : "FAILED", status);
+	if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && !ok)
+		afe_step = s == AFE_CLK_F3 ? AFE_CLK_FC : AFE_DONE;
+	else if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && ok) {
+		afe_clk_ok = 1;
+		afe_clk_op = afe_op;
+		printf("afe: clock set works with op %x\n", afe_op);
+		afe_step = AFE_CFG;
+	} else if (s == AFE_CFG || s == AFE_START) {
+		if (ok && s == AFE_START)
+			afe_started = 1;
+		afe_step = ok ? s + 1 : AFE_CLK_OFF;
+	} else
+		afe_step = s + 1;
+	if (afe_step == AFE_CLK_OFF && !afe_clk_ok)
+		afe_step = AFE_DONE;
+	afe_run();
+}
+
 static void apr_rx(const uint8_t *p, size_t n)
 {
 	struct apr_hdr h;
@@ -816,12 +950,26 @@ static void apr_rx(const uint8_t *p, size_t n)
 	if (apr_step >= 1 && apr_step <= 3 && (h.opcode == apr_q[apr_step - 1] + 1 ||
 	    (h.opcode == APR_BASIC_RSP && len && pl[0] == apr_q[apr_step - 1])))
 		apr_next(h.opcode != APR_BASIC_RSP);
+	else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && afe_op && h.opcode == APR_BASIC_RSP && len > 1 &&
+	    pl[0] == afe_op)
+		afe_next(pl[1] == 0, pl[1]);
 }
 
 /* --apr: start the queries once apr_audio_svc is open both ways; 3 s per query, then the next one. */
 static void apr_poll(void)
 {
-	if (!apr_on || apr_step > 3)
+	if (apr_on && apr_step > 3) {	/* ap4: --afe sequence after the queries */
+		if (afe_on && afe_step == AFE_IDLE) {
+			afe_step = AFE_CLK_F3;
+			afe_run();
+		} else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && now_ms() >= apr_due) {
+			if (afe_op)
+				printf("afe: op %x: no reply in 3 s\n", afe_op);
+			afe_next(afe_step == AFE_HOLD, afe_op ? 0xffffffff : 0);
+		}
+		return;
+	}
+	if (!apr_on)
 		return;
 	if (!apr_step) {
 		for (int i = 0; i < nch; i++)
@@ -1179,6 +1327,8 @@ int main(int argc, char **argv)
 			sensors = 1;
 		else if (!strcmp(argv[i], "--apr"))
 			apr_on = 1;
+		else if (!strcmp(argv[i], "--afe"))	/* ap4: AFE port start without amps; implies --apr */
+			apr_on = afe_on = 1;
 		else if (!strcmp(argv[i], "--stub-svc") && i + 1 < argc && nstub < MAX_STUB) {
 			char *e;
 			stub[nstub].svc = (uint32_t)strtoul(argv[++i], &e, 0);
@@ -1225,7 +1375,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
