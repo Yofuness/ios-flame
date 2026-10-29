@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 12:05 root PD attach with a 39-bit bank: same translation fault (au7; adspboot 0b14a57)
+- Bank (CB12/13): SCTLR 0x61, TCR 0x00800019 (T0SZ 25), TCR2 0x62, MAIR0 0x44, CBAR 0x1f000, CBA2R 1; walk for 0x80000000 and 0x380000000 both L1->L2->L3 = DMA page | 0x443 (correct, before and after).
+- READY 117 ms; attach sent (516 bytes); DSP crash after 1118 ms `frpck_0_0:0x95 PC=0xf02777ac`; FSR 0x402 (TF) FAR 0x80000000 FSYNR0 0x00110000. The SMMU strips the stream bits (FAR is 0x80000000). No SoC reset; ssh 17 s, 4455 mV.
+- Next: the reference's exact bank values (cacheable inner-shareable walk TCR 0x00803619, MAIR0 0xf404ff44, SCTLR 0x1127) behind SMMU_REF=1; decode FSYNR0.
+
 ### 2026-10-29 11:50 DSP READY, sensors PD survives, root PD attach faults in the SMMU instead of resetting (au5, au6; kernel95; adspboot 3a275a6)
 - 3a275a6: SMP2P items were swapped (we wrote our header into the ADSP's item 443 and waited on 429). Now in 443 / out 429; FSR status separates FORMAT (0x400) from faults.
 - au5 `adspboot boot`: `smp2p in item 443: magic $SMP, entries 3: "smp2p" = 0, "slave-kernel" = 6`, `READY after 110 ms (state 6)`; pd-mapper avs/audio, tms/pdr_enabled; NO sensor_process PD failure (first time). `smmu --rpc` + `--status`: 0x1b23 -> CB13, FSR 0x400 no fault.
