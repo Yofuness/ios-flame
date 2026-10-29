@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 17:25 PCM 2x longer, still stalls (pc2; adspboot 2e4ad03)
+- 2e4ad03: 512 remote intents per channel (pc1 had dropped 39 the ADSP gave), 64-packet tx queue, RX_DONE_W_REUSE for our intents, >= 8 local intents.
+- pc2: setup all ok; 113 written, 105 WRITE_DONE in 1053 ms (was 53), then stall; t=30 s apr_audio_svc: remote intents 0, local 8, tx queued 14, intent reqs 14 (never granted); teardown no replies. ADSP state 6, no SMMU fault, no reset.
+- Next: the ADSP's RX_DONE_W_REUSE to us is ignored (remote intents single-use in our table) — honour it.
+- Mic check (the user's idea): laptop mic (lid closed) hears a 1 kHz tone from the laptop speakers ~50x above noise; Sonix webcam mic only ~5x. tone-detect defaults to the laptop mic.
+
 ### 2026-10-29 17:05 PCM through ASM/ADM: setup ok, 53 periods played, then the APR channel stalls (pc1; kernel98; adspboot 11c845c)
 - 11c845c `--pcm`: 32 KB buffer for ADSP stream 0x1b21 through a translating bank (CB12, SMMU_REF values), DSP address 0x1a0000000 (IOVA 0xa0000000 | 1<<32); ASM map 0x10D92 -> handle b0a52a58; ADM open v5 0x10326 (port 0x1002, topology 0x10312, 16-bit 48 kHz 2 ch) status 0 copp 0; ASM open-write v3 0x10DB3, matrix route 0x10325, media fmt 0x10D98, run 0x10DAA: all status 0.
 - Playback (1 kHz -20 dBFS, 10 ms periods, 8 in flight): 61 written, 53 WRITE_DONE in 504 ms, then nothing; teardown commands and AFE stop got no reply. ADSP state 6 (not crashed), no SMMU fault on 0x1b21 or 0x1b23, no reset. Amps off (no sound expected).
