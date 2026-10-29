@@ -23,6 +23,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:55 bt8: kernel108 + new btbridge clean; pairing remembered
+- Boot clean (kernel108 = 107 + 0231), btbridge "watchdog on, rx restart on", "ready, pumping"; bluetoothd one pid over 30 s; no CRASH. Settings > Bluetooth on; My Devices lists the paired Xbox controller ("Not Connected": controller off), so pairings survive reboots.
+- SIGTERM: btbridge exits within 5 s (rail off, GCC vote cleared, stats), a manual restart is "ready" 45 s later (bluetoothd restarts with it). No recoveries or RX restarts needed this boot. AirPods retest with 0231 needs the user.
+
 ### 2026-10-30 14:50 btbridge watchdog + SIGTERM, xnu 0231 Skywalk privileges (kernel108; untested)
 - btbridge: SIGTERM/SIGINT -> chip off, close /dev/btbridge, remove the pid file; watchdog (-W off): an unanswered HCI_Reset (2 s) or 3 unanswered commands -> off + bring-up again, a local Command Complete for the pending reset; bt_uart restarts the RX sequencer after an overrun if it stopped (-R off).
 - xnu 0231 (from ios-redfin 1016, MIT): PRIV_SKYWALK_REGISTER_USER_PIPE / _KERNEL_PIPE / _LOW_LATENCY_CHANNEL for platform binaries or holders of the matching entitlements (AirPods/A2DP crash); sweetskypipe=0 off.
