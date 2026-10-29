@@ -5,7 +5,8 @@
 #   psx      processes without /proc; psx -k NAME kills     pstack   PID: thread backtraces (tools/flame-profile.py)
 #   openapp  BUNDLE_ID [URL]: launch an app                   lsreg    LaunchServices registration (no uicache)
 #   netsvc   SystemConfiguration network service for an IF    nettest  DNS, TCP, then HTTPS
-#   oslog    stream the unified log                           prefs    CFPreferences read/write (no defaults)
+#   oslog    [-p PID|-n NAME] [-t S] [-g STR] [-l]: unified log (ActivityStream SPI); oslogls = live-store reader
+#   prefs    CFPreferences read/write (no defaults)
 #   imgtest  does ImageIO decode real pixels (HEIC: no)       membw    CPU memory bandwidth
 #   vtdecode FILE [SEC]: AVAssetReader/VideoToolbox decode fps, hardware or not
 #   vcopy    SRC DST: tree copy keeping xattrs, ACLs, flags; -l PATH, -c SRC DST compare
@@ -27,8 +28,8 @@ build() {	# NAME SOURCE [FLAGS...]
 		../../tools/linux-ios-sign "out/$name"
 	fi
 }
-for c in membw pstack psx vcopy sctl fcopy; do build $c $c.c; done
-for m in expt exq nettest openapp oslog prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
+for c in membw pstack psx vcopy sctl fcopy oslog; do build $c $c.c; done
+for m in expt exq nettest openapp oslogls prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
 build imgtest imgtest.m -fobjc-arc -framework Foundation -framework ImageIO -framework CoreGraphics
 build lsreg lsreg.m -fobjc-arc -framework Foundation -framework MobileCoreServices
 build netsvc netsvc.m -fobjc-arc -framework Foundation -framework SystemConfiguration

@@ -1,7 +1,7 @@
 /*
- * oslog: stream the unified log (there is no `log` on iOS), like `log stream`.
- *   oslog [-t SECS] [-l] [PROCESS...]   only these processes (name, substring); -l = info+debug too
- * LoggingSupport's live store, through diagnosticd. Signed with oslog-ents.plist.
+ * oslogls: stream the unified log (there is no `log` on iOS), like `log stream` (OSLogEventLiveStore).
+ *   oslogls [-t SECS] [-l] [PROCESS...]   only these processes (name, substring); -l = info+debug too
+ * LoggingSupport's live store, through diagnosticd. Signed with oslogls-ents.plist.
  */
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
@@ -60,7 +60,7 @@ int main(int argc, char **argv)
 		__block OSLogEventLiveStream *stream = nil;
 		[[NSClassFromString(@"OSLogEventLiveStore") liveLocalStore] prepareWithCompletionHandler:^(id source, NSError *err) {
 			if (!source) {
-				printf("oslog: no live source: %s\n", err.description.UTF8String);
+				printf("oslogls: no live source: %s\n", err.description.UTF8String);
 				exit(1);
 			}
 			stream = [[NSClassFromString(@"OSLogEventLiveStream") alloc] initWithLiveSource:source];
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 				       (e.composedMessage ?: @"").UTF8String);
 			}];
 			[stream setInvalidationHandler:^(int reason, id pos) {
-				printf("oslog: stream ended (%d)\n", reason);
+				printf("oslogls: stream ended (%d)\n", reason);
 				exit(0);
 			}];
 			[stream activate];
