@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 12:40 root + sensors PD listeners serve files (au10, au11; kernel95; adspboot ae98d06)
+- ae98d06: root PD listener after attach (remotectl open adsp_default_listener, register, init2, next2 loop with apps_std); `--sensors` then attaches the sensors PD (pd 2, client tgid+1, second buffer half). Sensors config (51 files from ../restore/fw/sensors/sensors) pushed to /var/local/fw/sensors (phone only).
+- au10 (root only): attach 0, remotectl_open 0, register 0, init2 0, apps_std handle 11; only request `fopen_with_env ADSP_LIBRARY_PATH:.//lowi//lowi_lp.conf` -> missing; ADSP CRASH after 10149 ms (sar.cc:27 chre_utils fatal).
+- au11 (root + sensors): sensors PD attach/register/init2 0; 718 calls served (fopen_with_env 311, stat 140, fread 138, readdir 42 ...); opened sns_reg_config + 28 config/*.json (bmp380, lis2mdl, lsm6dsr ...). Missing: 9 /sys/devices/soc0/* files, the persist registry dir (/mnt/vendor/persist/sensors/registry/registry: mkdir fails, temp.json x44). PD FAILURE sar.cc chre_utils fatal, then ADSP CRASH after 10079 ms "EX:kernel:0x0:sns_sig_remote_:0x109d". No reset; ssh 17 s; 4455 mV.
+
 ### 2026-10-29 12:20 FIRST FastRPC call: root PD attach -> 0 (au8, au9; kernel95; adspboot 6d4720f, afa2fd6)
 - 6d4720f: the translating bank with the reference's exact values (SCTLR 0x1127, TCR 0x00803519 = cacheable inner-shareable walks, TCR2 0x38011, MAIR0 0xf404ff44, CBAR 0x1f300, leaf 0xe43). au8: refused by our read-back check (SCTLR reads 0x127: HUPCF is RAZ); afa2fd6 tolerates it.
 - au9 (4454 mV, ssh 17 s): bank ok, 0x1b23 -> CB13; READY 117 ms; `rpc: <- rsp ctx 20 ret 0`, `rpc: root PD attach -> 0`. No SMMU fault (FSR 0x400 = format only), no reset. Then `sensor_process ... sar.cc:27 chre_utils fatal` again; `files opened: 0` (nobody serves the sensors files yet).
