@@ -1,0 +1,34 @@
+From 4a3b1f20e08cafcd80094ffa70438219a44cc85f Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 16:57:30 -0400
+Subject: [PATCH] sunfish: orientation events carry the sensor-time child
+ CoreMotion needs (0230)
+
+Ported from ios-redfin 1031 (MIT).
+---
+ iokit/Kernel/arm/hid/SweetHID.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index f8e2cc5..296a837 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -1297,6 +1297,15 @@ SweetHIDSensor::post(const struct sweet_motion_sample *s, IOHIDEvent **built)
+ 		if (event) {
+ 			event->setIntegerValue(kIOHIDEventFieldOrientationDeviceOrientationUsage,
+ 			    (SInt32)(gSweetKnobs.orientbase + o));
++			/* 1031 (redfin; sunfish 0230): CoreMotion (sensorTimeFromHidChildEvent) wants child 0 = vendor event
++			 * {0xff15, 2} with an 8-byte sensor time; without it every sample is "stale". */
++			uint64_t st = ts;
++			IOHIDEvent *child = IOHIDEvent::vendorDefinedEvent(ts, 0xff15, 2, 0, (UInt8 *)&st,
++			    (UInt32)sizeof(st));
++			if (child) {
++				event->appendChild(child);      /* the children array retains it */
++				child->release();
++			}
+ 		}
+ 		snprintf(line, sizeof(line), "UIDeviceOrientation %lld (usage %lld)", o, gSweetKnobs.orientbase + o);
+ 		break;
+-- 
+2.56.0
+

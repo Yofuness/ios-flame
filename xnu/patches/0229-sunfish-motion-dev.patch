@@ -1,0 +1,591 @@
+From 1a06813d3a3838f5dd61fc1ba04e10224b0cf1a8 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 16:57:22 -0400
+Subject: [PATCH] sunfish: /dev/redwood-motion and poke m sensor commands
+ (0229)
+
+Ported from ios-redfin 0972 (MIT), rebased onto our files/poke/ufs.
+Adds a runtime path: writing the text 'm fake orient 3' to /dev/redwood-motion
+runs the poke m command. No device without sweetmotion=MASK.
+---
+ bsd/conf/files         |   1 +
+ bsd/dev/sweet_motion.c | 502 +++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_poke.c   |  13 ++
+ bsd/dev/sweet_ufs.c    |   2 +
+ 4 files changed, 518 insertions(+)
+ create mode 100644 bsd/dev/sweet_motion.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 612c7f3..0f61d00 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,7 @@ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
++bsd/dev/sweet_motion.c			standard
+ bsd/dev/sweet_fts.c			standard
+ bsd/dev/sweet_cpufreq.c			standard
+ bsd/dev/sweet_cpusample.c			standard
+diff --git a/bsd/dev/sweet_motion.c b/bsd/dev/sweet_motion.c
+new file mode 100644
+index 0000000..69b1b46
+--- /dev/null
++++ b/bsd/dev/sweet_motion.c
+@@ -0,0 +1,502 @@
++/*
++ * redfin 0972 (ios-redfin, MIT; sunfish 0229 adds the text-command write): /dev/redwood-motion and `poke m`, the two ways samples reach the sensor HID services
++ * (iokit/Kernel/arm/hid/SweetHID.cpp, 0971; interface SweetMotion.h; ABI docs/redfin/qol-plan.md §3.3).
++ *
++ *   write()  whole struct sweet_motion_samples from sensd (phone/sensors), each posted as an IOHIDEvent
++ *   read()   text status: one line per service (clients, ReportInterval asked by iOS, events posted)
++ *   ioctl    MOTION_GET_WANT _IOR('m', 1, struct sweet_motion_want): what iOS asked for, for sensd
++ *
++ * `poke m ...` (a word after m; "m ADDR MASK VAL" is still the poke read-modify-write) tests the iOS side
++ * without the DSP:
++ *   m fake accel|gyro|compass [X Y Z]   repeat a sample (Android frame/units, decimals ok) at the sensor's
++ *                                        rate for `m secs` seconds (default 10; 0 = once)
++ *   m fake als [LUX [CCT]]   m fake prox [1|0 [RAW]]   m fake pressure [KPA]   m fake orient N
++ *   m rot N        fake accel for UIDeviceOrientation N (1 portrait, 2 upside down, 3 landscape left,
++ *                  4 landscape right, 5 face up, 6 face down) plus an orientation sample N
++ *   m stop         stop the fakes          m secs N     fake duration
++ *   m status       the read() text          m log        log every setProperties key again
++ *   m knob NAME V  accsign (-1/1), gyrodeg (0/1), proxmask, orientbase, orientauto (0/1), logmax, every
++ *   m knobs        print them
++ * Boot-arg sweetmotion=MASK (SweetMotion.h); 0: no services and no device.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/conf.h>
++#include <sys/errno.h>
++#include <sys/ioccom.h>
++#include <sys/proc.h>
++#include <sys/uio.h>
++#include <miscfs/devfs/devfs.h>
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <mach/mach_time.h>
++#include <pexpert/pexpert.h>
++#include "../../iokit/Kernel/arm/hid/SweetMotion.h"
++
++void sweet_motion_init(void);
++void sweet_motion_cmd(const char *s, const char *end);
++extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++
++#define MOTION_GET_WANT _IOR('m', 1, struct sweet_motion_want)
++
++static struct {
++	uint64_t writes, samples, rejected;
++	int last_pid;
++	bool ready;
++} sm;
++
++static LCK_GRP_DECLARE(sweet_motion_grp, "sweet_motion");
++static LCK_MTX_DECLARE(sweet_motion_mtx, &sweet_motion_grp);
++
++static const char *const sm_names[SWEET_SENSOR_COUNT] = {
++	"accel", "gyro", "als", "prox", "compass", "pressure", "orient",
++};
++static const uint32_t sm_types[SWEET_SENSOR_COUNT] = { 13, 20, 12, 14, 21, 31, 10 };
++static const uint32_t sm_period_ms[SWEET_SENSOR_COUNT] = { 20, 20, 200, 200, 40, 200, 500 };
++
++/* ---- /dev/redwood-motion ---- */
++
++static int
++sm_open(__unused dev_t dev, __unused int flags, __unused int devtype, __unused proc_t p)
++{
++	return 0;
++}
++
++static int
++sm_close(__unused dev_t dev, __unused int flags, __unused int devtype, __unused proc_t p)
++{
++	return 0;
++}
++
++static char sm_text[2048];
++
++static int
++sm_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	lck_mtx_lock(&sweet_motion_mtx);
++	int len = sweet_hid_sensor_status(sm_text, sizeof(sm_text) - 128);
++	len += snprintf(sm_text + len, sizeof(sm_text) - (size_t)len, "device: %llu writes, %llu samples, %llu rejected, last pid %d\n",
++	    sm.writes, sm.samples, sm.rejected, sm.last_pid);
++	off_t off = uio_offset(uio);
++	int e = 0;
++	if (off < len) {
++		e = uiomove(sm_text + off, (int)MIN((user_ssize_t)(len - off), uio_resid(uio)), uio);
++	}
++	lck_mtx_unlock(&sweet_motion_mtx);
++	return e;
++}
++
++static void
++sm_post(struct sweet_motion_sample *buf, int count)
++{
++	if (sm.writes++ == 0) {
++		char who[32] = "?";
++		proc_selfname(who, sizeof(who));
++		printf("SWEET MOTION: first samples from pid %d (%s)\n", proc_selfpid(), who);
++	}
++	sm.last_pid = proc_selfpid();
++	for (int i = 0; i < count; i++) {
++		int r = sweet_hid_sensor(&buf[i]);
++		if (r == 0) {
++			sm.samples++;
++		} else if (sm.rejected++ < 16) {
++			printf("SWEET MOTION: sample type %u flags 0x%x: %s\n", buf[i].type, buf[i].flags,
++			    r == ENODEV ? "service not registered" : r == EINVAL ? "unknown type" : "failed");
++		}
++	}
++}
++
++static int
++sm_write(__unused dev_t dev, struct uio *uio, __unused int ioflag)
++{
++	struct sweet_motion_sample buf[16];
++	/*
++	 * sunfish 0229: a text write "m WORD ..." runs the poke m command at runtime, e.g.
++	 * echo 'm fake orient 3' > /dev/redwood-motion (no sample type starts with byte 'm').
++	 */
++	if (uio_resid(uio) >= 3 && uio_resid(uio) < (user_ssize_t)sizeof(buf)) {
++		char *t = (char *)buf;
++		int n = (int)uio_resid(uio);
++		int e = uiomove(t, n, uio);
++		if (e) {
++			return e;
++		}
++		if (t[0] == 'm' && t[1] == ' ') {
++			printf("SWEET MOTION: command from pid %d: %.*s\n", proc_selfpid(), n - (t[n - 1] == '\n'), t);
++			sweet_motion_cmd(t + 2, t + n);
++			return 0;
++		}
++		if (n % (int)sizeof(buf[0]) == 0) {
++			sm_post(buf, n / (int)sizeof(buf[0]));      /* not a command: samples */
++			return 0;
++		}
++		if (sm.rejected++ < 8) {
++			printf("SWEET MOTION: write of %d bytes: not whole %zu-byte samples\n", n, sizeof(buf[0]));
++		}
++		return EINVAL;
++	}
++	if (uio_resid(uio) % (user_ssize_t)sizeof(buf[0])) {
++		if (sm.rejected++ < 8) {
++			printf("SWEET MOTION: write of %lld bytes: not whole %zu-byte samples\n", (long long)uio_resid(uio),
++			    sizeof(buf[0]));
++		}
++		return EINVAL;
++	}
++	while (uio_resid(uio) > 0) {
++		int n = (int)MIN(uio_resid(uio), (user_ssize_t)sizeof(buf));
++		int e = uiomove((caddr_t)buf, n, uio);
++		if (e) {
++			return e;
++		}
++		sm_post(buf, n / (int)sizeof(buf[0]));
++	}
++	return 0;
++}
++
++static int
++sm_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int fflag, __unused proc_t p)
++{
++	if (cmd != MOTION_GET_WANT) {
++		return ENOTTY;
++	}
++	sweet_hid_sensor_want((struct sweet_motion_want *)data);
++	return 0;
++}
++
++static const struct cdevsw sm_cdevsw = {
++	.d_open       = sm_open,
++	.d_close      = sm_close,
++	.d_read       = sm_read,
++	.d_write      = sm_write,
++	.d_ioctl      = sm_ioctl,
++	.d_stop       = eno_stop,
++	.d_reset      = eno_reset,
++	.d_ttys       = NULL,
++	.d_select     = eno_select,
++	.d_mmap       = eno_mmap,
++	.d_strategy   = eno_strat,
++	.d_reserved_1 = eno_getc,
++	.d_reserved_2 = eno_putc,
++	.d_type       = 0,
++};
++
++void
++sweet_motion_init(void)
++{
++	if (!sweet_motion_mask()) {
++		printf("SWEET MOTION: off (sweetmotion=0)\n");
++		return;
++	}
++	int major = cdevsw_add(-1, &sm_cdevsw);
++	if (major < 0) {
++		printf("SWEET MOTION: cdevsw_add failed (%d)\n", major);
++		return;
++	}
++	void *node = devfs_make_node(makedev(major, 0), DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666, "redwood-motion");
++	sm.ready = node != NULL;
++	printf("SWEET MOTION: /dev/redwood-motion %s (major %d), services mask 0x%x\n", node ? "ready" : "failed",
++	    major, sweet_motion_mask());
++}
++
++/* ---- poke m ---- */
++
++/* milli-units -> IEEE754 single bits, integer arithmetic only (|milli| < 2^31). */
++static uint32_t
++sm_milli_f32(int64_t milli)
++{
++	uint32_t sign = milli < 0 ? 0x80000000u : 0;
++	uint64_t n = (uint64_t)(milli < 0 ? -milli : milli), m;
++	int k = 2;
++
++	if (n == 0) {
++		return 0;
++	}
++	if (n >= (1ULL << 31)) {
++		n = (1ULL << 31) - 1;
++	}
++	for (uint64_t t = n; t < (1ULL << 31); t <<= 1) {
++		k++;            /* about 33 - bit length */
++	}
++	for (int guard = 0; guard < 8; guard++) {
++		m = (n << k) / 1000;
++		if (m >= (1ULL << 24)) {
++			k--;
++		} else if (m < (1ULL << 23)) {
++			k++;
++		} else {
++			break;
++		}
++	}
++	m = (n << k) / 1000;
++	return sign | ((uint32_t)(150 - k) << 23) | (uint32_t)(m & 0x7fffff);
++}
++
++static const char *
++sm_skip(const char *s, const char *end)
++{
++	while (s < end && (*s == ' ' || *s == '\t')) {
++		s++;
++	}
++	return s;
++}
++
++static const char *
++sm_word(const char *s, const char *end, char *w, size_t cap)
++{
++	size_t n = 0;
++	s = sm_skip(s, end);
++	while (s < end && *s != ' ' && *s != '\t' && *s != '\n' && *s != '\r' && *s != '#') {
++		if (n + 1 < cap) {
++			w[n++] = *s;
++		}
++		s++;
++	}
++	w[n] = 0;
++	return s;
++}
++
++/* A decimal ("-9.81", "300", "0x41") into milli-units; false when there is none. */
++static bool
++sm_num(const char **ps, const char *end, int64_t *milli)
++{
++	char w[32];
++	const char *s = sm_word(*ps, end, w, sizeof(w));
++	const char *p = w;
++	bool neg = false, any = false;
++	int64_t v = 0, frac = 0, scale = 1000;
++
++	if (*p == '-') {
++		neg = true;
++		p++;
++	}
++	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
++		for (p += 2; *p; p++, any = true) {
++			int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'f') ? *p - 'a' + 10 :
++			    (*p >= 'A' && *p <= 'F') ? *p - 'A' + 10 : -1;
++			if (d < 0) {
++				return false;
++			}
++			v = v * 16 + d;
++		}
++		frac = 0;
++	} else {
++		for (; *p >= '0' && *p <= '9'; p++, any = true) {
++			v = v * 10 + (*p - '0');
++		}
++		if (*p == '.') {
++			for (p++; *p >= '0' && *p <= '9'; p++, any = true) {
++				if (scale > 1) {
++					scale /= 10;
++					frac += (*p - '0') * scale;
++				}
++			}
++		}
++		if (*p) {
++			return false;
++		}
++	}
++	if (!any) {
++		return false;
++	}
++	*ps = s;
++	*milli = (neg ? -1 : 1) * (v * 1000 + frac);
++	return true;
++}
++
++static struct {
++	bool active;
++	uint64_t until, next;
++	struct sweet_motion_sample smp;
++} sm_fake[SWEET_SENSOR_COUNT];
++static uint32_t sm_fake_secs = 10;
++static bool sm_fake_thread_started;
++static int sm_fake_chan;
++
++static void
++sm_sleep_ms(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&sm_fake_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++sm_fake_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	for (;;) {
++		struct sweet_motion_sample due[SWEET_SENSOR_COUNT];
++		int n = 0;
++		bool any = false;
++		uint64_t now = mach_absolute_time(), period;
++		lck_mtx_lock(&sweet_motion_mtx);
++		for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++			if (!sm_fake[i].active) {
++				continue;
++			}
++			any = true;
++			if (now >= sm_fake[i].next) {
++				due[n++] = sm_fake[i].smp;
++				nanoseconds_to_absolutetime((uint64_t)sm_period_ms[i] * NSEC_PER_MSEC, &period);
++				sm_fake[i].next = now + period;
++				if (now >= sm_fake[i].until) {
++					sm_fake[i].active = false;
++					printf("SWEET MOTION: fake %s done\n", sm_names[i]);
++				}
++			}
++		}
++		lck_mtx_unlock(&sweet_motion_mtx);
++		for (int i = 0; i < n; i++) {
++			due[i].ts_mach = 0;
++			(void)sweet_hid_sensor(&due[i]);
++		}
++		sm_sleep_ms(any ? 10 : 250);
++	}
++}
++
++static void
++sm_fake_start(int i, const uint32_t v[4])
++{
++	struct sweet_motion_sample s = { sm_types[i], SWEET_MOTION_SYNTHETIC | 3, 0, { v[0], v[1], v[2], v[3] } };
++	int r = sweet_hid_sensor(&s);       /* the first one now, in the poke's context */
++	printf("SWEET MOTION: fake %s %08x %08x %08x -> %d%s, repeating for %u s\n", sm_names[i], v[0], v[1], v[2], r,
++	    r == ENODEV ? " (service not registered)" : "", sm_fake_secs);
++	if (r || !sm_fake_secs) {
++		return;
++	}
++	uint64_t now = mach_absolute_time(), dur, period;
++	nanoseconds_to_absolutetime((uint64_t)sm_fake_secs * NSEC_PER_SEC, &dur);
++	nanoseconds_to_absolutetime((uint64_t)sm_period_ms[i] * NSEC_PER_MSEC, &period);
++	lck_mtx_lock(&sweet_motion_mtx);
++	sm_fake[i].smp = s;
++	sm_fake[i].until = now + dur;
++	sm_fake[i].next = now + period;
++	sm_fake[i].active = true;
++	bool start = !sm_fake_thread_started;
++	sm_fake_thread_started = true;
++	lck_mtx_unlock(&sweet_motion_mtx);
++	if (start) {
++		thread_t t;
++		if (kernel_thread_start(sm_fake_thread, NULL, &t) == KERN_SUCCESS) {
++			thread_deallocate(t);
++		}
++	}
++}
++
++static void
++sm_status_print(void)
++{
++	lck_mtx_lock(&sweet_motion_mtx);
++	int len = sweet_hid_sensor_status(sm_text, sizeof(sm_text));
++	char *p = sm_text, *e = sm_text + len;
++	while (p < e) {
++		char *nl = p;
++		while (nl < e && *nl != '\n') {
++			nl++;
++		}
++		printf("SWEET MOTION: %.*s\n", (int)(nl - p), p);
++		p = nl + 1;
++	}
++	printf("SWEET MOTION: device %s: %llu writes, %llu samples, %llu rejected, last pid %d\n",
++	    sm.ready ? "ready" : "absent", sm.writes, sm.samples, sm.rejected, sm.last_pid);
++	lck_mtx_unlock(&sweet_motion_mtx);
++}
++
++static int
++sm_index(const char *name)
++{
++	if (!strcmp(name, "orientation") || !strcmp(name, "orient")) {
++		return SWEET_SENSOR_ORIENT;
++	}
++	if (!strcmp(name, "mag") || !strcmp(name, "magnetometer")) {
++		return SWEET_SENSOR_COMPASS;
++	}
++	if (!strcmp(name, "light")) {
++		return SWEET_SENSOR_ALS;
++	}
++	if (!strcmp(name, "proximity")) {
++		return SWEET_SENSOR_PROX;
++	}
++	for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++		if (!strcmp(name, sm_names[i])) {
++			return i;
++		}
++	}
++	return -1;
++}
++
++void
++sweet_motion_cmd(const char *s, const char *end)
++{
++	char w[24], name[24];
++	int64_t a[4];
++	int n = 0;
++
++	s = sm_word(s, end, w, sizeof(w));
++	if (!strcmp(w, "fake")) {
++		s = sm_word(s, end, name, sizeof(name));
++		int i = sm_index(name);
++		if (i < 0) {
++			printf("SWEET MOTION: m fake: unknown sensor \"%s\" (accel gyro als prox compass pressure orient)\n", name);
++			return;
++		}
++		while (n < 4 && sm_num(&s, end, &a[n])) {
++			n++;
++		}
++		/* defaults: upright portrait, slow yaw, office light, near, sea level, portrait */
++		static const int64_t defaults[SWEET_SENSOR_COUNT][4] = {
++			{ 0, 9807, 0, 0 }, { 0, 0, 500, 0 }, { 300000, 0, 0, 0 }, { 1000, 1000000, 0, 0 },
++			{ 20000, 0, -40000, 0 }, { 101325, 0, 0, 0 }, { 1000, 0, 0, 0 },
++		};
++		uint32_t v[4];
++		for (int k = 0; k < 4; k++) {
++			v[k] = sm_milli_f32(k < n ? a[k] : (n ? 0 : defaults[i][k]));
++		}
++		sm_fake_start(i, v);
++	} else if (!strcmp(w, "rot")) {
++		static const int64_t g[7][3] = {
++			{ 0, 0, 0 }, { 0, 9807, 0 }, { 0, -9807, 0 }, { 9807, 0, 0 }, { -9807, 0, 0 }, { 0, 0, 9807 }, { 0, 0, -9807 },
++		};
++		if (!sm_num(&s, end, &a[0]) || a[0] < 1000 || a[0] > 6000) {
++			printf("SWEET MOTION: m rot N: N = UIDeviceOrientation 1-6\n");
++			return;
++		}
++		int o = (int)(a[0] / 1000);
++		uint32_t v[4] = { sm_milli_f32(g[o][0]), sm_milli_f32(g[o][1]), sm_milli_f32(g[o][2]), 0 };
++		sm_fake_start(SWEET_SENSOR_ACCEL, v);
++		uint32_t ov[4] = { sm_milli_f32(o * 1000), 0, 0, 0 };
++		sm_fake_start(SWEET_SENSOR_ORIENT, ov);
++	} else if (!strcmp(w, "stop")) {
++		lck_mtx_lock(&sweet_motion_mtx);
++		for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++			sm_fake[i].active = false;
++		}
++		lck_mtx_unlock(&sweet_motion_mtx);
++		printf("SWEET MOTION: fakes stopped\n");
++	} else if (!strcmp(w, "secs")) {
++		if (sm_num(&s, end, &a[0]) && a[0] >= 0 && a[0] <= 600000) {
++			sm_fake_secs = (uint32_t)(a[0] / 1000);
++		}
++		printf("SWEET MOTION: fakes repeat for %u s\n", sm_fake_secs);
++	} else if (!strcmp(w, "status")) {
++		sm_status_print();
++	} else if (!strcmp(w, "log")) {
++		sweet_hid_sensor_relog();
++		printf("SWEET MOTION: setProperties/copyEvent logging reset\n");
++	} else if (!strcmp(w, "knob")) {
++		s = sm_word(s, end, name, sizeof(name));
++		if (!sm_num(&s, end, &a[0]) || sweet_hid_sensor_knob(name, a[0] / 1000)) {
++			printf("SWEET MOTION: m knob NAME VALUE: accsign gyrodeg proxmask orientbase orientauto logmax every\n");
++			return;
++		}
++		sweet_hid_sensor_knobs_print();
++	} else if (!strcmp(w, "knobs")) {
++		sweet_hid_sensor_knobs_print();
++	} else {
++		printf("SWEET MOTION: m fake SENSOR [V...] | rot N | stop | secs N | status | log | knob NAME V | knobs\n");
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_poke.c b/bsd/dev/sweet_poke.c
+index 2465222..53a8e2a 100644
+--- a/bsd/dev/sweet_poke.c
++++ b/bsd/dev/sweet_poke.c
+@@ -7,6 +7,7 @@
+  *   r ADDR [N]             read N (default 1) 32-bit words
+  *   w ADDR VAL             write
+  *   m ADDR MASK VAL        read-modify-write: (old & ~MASK) | (VAL & MASK)
++ *   m WORD ...             sensor command, e.g. m fake orient 3 (0229: bsd/dev/sweet_motion.c)
+  *   p ADDR MASK VAL MS     poll until (read & MASK) == VAL, at most MS ms
+  *   s MS                   sleep
+  *   # ...                  comment
+@@ -131,6 +132,18 @@ poke_line(const char *s, const char *end, unsigned lineno)
+ 		return;
+ 	}
+ 	char op = *s++;
++	if (op == 'm') {
++		/* 0229 (redfin 0972): "m WORD ..." is the sensor command (bsd/dev/sweet_motion.c); "m ADDR MASK VAL" stays */
++		extern void sweet_motion_cmd(const char *s, const char *end);
++		const char *q = s;
++		while (q < end && (*q == ' ' || *q == '\t')) {
++			q++;
++		}
++		if (q < end && *q >= 'a' && *q <= 'z') {
++			sweet_motion_cmd(q, end);
++			return;
++		}
++	}
+ 	uint64_t a = 0, b = 0, c = 0, d = 0;
+ 	bool ha = poke_num(&s, end, &a), hb = poke_num(&s, end, &b);
+ 	bool hc = poke_num(&s, end, &c), hd = poke_num(&s, end, &d);
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 22d97bb..e91385d 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -52,6 +52,7 @@ static void sweet_log_start(void);
+ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
++extern void sweet_motion_init(void);
+ extern void sweet_fts_init(void);
+ extern void sweet_cpufreq_init(void);
+ extern void sweet_pmem_init(void);
+@@ -843,6 +844,7 @@ sweet_ufs_init(void)
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
+ 	sweet_keys_init();
+ 	sweet_touch_init();
++	sweet_motion_init();      /* 0229 (redfin 0972): /dev/redwood-motion, poke m (sweetmotion=MASK): bsd/dev/sweet_motion.c */
+ 	sweet_fts_init();
+ 	sweet_btbridge_init();    /* 0226: com.apple.uart.bluetooth etc. <-> btbridge (btbridge=1): bsd/dev/sweet_btbridge.c */
+ 	sweet_usb_probe();
+-- 
+2.56.0
+

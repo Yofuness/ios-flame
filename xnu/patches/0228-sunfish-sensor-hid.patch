@@ -1,0 +1,1058 @@
+From 3cf789a21cb43d6111faa42a51d732fbf02da7cb Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 16:56:17 -0400
+Subject: [PATCH] sunfish: sensor HID services, sweetmotion=MASK (off by
+ default), sweetmotion_axes= (0228)
+
+Ported from ios-redfin 0971 (MIT). Changes: default mask 0 instead of 0x77;
+accel axis permutation/sign boot-arg sweetmotion_axes (default xyz = redfin's).
+---
+ iokit/Kernel/arm/hid/AppleHIDUsageTables.h |  91 +++
+ iokit/Kernel/arm/hid/SweetHID.cpp          | 819 ++++++++++++++++++++-
+ iokit/Kernel/arm/hid/SweetMotion.h         |  54 ++
+ iokit/KernelConfigTables.cpp               |  35 +
+ 4 files changed, 998 insertions(+), 1 deletion(-)
+ create mode 100644 iokit/Kernel/arm/hid/SweetMotion.h
+
+diff --git a/iokit/Kernel/arm/hid/AppleHIDUsageTables.h b/iokit/Kernel/arm/hid/AppleHIDUsageTables.h
+index c00cbd4..8b0b292 100644
+--- a/iokit/Kernel/arm/hid/AppleHIDUsageTables.h
++++ b/iokit/Kernel/arm/hid/AppleHIDUsageTables.h
+@@ -20,3 +20,94 @@
+  * 
+  * @APPLE_LICENSE_HEADER_END@
+  */
++#ifndef _APPLEHIDUSAGETABLES_H
++#define _APPLEHIDUSAGETABLES_H
++
++/*
++ * SWEET (redfin 0971): IOHIDFamily-1090 and later (including 1915.140.3, the version the rest of this
++ * directory comes from) publish this header empty. These are the Apple vendor pages and usages the sensor
++ * services need, copied from the last release that published them, IOHIDFamily-1035.70.7
++ * (github.com/apple-oss-distributions/IOHIDFamily, tag IOHIDFamily-1035.70.7, IOHIDFamily/AppleHIDUsageTables.h).
++ * kHIDUsage_AppleVendorMotion_DeviceOrientationType* (used by IOHIDEventDriver-1915) are not in it: their
++ * values are unpublished.
++ */
++
++/* Usage Pages */
++enum {
++    kHIDPage_AppleVendor                        = 0xFF00,
++    kHIDPage_AppleVendorKeyboard                = 0xFF01,
++    kHIDPage_AppleVendorMouse                   = 0xFF02,
++    kHIDPage_AppleVendorAccelerometer           = 0xFF03,
++    kHIDPage_AppleVendorAmbientLightSensor      = 0xFF04,
++    kHIDPage_AppleVendorTemperatureSensor       = 0xFF05,
++    kHIDPage_AppleVendorHeadset                 = 0xFF07,
++    kHIDPage_AppleVendorPowerSensor             = 0xFF08,
++    kHIDPage_AppleVendorSmartCover              = 0xFF09,
++    kHIDPage_AppleVendorPlatinum                = 0xFF0A,
++    kHIDPage_AppleVendorLisa                    = 0xFF0B,
++    kHIDPage_AppleVendorMotion                  = 0xFF0C,
++    kHIDPage_AppleVendorBattery                 = 0xFF0D,
++    kHIDPage_AppleVendorIRRemote                = 0xFF0E,
++    kHIDPage_AppleVendorDebug                   = 0xFF0F,
++    kHIDPage_AppleVendorIRInterface             = 0xFF10,
++    kHIDPage_AppleVendorDFR                     = 0xFF11,
++    kHIDPage_AppleVendorDFRBrightness           = 0xFF12,
++    kHIDPage_AppleVendorSenderID                = 0xFF13,
++    kHIDPage_AppleVendorFilteredEvent           = 0xFF50,
++    kHIDPage_AppleVendorMultitouch              = 0xFF60,
++    kHIDPage_AppleVendorDisplay                 = 0xFF92,
++    kHIDPage_AppleVendorTopCase                 = 0x00FF
++};
++
++/* AppleVendor Page (0xff00) */
++enum {
++    kHIDUsage_AppleVendor_TopCase               = 0x0001, /* Application Collection */
++    kHIDUsage_AppleVendor_Display               = 0x0002, /* Application Collection */
++    kHIDUsage_AppleVendor_Accelerometer         = 0x0003, /* Application Collection */
++    kHIDUsage_AppleVendor_AmbientLightSensor    = 0x0004, /* Application Collection */
++    kHIDUsage_AppleVendor_TemperatureSensor     = 0x0005, /* Application Collection */
++    kHIDUsage_AppleVendor_Keyboard              = 0x0006, /* Application Collection */
++    kHIDUsage_AppleVendor_Headset               = 0x0007, /* Application Collection */
++    kHIDUsage_AppleVendor_ProximitySensor       = 0x0008, /* Application Collection */
++    kHIDUsage_AppleVendor_Gyro                  = 0x0009, /* Application Collection */
++    kHIDUsage_AppleVendor_Compass               = 0x000A, /* Application Collection */
++    kHIDUsage_AppleVendor_DeviceManagement      = 0x000B, /* Application Collection */
++    kHIDUsage_AppleVendor_Trackpad              = 0x000C, /* Application Collection */
++    kHIDUsage_AppleVendor_TopCaseReserved       = 0x000D, /* Application Collection */
++    kHIDUsage_AppleVendor_Motion                = 0x000E, /* Application Collection */
++    kHIDUsage_AppleVendor_KeyboardBacklight     = 0x000F, /* Application Collection */
++    kHIDUsage_AppleVendor_DeviceMotionLite      = 0x0010, /* Application Collection */
++    kHIDUsage_AppleVendor_Force                 = 0x0011, /* Application Collection */
++    kHIDUsage_AppleVendor_BluetoothRadio        = 0x0012, /* Application Collection */
++    kHIDUsage_AppleVendor_Orb                   = 0x0013, /* Application Collection */
++    kHIDUsage_AppleVendor_AccessoryBattery      = 0x0014, /* Application Collection */
++    kHIDUsage_AppleVendor_Humidity              = 0x0015, /* Application Collection */
++    kHIDUsage_AppleVendor_DFR                   = 0x0016, /* Application Collection */
++    kHIDUsage_AppleVendor_NXEvent               = 0x0017, /* Application Collection */
++    kHIDUsage_AppleVendor_NXEvent_Translated    = 0x0018, /* Application Collection */
++    kHIDUsage_AppleVendor_NXEvent_Diagnostic    = 0x0019, /* Application Collection */
++    kHIDUsage_AppleVendor_Homer                 = 0x0020, /* Application Collection */
++    kHIDUsage_AppleVendor_Color                 = 0x0021, /* Dynamic Value */
++    kHIDUsage_AppleVendor_Accessibility         = 0x0022, /* Application Collection */
++    kHIDUsage_AppleVendor_Message               = 0x0023, /* Application Collection */
++    kHIDUsage_AppleVendor_Luna                  = 0x0024, /* Application Collection */
++    kHIDUsage_AppleVendor_Payload               = 0x0025, /* Application Collection */
++    kHIDUsage_AppleVendor_Perf                  = 0x0026, /* Application Collection */
++    kHIDUsage_AppleVendor_Gallium               = 0x0027, /* Application Collection */
++    kHIDUsage_AppleVendor_HIDRelay              = 0x0028, /* Application Collection */
++    kHIDUsage_AppleVendor_SmartCover            = 0x0029  /* Application Collection */
++};
++
++/* AppleVendor Motion (0xff0C) */
++enum {
++    kHIDUsage_AppleVendorMotion_Motion          = 0x0001,
++    kHIDUsage_AppleVendorMotion_Activity        = 0x0002,
++    kHIDUsage_AppleVendorMotion_Gesture         = 0x0003,
++    kHIDUsage_AppleVendorMotion_DeviceMotion    = 0x0004,
++    kHIDUsage_AppleVendorMotion_DeviceMotion6   = 0x0005,
++    kHIDUsage_AppleVendorMotion_Orientation     = 0x0006,
++    kHIDUsage_AppleVendorMotion_DeviceMotion3   = 0x0007,
++    kHIDUsage_AppleVendorMotion_DeviceMotion10  = 0x0008
++};
++
++#endif /* _APPLEHIDUSAGETABLES_H */
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 76c6427..f8e2cc5 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -13,7 +13,9 @@
+  *   SweetHIDTouch    the built-in touch screen (digitizer collections)
+  *
+  * Hardware drivers feed them through the C entry points sweet_hid_key()
+- * and sweet_hid_touch(). Boot-arg sweethidtest=N (seconds) presses Home
++ * and sweet_hid_touch(). redfin 0971 (ios-redfin, MIT; sunfish 0228) adds the sensor services at the end
++ * (SweetHIDAccel/Gyro/ALS/Prox/Compass/Pressure/Orientation, fed through
++ * sweet_hid_sensor(): SweetMotion.h). Boot-arg sweethidtest=N (seconds) presses Home
+  * every N seconds, to test the event path without input hardware.
+  */
+ #include <IOKit/IOLib.h>
+@@ -606,3 +608,818 @@ sweet_hid_touch(int finger, int down, int x, int y)
+ 		gSweetTouch->touch(finger, down != 0, x, y);
+ 	}
+ }
++
++/*
++ * redfin 0971: motion and environment sensors. One IOHIDEventService per sensor with the usage pair an
++ * iPhone's SPU sensor service publishes (Apple vendor page 0xff00: accel 3, ALS 4, prox 8, gyro 9, compass
++ * 0xa, from IOHIDFamily-1035.70.7's AppleHIDUsageTables.h; pressure: HID sensor page atmospheric pressure;
++ * orientation: HID sensor page device orientation 0x20/0x8a, what locationd matches). Samples come from /dev/redwood-motion (sensd, 0972) or
++ * `poke m fake` through sweet_hid_sensor() (SweetMotion.h). Every open, user client, copyEvent type and
++ * setProperties key/value is logged ("SWEET MOTION:"): that is how we learn what backboardd, locationd and
++ * CoreBrightness ask for; user-space property reads of the services are logged too. Boot-arg sweetmotion=MASK
++ * (redfin default 0x77 = all but prox; sunfish 0228: default 0 = none; bit = service index; 0x100 = Transport "SPU" instead of "Sweet";
++ * 0x200 = initial copyEvent answers on every service).
++ */
++#include <libkern/c++/OSSerialize.h>
++#include <libkern/c++/OSCollectionIterator.h>
++#include <libkern/c++/OSNumber.h>
++#include <libkern/c++/OSString.h>
++#include <libkern/c++/OSData.h>
++#include <libkern/c++/OSBoolean.h>
++#include <kern/clock.h>
++#include <sys/errno.h>
++#include "AppleHIDUsageTables.h"
++#include "IOHIDEventFieldDefs.h"
++#include "SweetMotion.h"
++
++extern "C" int proc_selfpid(void);
++extern "C" void proc_selfname(char *buf, int size);
++
++struct SweetSensorInfo {
++	const char     *name;
++	UInt32          page, usage;
++	UInt32          motionType;
++	UInt32          productID;
++	UInt32          interval;       /* default ReportInterval, us */
++	IOHIDEventType  eventType;
++};
++static const SweetSensorInfo gSweetSensorInfo[SWEET_SENSOR_COUNT] = {
++	{ "accel",       kHIDPage_AppleVendor,       kHIDUsage_AppleVendor_Accelerometer,      13, 0x10, 10000,  kIOHIDEventTypeAccelerometer },
++	{ "gyro",        kHIDPage_AppleVendor,       kHIDUsage_AppleVendor_Gyro,               20, 0x11, 10000,  kIOHIDEventTypeGyro },
++	{ "als",         kHIDPage_AppleVendor,       kHIDUsage_AppleVendor_AmbientLightSensor, 12, 0x12, 100000, kIOHIDEventTypeAmbientLightSensor },
++	{ "prox",        kHIDPage_AppleVendor,       kHIDUsage_AppleVendor_ProximitySensor,    14, 0x13, 100000, kIOHIDEventTypeProximity },
++	{ "compass",     kHIDPage_AppleVendor,       kHIDUsage_AppleVendor_Compass,            21, 0x14, 20000,  kIOHIDEventTypeCompass },
++	{ "pressure",    kHIDPage_Sensor,            kHIDUsage_Snsr_Environmental_AtmosphericPressure, 31, 0x15, 200000, kIOHIDEventTypeAtmosphericPressure },
++	/* locationd's CLOrientationNotifier (the AOP path) matches {0x20, 0x8a} and takes DeviceOrientationUsage 0x64-0x6a */
++	{ "orientation", kHIDPage_Sensor,            kHIDUsage_Snsr_Orientation_DeviceOrientation, 10, 0x16, 0,  kIOHIDEventTypeOrientation },
++};
++
++/* Runtime knobs (`poke m knob NAME VALUE`); the defaults are guesses the phone has to confirm. */
++static struct {
++	int accsign;            /* -1: iOS g = -(Android m/s²) / 9.80665 (CoreMotion: face up reads z = -1 g) */
++	int gyrodeg;            /* 1: gyro events in deg/s (HID sensor page units) instead of rad/s */
++	uint32_t proxmask;      /* detection mask of a "near" proximity event */
++	int orientbase;         /* orientation event usage = orientbase + UIDeviceOrientation: 100, i.e. 0x65 portrait ..
++	                         * 0x6a face down (0x64 ambiguous), the range locationd's CLOrientationNotifier accepts */
++	int orientauto;         /* derive orientation events from accel samples in the kernel */
++	uint32_t logmax;        /* setProperties/copyEvent log lines per service */
++	uint32_t every;         /* log every Nth posted sample (the first 3 always) */
++} gSweetKnobs = { -1, 0, kIOHIDProximityDetectionLargeBodyContact | kIOHIDProximityDetectionReceiver, 100, 0, 64, 1000 };
++
++/*
++ * Default: everything but prox (0x77). On the phone (2026-10-26) backboardd crash-loops with
++ * -[NSNull applyUIMode:] (after liblog_aop asserts) when the prox service (0x08) is registered (bisect: 0x43,
++ * 0x23 fine, 0x0b crash). It reads DisplayIntegrated, ProtectedAccess and SensorPropertySupported from prox
++ * (absent before): now published, and prox answers copyEvent with "far". Bit 0x100: Transport "SPU".
++ * Bit 0x200: every sensor service answers copyEvent with a neutral sample until a real one exists (the ALS
++ * always does), in case the NSNull is a nil copyEvent.
++ */
++#define SWEET_MOTION_SPU_TRANSPORT 0x100
++#define SWEET_MOTION_INITIAL_EVENTS 0x200
++/* sunfish (0228): off by default (sweetmotion=0x77 = redfin's default set, all but prox). */
++static uint32_t gSweetMotionMask = 0;
++static IOLock *gSweetReadLock;          /* SweetHIDSensor::logRead */
++static bool gSweetMotionMaskRead;
++
++extern "C" uint32_t
++sweet_motion_mask(void)
++{
++	if (!gSweetMotionMaskRead) {
++		PE_parse_boot_argn("sweetmotion", &gSweetMotionMask, sizeof(gSweetMotionMask));
++		gSweetMotionMaskRead = true;
++	}
++	return gSweetMotionMask;
++}
++
++extern "C" int
++sweet_motion_index(uint32_t type)
++{
++	for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++		if (gSweetSensorInfo[i].motionType == type) {
++			return i;
++		}
++	}
++	return -1;
++}
++
++/*
++ * IEEE754 single (bits) * num / den as a fixed-point number with frac fraction bits, saturating, integer
++ * arithmetic only (the kernel does no FP). num must stay below 2^20.
++ */
++static int64_t
++sweet_f2q(uint32_t bits, int64_t num, int64_t den, int frac)
++{
++	int exp = (int)((bits >> 23) & 0xff);
++	uint64_t mant = bits & 0x7fffff;
++	bool neg = (bits >> 31) != 0;
++
++	if (exp == 0xff || den <= 0) {
++		return 0;
++	}
++	if (num < 0) {
++		num = -num;
++		neg = !neg;
++	}
++	if (exp == 0) {
++		exp = 1;                /* denormal */
++	} else {
++		mant |= 0x800000;
++	}
++	uint64_t t = mant * (uint64_t)num;
++	int sh = exp - 150 + frac;
++	if (sh >= 0) {
++		t = (sh >= 63 || t >= (1ULL << (63 - sh))) ? (1ULL << 62) : t << sh;
++	} else {
++		t = (-sh >= 64) ? 0 : t >> -sh;
++	}
++	t /= (uint64_t)den;
++	if (t > 0x7fffffffULL) {
++		t = 0x7fffffffULL;
++	}
++	return neg ? -(int64_t)t : (int64_t)t;
++}
++
++class SweetHIDSensor : public IOHIDEventService {
++	OSDeclareDefaultStructors(SweetHIDSensor);
++public:
++	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	virtual void free(void) APPLE_KEXT_OVERRIDE;
++	virtual bool open(IOService *client, IOOptionBits options, void *context, Action action) APPLE_KEXT_OVERRIDE;
++	virtual void close(IOService *forClient, IOOptionBits options = 0) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
++	virtual IOHIDEvent *copyEvent(IOHIDEventType type, IOHIDEvent *matching = 0, IOOptionBits options = 0) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
++	    OSDictionary *properties, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
++	using IOHIDEventService::copyProperty;
++	virtual OSPtr<OSObject> copyProperty(const char *aKey) const APPLE_KEXT_OVERRIDE;
++	virtual bool serializeProperties(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
++	virtual UInt32 getPrimaryUsagePage() APPLE_KEXT_OVERRIDE { return gSweetSensorInfo[sensorIndex()].page; }
++	virtual UInt32 getPrimaryUsage() APPLE_KEXT_OVERRIDE { return gSweetSensorInfo[sensorIndex()].usage; }
++
++	int post(const struct sweet_motion_sample *s, IOHIDEvent **built = NULL);
++	int status(char *buf, int len);
++	void want(struct sweet_motion_want *w);
++	void relog();
++protected:
++	virtual int sensorIndex() { return SWEET_SENSOR_ACCEL; }
++	virtual OSString *getProduct() APPLE_KEXT_OVERRIDE { return OSString::withCString(gSweetSensorInfo[sensorIndex()].name); }
++	virtual UInt32 getProductID() APPLE_KEXT_OVERRIDE { return gSweetSensorInfo[sensorIndex()].productID; }
++	virtual UInt32 getReportInterval() APPLE_KEXT_OVERRIDE { return gSweetSensorInfo[sensorIndex()].interval; }
++	virtual OSString *getTransport() APPLE_KEXT_OVERRIDE
++	{
++		return OSString::withCString((sweet_motion_mask() & SWEET_MOTION_SPU_TRANSPORT) ? "SPU" : "Sweet");
++	}
++private:
++	void logProperty(const OSSymbol *key, OSObject *value, int pid, const char *who);
++	void logRead(const char *key, bool found) const;
++	IOHIDEvent *initialEvent();
++	static void initialFired(OSObject *owner, IOTimerEventSource *sender);
++	IOTimerEventSource *fInitTimer;
++	IOLock         *fLock;
++	IOHIDEvent     *fLast;
++	OSDictionary   *fSeen;          /* key -> last logged value text */
++	uint32_t        fLogged, fCopyTypes, fClients;
++	uint32_t        fInterval, fIntervalSet;
++	uint64_t        fEvents;
++};
++OSDefineMetaClassAndStructors(SweetHIDSensor, IOHIDEventService);
++
++#define SWEET_SENSOR_CLASS(cls, idx)                                                    \
++	class cls : public SweetHIDSensor {                                             \
++	        OSDeclareDefaultStructors(cls);                                         \
++	protected:                                                                      \
++	        virtual int sensorIndex() APPLE_KEXT_OVERRIDE { return idx; }           \
++	};                                                                              \
++	OSDefineMetaClassAndStructors(cls, SweetHIDSensor)
++
++SWEET_SENSOR_CLASS(SweetHIDAccel, SWEET_SENSOR_ACCEL);
++SWEET_SENSOR_CLASS(SweetHIDGyro, SWEET_SENSOR_GYRO);
++SWEET_SENSOR_CLASS(SweetHIDALS, SWEET_SENSOR_ALS);
++SWEET_SENSOR_CLASS(SweetHIDProx, SWEET_SENSOR_PROX);
++SWEET_SENSOR_CLASS(SweetHIDCompass, SWEET_SENSOR_COMPASS);
++SWEET_SENSOR_CLASS(SweetHIDPressure, SWEET_SENSOR_PRESSURE);
++SWEET_SENSOR_CLASS(SweetHIDOrientation, SWEET_SENSOR_ORIENT);
++
++static SweetHIDSensor *gSweetSensors[SWEET_SENSOR_COUNT];
++
++bool
++SweetHIDSensor::start(IOService *provider)
++{
++	int i = sensorIndex();
++	const SweetSensorInfo *info = &gSweetSensorInfo[i];
++
++	if (!(sweet_motion_mask() & (1u << i))) {
++		IOLog("SWEET MOTION: %s off (sweetmotion=0x%x)\n", info->name, sweet_motion_mask());
++		return false;
++	}
++	if (!gSweetReadLock) {
++		IOLock *l = IOLockAlloc();
++		if (l && !OSCompareAndSwapPtr(NULL, l, (void * volatile *)&gSweetReadLock)) {
++			IOLockFree(l);
++		}
++	}
++	fLock = IOLockAlloc();
++	fSeen = OSDictionary::withCapacity(8);
++	if (!fLock || !fSeen || !IOHIDEventService::start(provider)) {
++		return false;
++	}
++	fInterval = info->interval;
++	if (i == SWEET_SENSOR_ALS) {
++		fInitTimer = IOTimerEventSource::timerEventSource(this, &SweetHIDSensor::initialFired);
++		if (fInitTimer && _hidWorkLoop->addEventSource(fInitTimer) != kIOReturnSuccess) {
++			OSSafeReleaseNULL(fInitTimer);
++		}
++	}
++	setProperty("SweetSensor", info->name);
++	if (i == SWEET_SENSOR_PROX) {
++		/* What BackBoard's proximity handling read and found absent (r23c); values are guesses. */
++		setProperty("DisplayIntegrated", kOSBooleanTrue);
++		setProperty("ProtectedAccess", kOSBooleanFalse);
++		setProperty("SensorPropertySupported", kOSBooleanTrue);
++	}
++	setProperty(kIOHIDBatchIntervalKey, 0ULL, 32);
++	setProperty(kIOHIDSensorPropertySampleIntervalKey, (unsigned long long)info->interval, 32);
++	gSweetSensors[i] = this;
++	registerService();
++	IOLog("SWEET MOTION: %s registered: usage page 0x%x usage 0x%x, event type %u, ReportInterval %u us, Transport %s\n",
++	    info->name, (unsigned)info->page, (unsigned)info->usage, (unsigned)info->eventType, (unsigned)info->interval,
++	    (sweet_motion_mask() & SWEET_MOTION_SPU_TRANSPORT) ? "SPU" : "Sweet");
++	return true;
++}
++
++void
++SweetHIDSensor::free(void)
++{
++	if (fInitTimer) {
++		fInitTimer->cancelTimeout();
++		if (_hidWorkLoop) {
++			_hidWorkLoop->removeEventSource(fInitTimer);
++		}
++		OSSafeReleaseNULL(fInitTimer);
++	}
++	OSSafeReleaseNULL(fLast);
++	OSSafeReleaseNULL(fSeen);
++	if (fLock) {
++		IOLockFree(fLock);
++		fLock = NULL;
++	}
++	IOHIDEventService::free();
++}
++
++IOReturn
++SweetHIDSensor::newUserClient(task_t owningTask, void *securityID, UInt32 type,
++    OSDictionary *properties, IOUserClient **handler)
++{
++	char who[32] = "?";
++	proc_selfname(who, sizeof(who));
++	IOReturn ret = IOHIDEventService::newUserClient(owningTask, securityID, type, properties, handler);
++	IOLog("SWEET MOTION: %s user client type '%c%c%c%c' for pid %d (%s) -> 0x%x\n",
++	    gSweetSensorInfo[sensorIndex()].name, (char)(type >> 24), (char)(type >> 16), (char)(type >> 8),
++	    (char)type, proc_selfpid(), who, ret);
++	return ret;
++}
++
++bool
++SweetHIDSensor::open(IOService *client, IOOptionBits options, void *context, Action action)
++{
++	char who[32] = "?";
++	proc_selfname(who, sizeof(who));
++	bool ok = IOHIDEventService::open(client, options, context, action);
++	if (ok) {
++		OSIncrementAtomic((volatile SInt32 *)&fClients);
++		if (fInitTimer && fEvents == 0) {
++			fInitTimer->setTimeoutMS(500);     /* an ALS reading soon after each open, as a real ALS sends */
++		}
++	}
++	IOLog("SWEET MOTION: %s opened by pid %d (%s) options 0x%x -> %d, %u clients\n",
++	    gSweetSensorInfo[sensorIndex()].name, proc_selfpid(), who, (unsigned)options, ok, fClients);
++	return ok;
++}
++
++void
++SweetHIDSensor::close(IOService *forClient, IOOptionBits options)
++{
++	char who[32] = "?";
++	proc_selfname(who, sizeof(who));
++	if (fClients) {
++		OSDecrementAtomic((volatile SInt32 *)&fClients);
++	}
++	IOLog("SWEET MOTION: %s closed by pid %d (%s), %u clients\n", gSweetSensorInfo[sensorIndex()].name,
++	    proc_selfpid(), who, fClients);
++	IOHIDEventService::close(forClient, options);
++}
++
++static void
++sweetFormat(OSObject *o, char *buf, size_t len)
++{
++	OSNumber *n;
++	OSString *s;
++	OSData *d;
++	OSBoolean *b;
++
++	if ((n = OSDynamicCast(OSNumber, o))) {
++		snprintf(buf, len, "%llu (0x%llx, %u-bit)", n->unsigned64BitValue(), n->unsigned64BitValue(),
++		    n->numberOfBits());
++	} else if ((b = OSDynamicCast(OSBoolean, o))) {
++		snprintf(buf, len, "%s", b->isTrue() ? "true" : "false");
++	} else if ((s = OSDynamicCast(OSString, o))) {
++		snprintf(buf, len, "\"%s\"", s->getCStringNoCopy());
++	} else if ((d = OSDynamicCast(OSData, o))) {
++		const uint8_t *p = (const uint8_t *)d->getBytesNoCopy();
++		size_t at = (size_t)snprintf(buf, len, "<%u bytes:", d->getLength());
++		for (unsigned i = 0; i < d->getLength() && i < 24 && at + 4 < len; i++) {
++			at += (size_t)snprintf(buf + at, len - at, " %02x", p[i]);
++		}
++		snprintf(buf + at, len > at ? len - at : 0, ">");
++	} else if (o) {
++		OSSerialize *ser = OSSerialize::withCapacity(256);
++		if (ser && o->serialize(ser)) {
++			snprintf(buf, len, "%.180s", ser->text());
++		} else {
++			snprintf(buf, len, "<%s>", o->getMetaClass()->getClassName());
++		}
++		OSSafeReleaseNULL(ser);
++	} else {
++		snprintf(buf, len, "NULL");
++	}
++}
++
++void
++SweetHIDSensor::logProperty(const OSSymbol *key, OSObject *value, int pid, const char *who)
++{
++	char text[200];
++	sweetFormat(value, text, sizeof(text));
++	OSString *now = OSString::withCString(text);
++	OSString *was = OSDynamicCast(OSString, fSeen->getObject(key));
++	if (now && (!was || !was->isEqualTo(now))) {
++		if (fLogged < gSweetKnobs.logmax) {
++			IOLog("SWEET MOTION: %s setProperties %s = %s (pid %d %s)\n", gSweetSensorInfo[sensorIndex()].name,
++			    key->getCStringNoCopy(), text, pid, who);
++			if (++fLogged == gSweetKnobs.logmax) {
++				IOLog("SWEET MOTION: %s: log limit reached (poke m log / m knob logmax N)\n",
++				    gSweetSensorInfo[sensorIndex()].name);
++			}
++		}
++		fSeen->setObject(key, now);
++	}
++	OSSafeReleaseNULL(now);
++}
++
++IOReturn
++SweetHIDSensor::setProperties(OSObject *properties)
++{
++	OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
++	char who[32] = "?";
++	int pid = proc_selfpid();
++
++	if (!dict) {
++		return kIOReturnBadArgument;
++	}
++	proc_selfname(who, sizeof(who));
++	OSCollectionIterator *it = OSCollectionIterator::withCollection(dict);
++	if (!it) {
++		return kIOReturnNoMemory;
++	}
++	IOLockLock(fLock);
++	while (const OSSymbol *key = OSDynamicCast(OSSymbol, it->getNextObject())) {
++		OSObject *value = dict->getObject(key);
++		logProperty(key, value, pid, who);
++		OSNumber *n = OSDynamicCast(OSNumber, value);
++		if (n && key->isEqualTo(kIOHIDReportIntervalKey)) {
++			fInterval = n->unsigned32BitValue();
++			fIntervalSet = 1;
++		}
++		/* Keep the sensor settings visible in the registry, as IOHIDEventService does. */
++		if (n && (key->isEqualTo(kIOHIDReportIntervalKey) || key->isEqualTo(kIOHIDBatchIntervalKey) ||
++		    key->isEqualTo(kIOHIDSensorPropertySampleIntervalKey) ||
++		    key->isEqualTo(kIOHIDSensorPropertyMaxFIFOEventsKey))) {
++			setProperty(key, n);
++		}
++	}
++	IOLockUnlock(fLock);
++	it->release();
++	return kIOReturnSuccess;
++}
++
++IOHIDEvent *
++SweetHIDSensor::copyEvent(IOHIDEventType type, IOHIDEvent *matching __unused, IOOptionBits options)
++{
++	IOHIDEvent *event = NULL;
++	char who[32] = "?";
++
++	IOLockLock(fLock);
++	if (type < 32 && !(fCopyTypes & (1u << type)) && fLogged < gSweetKnobs.logmax) {
++		fCopyTypes |= 1u << type;
++		fLogged++;
++		proc_selfname(who, sizeof(who));
++		IOLog("SWEET MOTION: %s copyEvent type %u options 0x%x by pid %d (%s): %s\n",
++		    gSweetSensorInfo[sensorIndex()].name, (unsigned)type, (unsigned)options, proc_selfpid(), who,
++		    fLast ? "last sample" : "none yet");
++	}
++	if (fLast && (type == gSweetSensorInfo[sensorIndex()].eventType || type == kIOHIDEventTypeNULL)) {
++		event = fLast;
++		event->retain();
++	}
++	IOLockUnlock(fLock);
++	if (!event && (sensorIndex() == SWEET_SENSOR_ALS || sensorIndex() == SWEET_SENSOR_PROX ||
++	    sensorIndex() == SWEET_SENSOR_ORIENT ||
++	    (sweet_motion_mask() & SWEET_MOTION_INITIAL_EVENTS)) &&
++	    (type == gSweetSensorInfo[sensorIndex()].eventType || type == kIOHIDEventTypeNULL)) {
++		event = initialEvent();         /* a nil copyEvent may be the NSNull */
++	}
++	return event;
++}
++
++/*
++ * A neutral sample until a real (or poked) one exists: upright portrait, still, 100 lux, far, sea level,
++ * portrait (Android-frame float bits, as sensd would write them).
++ */
++IOHIDEvent *
++SweetHIDSensor::initialEvent()
++{
++	static const uint32_t v[SWEET_SENSOR_COUNT][4] = {
++		{ 0, 0x411ce80a /* 9.80665 */, 0, 0 }, { 0, 0, 0, 0 }, { 0x42c80000 /* 100 */, 0, 0, 0 }, { 0, 0, 0, 0 },
++		{ 0x41a00000 /* 20 */, 0, 0xc2200000 /* -40 */, 0 }, { 0x42caa666 /* 101.325 */, 0, 0, 0 },
++		{ 0x3f800000 /* 1 */, 0, 0, 0 },
++	};
++	int i = sensorIndex();
++	struct sweet_motion_sample s = { gSweetSensorInfo[i].motionType, 0, 0, { v[i][0], v[i][1], v[i][2], v[i][3] } };
++	IOHIDEvent *event = NULL;
++	(void)post(&s, &event);
++	return event;
++}
++
++void
++SweetHIDSensor::initialFired(OSObject *owner, IOTimerEventSource *sender __unused)
++{
++	SweetHIDSensor *self = (SweetHIDSensor *)owner;
++	if (self->fEvents == 0) {
++		struct sweet_motion_sample s = { 12, 3, 0, { 0x42c80000 /* 100.0f */, 0, 0, 0 } };
++		IOLog("SWEET MOTION: als: initial 100 lux event (%u clients)\n", self->fClients);
++		self->post(&s);
++	}
++}
++
++/* User-space reads of the service's properties (IORegistryEntryCreateCFProperty), each key once. */
++static struct {
++	const void *svc;
++	uint32_t hash;
++} gSweetReads[256];
++static uint32_t gSweetReadCount;
++
++void
++SweetHIDSensor::logRead(const char *key, bool found) const
++{
++	int pid = proc_selfpid();
++	if (pid <= 0 || !gSweetReadLock) {
++		return;         /* the kernel's own reads (matching, the user client) */
++	}
++	uint32_t h = 2166136261u;
++	for (const char *p = key; *p; p++) {
++		h = (h ^ (uint8_t)*p) * 16777619u;
++	}
++	h ^= found ? 1 : 0;
++	IOLockLock(gSweetReadLock);
++	bool seen = false;
++	for (uint32_t i = 0; i < gSweetReadCount; i++) {
++		if (gSweetReads[i].svc == this && gSweetReads[i].hash == h) {
++			seen = true;
++			break;
++		}
++	}
++	if (!seen && gSweetReadCount < 256) {
++		gSweetReads[gSweetReadCount].svc = this;
++		gSweetReads[gSweetReadCount].hash = h;
++		gSweetReadCount++;
++	}
++	IOLockUnlock(gSweetReadLock);
++	if (!seen && gSweetReadCount < 256) {
++		char who[32] = "?";
++		proc_selfname(who, sizeof(who));
++		IOLog("SWEET MOTION: %s property read %s: %s (pid %d %s)\n",
++		    gSweetSensorInfo[const_cast<SweetHIDSensor *>(this)->sensorIndex()].name, key,
++		    found ? "present" : "ABSENT", pid, who);
++	}
++}
++
++OSPtr<OSObject>
++SweetHIDSensor::copyProperty(const char *aKey) const
++{
++	OSPtr<OSObject> obj = IOHIDEventService::copyProperty(aKey);
++	if (aKey) {
++		logRead(aKey, obj != NULL);
++	}
++	return obj;
++}
++
++bool
++SweetHIDSensor::serializeProperties(OSSerialize *s) const
++{
++	logRead("(all properties)", true);
++	return IOHIDEventService::serializeProperties(s);
++}
++
++void
++SweetHIDSensor::relog()
++{
++	IOLockLock(fLock);
++	fSeen->flushCollection();
++	fLogged = 0;
++	fCopyTypes = 0;
++	IOLockUnlock(fLock);
++}
++
++static int
++sweetMilli(int64_t q16)
++{
++	return (int)((q16 * 1000) / 65536);
++}
++
++/* Kernel orientation filter (knob orientauto): UIDeviceOrientation from an Android-frame accel sample. */
++static int gSweetOrientCur, gSweetOrientCand;
++static uint64_t gSweetOrientCandTs;
++
++static int
++sweetOrientationOf(int64_t x, int64_t y, int64_t z)  /* 16.16 m/s² */
++{
++	int64_t ax = x < 0 ? -x : x, ay = y < 0 ? -y : y, az = z < 0 ? -z : z;
++	int64_t m = ax > ay ? ax : ay;
++	if (ax + ay < 3 * 65536 || az * 10 > 16 * m) {
++		return 0;
++	}
++	if (ay * 10 > 13 * ax) {
++		return y > 0 ? 1 : 2;
++	}
++	if (ax * 10 > 13 * ay) {
++		return x > 0 ? 3 : 4;
++	}
++	return 0;
++}
++
++/*
++ * sunfish (0228): accelerometer axes of the 4a's mounting, boot-arg sweetmotion_axes=SPEC: three axes,
++ * each "x", "y" or "z" with an optional "-", output x y z taken from those Android-frame inputs (e.g.
++ * "-yx-z"). Default "xyz" = redfin's mapping (the Pixel 5's). Sign flips toggle the float sign bit.
++ */
++static int gSweetAxesSrc[3] = { 0, 1, 2 };
++static uint32_t gSweetAxesNeg[3];
++static bool gSweetAxesRead;
++
++static void
++sweet_motion_axes(struct sweet_motion_sample *r)
++{
++	if (!gSweetAxesRead) {
++		char spec[16] = "";
++		int src[3], n = 0;
++		uint32_t neg[3], sign = 0;
++		if (PE_parse_boot_argn("sweetmotion_axes", spec, sizeof(spec))) {
++			for (const char *c = spec; *c && n < 3; c++) {
++				if (*c == '-') {
++					sign = 0x80000000u;
++				} else if (*c >= 'x' && *c <= 'z') {
++					src[n] = *c - 'x';
++					neg[n++] = sign;
++					sign = 0;
++				}
++			}
++			if (n == 3) {
++				for (int i = 0; i < 3; i++) {
++					gSweetAxesSrc[i] = src[i];
++					gSweetAxesNeg[i] = neg[i];
++				}
++			}
++			IOLog("SWEET MOTION: sweetmotion_axes=%s %s\n", spec, n == 3 ? "applied" : "ignored (want e.g. -yx-z)");
++		}
++		gSweetAxesRead = true;
++	}
++	uint32_t in[3] = { r->v[0], r->v[1], r->v[2] };
++	for (int i = 0; i < 3; i++) {
++		r->v[i] = in[gSweetAxesSrc[i]] ^ gSweetAxesNeg[i];
++	}
++}
++
++int
++SweetHIDSensor::post(const struct sweet_motion_sample *s, IOHIDEvent **built)
++{
++	int i = sensorIndex();
++	uint64_t now = mach_absolute_time(), ts = s->ts_mach, sec;
++	IOHIDEvent *event = NULL;
++	char line[160];
++	bool synthetic = (s->flags & SWEET_MOTION_SYNTHETIC) != 0;
++
++	nanoseconds_to_absolutetime(NSEC_PER_SEC, &sec);
++	if (ts == 0 || ts > now || now - ts > sec) {
++		ts = now;
++	}
++	line[0] = 0;
++	struct sweet_motion_sample remap;
++	if (i == SWEET_SENSOR_ACCEL) {      /* sunfish 0228: sweetmotion_axes */
++		remap = *s;
++		sweet_motion_axes(&remap);
++		s = &remap;
++	}
++	switch (i) {
++	case SWEET_SENSOR_ACCEL: {
++		/* Android m/s² -> g, sign flipped (knob accsign) */
++		int64_t num = 100000 * gSweetKnobs.accsign;
++		IOFixed x = (IOFixed)sweet_f2q(s->v[0], num, 980665, 16);
++		IOFixed y = (IOFixed)sweet_f2q(s->v[1], num, 980665, 16);
++		IOFixed z = (IOFixed)sweet_f2q(s->v[2], num, 980665, 16);
++		event = IOHIDEvent::accelerometerEvent(ts, x, y, z);
++		snprintf(line, sizeof(line), "x %d y %d z %d mg", sweetMilli(x), sweetMilli(y), sweetMilli(z));
++		if (!built && gSweetKnobs.orientauto && gSweetSensors[SWEET_SENSOR_ORIENT]) {
++			int o = sweetOrientationOf(sweet_f2q(s->v[0], 1, 1, 16), sweet_f2q(s->v[1], 1, 1, 16),
++			    sweet_f2q(s->v[2], 1, 1, 16));
++			uint64_t settle;
++			nanoseconds_to_absolutetime(300 * NSEC_PER_MSEC, &settle);
++			if (o && o != gSweetOrientCand) {
++				gSweetOrientCand = o;
++				gSweetOrientCandTs = ts;
++			}
++			if (o && o != gSweetOrientCur && ts - gSweetOrientCandTs >= settle) {
++				struct sweet_motion_sample os = { 10, s->flags, ts, { 0, 0, 0, 0 } };
++				static const uint32_t f32[7] = { 0, 0x3f800000, 0x40000000, 0x40400000, 0x40800000, 0x40a00000, 0x40c00000 };
++				gSweetOrientCur = o;
++				os.v[0] = f32[o];
++				gSweetSensors[SWEET_SENSOR_ORIENT]->post(&os);
++			}
++		}
++		break;
++	}
++	case SWEET_SENSOR_GYRO: {
++		int64_t num = gSweetKnobs.gyrodeg ? 5729578 / 10 : 1, den = gSweetKnobs.gyrodeg ? 10000 : 1;
++		IOFixed x = (IOFixed)sweet_f2q(s->v[0], num, den, 16);
++		IOFixed y = (IOFixed)sweet_f2q(s->v[1], num, den, 16);
++		IOFixed z = (IOFixed)sweet_f2q(s->v[2], num, den, 16);
++		event = IOHIDEvent::gyroEvent(ts, x, y, z);
++		snprintf(line, sizeof(line), "x %d y %d z %d m%s", sweetMilli(x), sweetMilli(y), sweetMilli(z),
++		    gSweetKnobs.gyrodeg ? "deg/s" : "rad/s");
++		break;
++	}
++	case SWEET_SENSOR_COMPASS: {
++		IOFixed x = (IOFixed)sweet_f2q(s->v[0], 1, 1, 16);
++		IOFixed y = (IOFixed)sweet_f2q(s->v[1], 1, 1, 16);
++		IOFixed z = (IOFixed)sweet_f2q(s->v[2], 1, 1, 16);
++		event = IOHIDEvent::compassEvent(ts, x, y, z);
++		snprintf(line, sizeof(line), "x %d y %d z %d nT", sweetMilli(x), sweetMilli(y), sweetMilli(z));
++		break;
++	}
++	case SWEET_SENSOR_ALS: {
++		int64_t lux = sweet_f2q(s->v[0], 1, 1, 0), cct = sweet_f2q(s->v[1], 1, 1, 0);
++		lux = lux < 0 ? 0 : lux;
++		event = IOHIDEvent::ambientLightSensorEvent(ts, (UInt32)lux, (UInt32)lux);
++		if (event) {
++			event->setIntegerValue(kIOHIDEventFieldAmbientLightSensorIlluminance, (SInt32)lux);
++			if (cct > 0) {
++				event->setIntegerValue(kIOHIDEventFieldAmbientLightSensorColorTemperature, (SInt32)cct);
++			}
++		}
++		snprintf(line, sizeof(line), "%lld lux, %lld K", lux, cct);
++		break;
++	}
++	case SWEET_SENSOR_PROX: {
++		bool near = (s->v[0] & 0x7fffffff) != 0;
++		int64_t raw = sweet_f2q(s->v[1], 1, 1, 0);
++		event = IOHIDEvent::proximityEvent(ts, near ? gSweetKnobs.proxmask : 0, (UInt32)(raw < 0 ? 0 : raw));
++		snprintf(line, sizeof(line), "%s (mask 0x%x), raw %lld", near ? "near" : "far",
++		    near ? gSweetKnobs.proxmask : 0, raw);
++		break;
++	}
++	case SWEET_SENSOR_PRESSURE: {
++		IOFixed p = (IOFixed)sweet_f2q(s->v[0], 1, 1, 16);
++		event = IOHIDEvent::atmosphericPressureEvent(ts, p, (UInt32)fEvents);
++		snprintf(line, sizeof(line), "%d Pa", sweetMilli(p));
++		break;
++	}
++	case SWEET_SENSOR_ORIENT: {
++		int64_t o = sweet_f2q(s->v[0], 1, 1, 0);
++		event = IOHIDEvent::orientationEvent(ts, kIOHIDOrientationTypeCMUsage);
++		if (event) {
++			event->setIntegerValue(kIOHIDEventFieldOrientationDeviceOrientationUsage,
++			    (SInt32)(gSweetKnobs.orientbase + o));
++		}
++		snprintf(line, sizeof(line), "UIDeviceOrientation %lld (usage %lld)", o, gSweetKnobs.orientbase + o);
++		break;
++	}
++	}
++	if (!event) {
++		return ENOMEM;
++	}
++	if (built) {            /* initialEvent(): build only, no dispatch */
++		*built = event;
++		return 0;
++	}
++	uint64_t n = OSIncrementAtomic64((volatile SInt64 *)&fEvents) + 1;
++	if (synthetic || n <= 3 || (gSweetKnobs.every && n % gSweetKnobs.every == 0)) {
++		IOLog("SWEET MOTION: %s #%llu%s: %s (%u clients)\n", gSweetSensorInfo[i].name, n,
++		    synthetic ? " (fake)" : "", line, fClients);
++	}
++	dispatchEvent(event);
++	IOLockLock(fLock);
++	IOHIDEvent *old = fLast;
++	fLast = event;          /* keeps the reference */
++	IOLockUnlock(fLock);
++	OSSafeReleaseNULL(old);
++	return 0;
++}
++
++int
++SweetHIDSensor::status(char *buf, int len)
++{
++	const SweetSensorInfo *info = &gSweetSensorInfo[sensorIndex()];
++	return snprintf(buf, len, "%-11s page 0x%04x usage 0x%02x clients %u ReportInterval %u us%s events %llu%s\n",
++	    info->name, (unsigned)info->page, (unsigned)info->usage, fClients, fInterval,
++	    fIntervalSet ? " (set by iOS)" : " (default)", fEvents, fLast ? "" : " (none yet)");
++}
++
++void
++SweetHIDSensor::want(struct sweet_motion_want *w)
++{
++	int i = sensorIndex();
++	w->present |= 1u << i;
++	w->clients[i] = fClients;
++	w->interval_us[i] = fInterval;
++	w->interval_set[i] = fIntervalSet;
++}
++
++extern "C" int
++sweet_hid_sensor(const struct sweet_motion_sample *s)
++{
++	int i = sweet_motion_index(s->type);
++	if (i < 0) {
++		return EINVAL;
++	}
++	if (!gSweetSensors[i]) {
++		return ENODEV;
++	}
++	return gSweetSensors[i]->post(s);
++}
++
++extern "C" int
++sweet_hid_sensor_status(char *buf, int len)
++{
++	int at = 0;
++	for (int i = 0; i < SWEET_SENSOR_COUNT && at < len; i++) {
++		if (gSweetSensors[i]) {
++			at += gSweetSensors[i]->status(buf + at, len - at);
++		} else {
++			at += snprintf(buf + at, len - at, "%-11s not registered (sweetmotion=0x%x)\n",
++			    gSweetSensorInfo[i].name, sweet_motion_mask());
++		}
++	}
++	return at < len ? at : len - 1;
++}
++
++extern "C" void
++sweet_hid_sensor_want(struct sweet_motion_want *w)
++{
++	bzero(w, sizeof(*w));
++	w->version = 1;
++	for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++		if (gSweetSensors[i]) {
++			gSweetSensors[i]->want(w);
++		}
++	}
++}
++
++extern "C" void
++sweet_hid_sensor_relog(void)
++{
++	for (int i = 0; i < SWEET_SENSOR_COUNT; i++) {
++		if (gSweetSensors[i]) {
++			gSweetSensors[i]->relog();
++		}
++	}
++}
++
++extern "C" int
++sweet_hid_sensor_knob(const char *name, int64_t value)
++{
++	if (!strcmp(name, "accsign")) {
++		gSweetKnobs.accsign = value < 0 ? -1 : 1;
++	} else if (!strcmp(name, "gyrodeg")) {
++		gSweetKnobs.gyrodeg = value != 0;
++	} else if (!strcmp(name, "proxmask")) {
++		gSweetKnobs.proxmask = (uint32_t)value;
++	} else if (!strcmp(name, "orientbase")) {
++		gSweetKnobs.orientbase = (int)value;
++	} else if (!strcmp(name, "orientauto")) {
++		gSweetKnobs.orientauto = value != 0;
++		gSweetOrientCur = gSweetOrientCand = 0;
++	} else if (!strcmp(name, "logmax")) {
++		gSweetKnobs.logmax = (uint32_t)value;
++	} else if (!strcmp(name, "every")) {
++		gSweetKnobs.every = (uint32_t)value;
++	} else {
++		return -1;
++	}
++	return 0;
++}
++
++extern "C" void
++sweet_hid_sensor_knobs_print(void)
++{
++	IOLog("SWEET MOTION: knobs accsign %d gyrodeg %d proxmask 0x%x orientbase %d orientauto %d logmax %u every %u\n",
++	    gSweetKnobs.accsign, gSweetKnobs.gyrodeg, gSweetKnobs.proxmask, gSweetKnobs.orientbase,
++	    gSweetKnobs.orientauto, gSweetKnobs.logmax, gSweetKnobs.every);
++}
+diff --git a/iokit/Kernel/arm/hid/SweetMotion.h b/iokit/Kernel/arm/hid/SweetMotion.h
+new file mode 100644
+index 0000000..aa4197f
+--- /dev/null
++++ b/iokit/Kernel/arm/hid/SweetMotion.h
+@@ -0,0 +1,54 @@
++/*
++ * SWEET (redfin 0971/0972): ported from ios-redfin (MIT) as sunfish 0228/0229; the C interface between /dev/redwood-motion + `poke m` (bsd/dev/sweet_motion.c)
++ * and the sensor HID services in SweetHID.cpp. ABI of the device: docs/redfin/qol-plan.md §3.3 and
++ * phone/sensors/motion.h.
++ */
++#ifndef _SWEET_MOTION_H
++#define _SWEET_MOTION_H
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* What sensd writes: values are IEEE754 single-precision bit patterns (the kernel does no FP math). */
++struct sweet_motion_sample {
++	uint32_t type;		/* 13 accel m/s², 20 gyro rad/s, 12 als lux [1] CCT, 14 prox [0] near [1] raw,
++				 * 21 compass µT, 31 pressure kPa, 10 orientation [0] UIDeviceOrientation */
++	uint32_t flags;		/* bits 0-1 accuracy, bit 31 synthetic */
++	uint64_t ts_mach;	/* SEE timestamp (19.2 MHz QTimer = mach_absolute_time); 0 = now */
++	uint32_t v[4];
++};
++#define SWEET_MOTION_SYNTHETIC	0x80000000u
++
++enum { SWEET_SENSOR_ACCEL, SWEET_SENSOR_GYRO, SWEET_SENSOR_ALS, SWEET_SENSOR_PROX, SWEET_SENSOR_COMPASS,
++	SWEET_SENSOR_PRESSURE, SWEET_SENSOR_ORIENT, SWEET_SENSOR_COUNT };
++
++struct sweet_motion_want {
++	uint32_t version;
++	uint32_t present;
++	uint32_t clients[8];
++	uint32_t interval_us[8];
++	uint32_t interval_set[8];
++};
++
++/* Boot-arg sweetmotion: bit i enables sensor service i (default 0x77 = all but prox, which crash-looped
++ * backboardd on 2026-10-26; 0x7f all); 0 = no services, no device; 0x100 = Transport "SPU";
++ * 0x200 = every service answers copyEvent with a neutral sample until a real one exists. */
++uint32_t sweet_motion_mask(void);
++/* Post one sample from its service; 0, or ENODEV (no such service / disabled) / EINVAL (unknown type). */
++int sweet_hid_sensor(const struct sweet_motion_sample *s);
++/* Status text (one line per service); returns its length. */
++int sweet_hid_sensor_status(char *buf, int len);
++void sweet_hid_sensor_want(struct sweet_motion_want *w);
++/* Runtime knobs (`poke m knob NAME VALUE`); 0, or -1 for an unknown name. */
++int sweet_hid_sensor_knob(const char *name, int64_t value);
++void sweet_hid_sensor_knobs_print(void);
++void sweet_hid_sensor_relog(void);	/* forget which setProperties keys were logged */
++/* Service index of a motion type, or -1. */
++int sweet_motion_index(uint32_t type);
++
++#ifdef __cplusplus
++}
++#endif
++#endif /* _SWEET_MOTION_H */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index a3e520c..6240806 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -78,6 +78,41 @@ const char * gIOKernelConfigTables =
+     "     'IOMatchCategory' = SweetHIDTouch;"
+     "   },"
+     "   {"
++    "     'IOClass'         = SweetHIDAccel;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDAccel;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDGyro;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDGyro;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDALS;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDALS;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDProx;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDProx;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDCompass;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDCompass;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDPressure;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDPressure;"
++    "   },"
++    "   {"
++    "     'IOClass'         = SweetHIDOrientation;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDOrientation;"
++    "   },"
++    "   {"
+     "     'IOClass'         = SweetBattery;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetBattery;"
+-- 
+2.56.0
+
