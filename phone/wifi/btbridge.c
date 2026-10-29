@@ -358,8 +358,10 @@ int main(int argc, char **argv)
 	printf("btbridge: ready, pumping\n");
 	double stats = now_s() + 60;
 	for (;;) {
+		/* bt5b: poll() on /dev/btbridge never reported POLLIN (bluetoothd's commands piled up unread in the kernel
+		 * ring), so on the kernel device read every pass (O_NONBLOCK: EAGAIN when empty) */
 		struct pollfd pf = { .fd = master, .events = POLLIN };
-		if (poll(&pf, 1, 0) > 0 && (pf.revents & POLLIN))
+		if (!use_pty || (poll(&pf, 1, 0) > 0 && (pf.revents & POLLIN)))
 			host_input();
 		chip_input();
 		if (now_s() > stats) {
