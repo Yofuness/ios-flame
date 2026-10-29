@@ -17,6 +17,9 @@
  *   adspboot boot --rpc --root --unsafe  attach to the root PD (pd 0), print the reply and the SMMU fault state
  *                     (audio step 5), then serve its listener (apps_std files, step 6) for --watch seconds
  *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
+ *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
+ *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
+ *                     CLOSEd at exit while the ADSP is up (ADSP_NO_CLOSE=1 = off)
  *   adspboot smmu --status  read-only: sGFSR/sGFSYNR and CB FSR/FAR of 0x1b23's bank, safe any time
  *                 [--dump]  + the bank's registers and the table walk for 0x80000000 and 0x380000000
  *   adspboot smmu [--dry] [--sid SID MASK]  the audio DSP streams (apps SMMU 0x1b21 audio buffers, 0x1b23-0x1b28
@@ -525,11 +528,13 @@ static void hex32(const char *tag, const uint8_t *p, size_t n)
 	printf("\n");
 }
 
-static void give_intents(struct chan *c, int n)
+static void give_intents(struct chan *c, int n, uint32_t sz)
 {
 	uint32_t e[8];
-	for (int i = 0; i < n && i < 4; i++) {
-		e[2 * i] = 4096;
+	if (n > 4)
+		n = 4;
+	for (int i = 0; i < n; i++) {
+		e[2 * i] = sz;
 		e[2 * i + 1] = (uint32_t)our_iid++;
 	}
 	glink_send(GLINK_CMD_INTENT, c->lcid, (uint32_t)n, e, 8u * n);
@@ -721,6 +726,116 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 		hex32("qrtr data to unserved port, dropped:", body, blen);
 }
 
+/*
+ * ap3: APR inside adspboot (`--apr`). apr1/apr2: a second process (aprtest) on the edge adspboot left behind made
+ * the ADSP assert (glink_core_intent.c:874, glink_channel_migration.c:667). Here the ADSP's own OPEN of
+ * "apr_audio_svc" is answered like every other channel; once it is up, the step-1 queries of aprtest.c go out
+ * (GET_STATE, GET_FWK_VERSION, fallback GET_VERSIONS; 3 s each) and every APR packet received is logged.
+ */
+#define APR_HDR_FIELD	0x0150		/* SEQ_CMD (1) << 8 | 5 words << 4 | version 0 */
+#define APR_DOMAIN_ADSP	4
+#define APR_DOMAIN_APPS	5
+#define APR_SVC_CORE	0x3
+#define APR_BASIC_RSP	0x000110e8
+#define AVCS_GET_STATE		0x0001326c
+#define AVCS_GET_STATE_RSP	0x0001326d
+#define AVCS_GET_FWK_VERSION	0x0001292c
+#define AVCS_GET_FWK_VERSION_RSP 0x0001292d
+#define AVCS_GET_VERSIONS	0x00012905
+#define AVCS_GET_VERSIONS_RSP	0x00012906
+
+struct apr_hdr {
+	uint16_t hdr_field, pkt_size;
+	uint8_t src_svc, src_domain;
+	uint16_t src_port;
+	uint8_t dest_svc, dest_domain;
+	uint16_t dest_port;
+	uint32_t token, opcode;
+} __attribute__((packed));
+
+static int apr_on, apr_step, close_acks;	/* apr_step: 0 idle, 1..3 waiting for query 1..3, 4 done */
+static struct chan *apr_chan;
+static uint64_t apr_due;
+static const uint32_t apr_q[3] = { AVCS_GET_STATE, AVCS_GET_FWK_VERSION, AVCS_GET_VERSIONS };
+
+static void apr_send(uint32_t opcode, uint32_t token)
+{
+	struct apr_hdr h = {
+		.hdr_field = APR_HDR_FIELD, .pkt_size = sizeof(h),
+		.src_svc = APR_SVC_CORE, .src_domain = APR_DOMAIN_APPS, .src_port = 0,
+		.dest_svc = APR_SVC_CORE, .dest_domain = APR_DOMAIN_ADSP, .dest_port = 0,
+		.token = token, .opcode = opcode,
+	};
+	printf("apr: tx svc %x op %x token %u\n", APR_SVC_CORE, opcode, token);
+	chan_send(apr_chan, &h, sizeof(h));
+	apr_due = now_ms() + 3000;
+}
+
+/* Next query: step 1 GET_STATE, 2 FWK_VERSION, 3 GET_VERSIONS (only if 2 failed), then done. */
+static void apr_next(int ok)
+{
+	if (apr_step == 2 && ok)
+		apr_step = 3;
+	if (++apr_step <= 3)
+		apr_send(apr_q[apr_step - 1], (uint32_t)apr_step);
+	else
+		printf("apr: queries done\n");
+}
+
+static void apr_rx(const uint8_t *p, size_t n)
+{
+	struct apr_hdr h;
+	uint32_t pl[64], len;
+	if (n < sizeof(h)) {
+		hex32("apr: rx short", p, n);
+		return;
+	}
+	memcpy(&h, p, sizeof(h));
+	len = (uint32_t)(n - sizeof(h)) / 4;
+	if (len > 64)
+		len = 64;
+	memcpy(pl, p + sizeof(h), len * 4);
+	uint32_t status = len ? pl[h.opcode == APR_BASIC_RSP && len > 1 ? 1 : 0] : 0;
+	printf("apr: rx svc %x op %x token %u status %x (len %zu, from %u/%u port %u%s%x)\n", h.src_svc, h.opcode,
+	       h.token, status, n, h.src_domain, h.src_svc, h.src_port, h.opcode == APR_BASIC_RSP ? ", for op " : "",
+	       h.opcode == APR_BASIC_RSP ? pl[0] : 0);
+	if (h.opcode == AVCS_GET_STATE_RSP)
+		printf("apr: adsp state %u (%s)\n", len ? pl[0] : 0, len && pl[0] == 1 ? "ready" : "not ready");
+	else if (h.opcode == AVCS_GET_FWK_VERSION_RSP && len >= 5) {
+		/* build major, minor, branch, subbranch, num_services; then {service id, api version, api branch} */
+		printf("apr: fwk %u.%u.%u.%u, %u services\n", pl[0], pl[1], pl[2], pl[3], pl[4]);
+		for (uint32_t i = 0; i < pl[4] && 5 + 3 * i + 2 < len; i++)
+			printf("apr:   svc %x api %u branch %u\n", pl[5 + 3 * i], pl[6 + 3 * i], pl[7 + 3 * i]);
+	} else if (h.opcode == AVCS_GET_VERSIONS_RSP && len) {
+		printf("apr: %u services\n", pl[0]);
+		for (uint32_t i = 0; i < pl[0] && 1 + 2 * i + 1 < len; i++)
+			printf("apr:   svc %x version %x\n", pl[1 + 2 * i], pl[2 + 2 * i]);
+	} else if (h.opcode != APR_BASIC_RSP && len) {
+		hex32("apr: payload", p + sizeof(h), n - sizeof(h));
+	}
+	if (apr_step >= 1 && apr_step <= 3 && (h.opcode == apr_q[apr_step - 1] + 1 ||
+	    (h.opcode == APR_BASIC_RSP && len && pl[0] == apr_q[apr_step - 1])))
+		apr_next(h.opcode != APR_BASIC_RSP);
+}
+
+/* --apr: start the queries once apr_audio_svc is open both ways; 3 s per query, then the next one. */
+static void apr_poll(void)
+{
+	if (!apr_on || apr_step > 3)
+		return;
+	if (!apr_step) {
+		for (int i = 0; i < nch; i++)
+			if (ch[i].up && !strcmp(ch[i].name, "apr_audio_svc")) {
+				apr_chan = &ch[i];
+				printf("apr: apr_audio_svc up (lcid %u, rcid %u)\n", ch[i].lcid, ch[i].rcid);
+				apr_next(0);
+			}
+	} else if (now_ms() >= apr_due) {
+		printf("apr: op %x: no reply in 3 s\n", apr_q[apr_step - 1]);
+		apr_next(0);
+	}
+}
+
 /* Parse one glink command; 0 = nothing (more) complete. Bounds: every read is checked against rx_avail. */
 static int pump_one(void)
 {
@@ -767,7 +882,12 @@ static int pump_one(void)
 		for (int i = 0; i < nch; i++)
 			if (ch[i].lcid == h[1]) {
 				printf("adsp: %s: OPEN_ACK (lcid %u)\n", ch[i].name, h[1]);
-				give_intents(&ch[i], 4);
+				if (apr_on && !strcmp(ch[i].name, "apr_audio_svc")) {	/* ap3: 8 x 1024 as aprtest */
+					give_intents(&ch[i], 4, 1024);
+					give_intents(&ch[i], 4, 1024);
+				} else {
+					give_intents(&ch[i], 4, 4096);
+				}
 				ch[i].up = 1;
 			}
 		break;
@@ -800,7 +920,7 @@ static int pump_one(void)
 		printf("adsp: %s asks for an intent of %u bytes\n", c ? c->name : "?", p2);
 		if (c) {
 			glink_send(GLINK_CMD_RX_INTENT_REQ_ACK, c->lcid, 1, NULL, 0);
-			give_intents(c, 1);
+			give_intents(c, 1, 4096);
 		}
 		break;
 	case GLINK_CMD_RX_INTENT_REQ_ACK:
@@ -830,11 +950,13 @@ static int pump_one(void)
 			printf("adsp: data for unknown cid %u (%zu bytes) dropped\n", h[1], rx_have);
 		if (!cl[1] && c) {
 			glink_send(GLINK_CMD_RX_DONE, c->lcid, rx_iid, NULL, 0);
-			give_intents(c, 1);
+			give_intents(c, 1, 4096);
 			if (!strcmp(c->name, "IPCRTR"))
 				qrtr_rx(c, rxbuf, rx_have);
 			else if (rpc_on && c == rpc_chan)
 				fastrpc_rx(rxbuf, rx_have);
+			else if (apr_on && c == apr_chan)
+				apr_rx(rxbuf, rx_have);
 			else if (c->ndata++ < 4) {
 				char tag[48];
 				snprintf(tag, sizeof(tag), "%s data", c->name);
@@ -847,7 +969,9 @@ static int pump_one(void)
 	case GLINK_CMD_RX_DONE_W_REUSE:
 	case GLINK_CMD_SIGNALS:
 	case GLINK_CMD_READ_NOTIF:
+		break;
 	case GLINK_CMD_CLOSE_ACK:
+		close_acks++;
 		break;
 	default:
 		printf("adsp: glink cmd %u (p1 %u p2 %u): skipped as 8 bytes\n", h[0], h[1], p2);
@@ -855,6 +979,8 @@ static int pump_one(void)
 	glink_rx_advance(n);
 	return 1;
 }
+
+static void close_all(void);
 
 /* Wait up to ms for the rx FIFO (item 480), attach and send our VERSION. */
 static int edge_open(int ms)
@@ -877,6 +1003,7 @@ static int edge_open(int ms)
 	printf("adsp: glink lpass edge: rx fifo after %d00 ms ok\n", t);
 	glink_send(GLINK_CMD_VERSION, 1, 1, NULL, 0);	/* version 1, intent reuse */
 	edge_up = 1;
+	atexit(close_all);	/* ap3 */
 	return 0;
 }
 
@@ -940,6 +1067,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			return 0;
 		}
 		rpc_poll();
+		apr_poll();
 		if (stop && now_ms() >= next) {
 			next = now_ms() + 1000;
 			uint32_t v;
@@ -951,7 +1079,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			if (smp2p_in(&v) == 0 && (v & 2) && !ready_seen) {
 				printf("adsp: READY after %llu ms (state %x)\n", (unsigned long long)(now_ms() - t0), v);
 				ready_seen = 1;
-				if (!rpc_on)
+				if (!rpc_on && !apr_on)
 					return 1;	/* --rpc: keep serving until the watch ends or a crash */
 			}
 		}
@@ -964,9 +1092,29 @@ static int glink_watch(int secs)
 {
 	if (edge_open(secs * 1000))
 		return -1;
-	edge_loop(rpc_on ? secs * 1000 : 5000, 0, 0);	/* --rpc: up to watch_end (au14) */
+	edge_loop(rpc_on || apr_on ? secs * 1000 : 5000, 0, 0);	/* --rpc: up to watch_end (au14) */
 	printf("adsp: glink %s, %d channels\n", ver_seen ? "up" : "no version from the ADSP", nch);
 	return ver_seen ? 0 : -1;
+}
+
+/*
+ * ap3: CLOSE every channel we opened when adspboot exits (atexit), so a later run on the same ADSP boot starts
+ * clean; only while the ADSP is up and not crashed. ADSP_NO_CLOSE=1 = the old exit without CLOSE.
+ */
+static void close_all(void)
+{
+	uint32_t v;
+	if (!edge_up || !nch || getenv("ADSP_NO_CLOSE") || smp2p_in(&v) || (v & 1) || !(v & 2))
+		return;
+	for (int i = 0; i < nch; i++)
+		glink_send(GLINK_CMD_CLOSE, ch[i].lcid, 0, NULL, 0);
+	uint64_t end = now_ms() + 500;
+	while (close_acks < nch && now_ms() < end) {
+		while (pump_one() > 0)
+			;
+		usleep(2000);
+	}
+	printf("adsp: CLOSE %d channels, %d acked\n", nch, close_acks);
 }
 
 /* SCM PIL shutdown (cmd 6), as wland: lets a rerun after a crash boot again without a reboot. */
@@ -1029,6 +1177,8 @@ int main(int argc, char **argv)
 			fastrpc_root(root = 1);
 		else if (!strcmp(argv[i], "--sensors"))
 			sensors = 1;
+		else if (!strcmp(argv[i], "--apr"))
+			apr_on = 1;
 		else if (!strcmp(argv[i], "--stub-svc") && i + 1 < argc && nstub < MAX_STUB) {
 			char *e;
 			stub[nstub].svc = (uint32_t)strtoul(argv[++i], &e, 0);
@@ -1075,12 +1225,12 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
 		return 1;
-	if (rpc_on)	/* au14: --watch N is the whole serve, not N per phase; ADSP_WATCH_PER_PHASE=1 for the old way */
+	if (rpc_on || apr_on)	/* au14: --watch N is the whole serve, not N per phase; ADSP_WATCH_PER_PHASE=1 for the old way */
 		watch_end = getenv("ADSP_WATCH_PER_PHASE") ? 0 : now_ms() + (uint64_t)watch * 1000;
 
 	uint32_t v;
@@ -1134,7 +1284,7 @@ int main(int argc, char **argv)
 			printf("adsp: ready after %d00 ms (state %x)\n", t, v);
 		}
 	}
-	int rc = glink_watch(rpc_on ? watch : 10) ? 1 : 0;
+	int rc = glink_watch(rpc_on || apr_on ? watch : 10) ? 1 : 0;
 	if (rpc_on) {
 		fastrpc_summary();
 		rpc_faults();
