@@ -285,8 +285,11 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer,MTLTextureDescriptor *d,NSUIn
  NBTexture *texture=[NBTexture new];texture.handle=handle;nmb_texture_describe(handle,&descriptor);texture.descriptor=descriptor;
  texture.buffer=buffer;texture.offset=offset;texture.rowBytes=row;return texture;
 }
+static uint64_t sweetTexelBytes(MTLPixelFormat f);
 @implementation NBBuffer (Textures)
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset bytesPerRow:(NSUInteger)row {
+ // 0107 (B29, diagnostic): 1-byte texels or rows not 64-byte aligned, the layouts Turnip refuses. Off: M2V_B29_LOG=0.
+ if(sweetTexelBytes(d.pixelFormat)==1 || row%64)B29LOG(@"B29 bufferTexture %lux%lu fmt %lu usage %lu storage %lu offset %lu row %lu len %lu",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,(unsigned long)d.usage,(unsigned long)d.storageMode,(unsigned long)offset,(unsigned long)row,(unsigned long)self.length);
  return (id<MTLTexture>)textureOnBuffer(self,d,offset,row,false);
 }
 - (id<MTLTexture>)newLinearTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset bytesPerRow:(NSUInteger)row bytesPerImage:(NSUInteger)image {
