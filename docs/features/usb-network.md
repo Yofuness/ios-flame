@@ -17,6 +17,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 21:30 the packet-loss window lines up with VMware's bridge (PC side)
+- bta (slow, 36 s): the PC sends unicast ARP probes at kernel 29.6/30.6/31.6 s; the phone logs each `SWEET ARP rx op 1` and its `tx op 2` reply, and the ue0 stats show TX not busy (busy 0, tx frames 150 -> 357). The PC still falls back to a broadcast probe at 33.2 s: the replies leave the phone but don't reach the PC's stack.
+- PC kernel log: VMware's vmnet (`userif-3: sent link down/up event`) fires at every link change; in each slow boot one comes 15-32 s after the phone's USB attach (ns1a +27, ns1b +32, sr1b +20 (Wi-Fi roam), bta +15 (Wi-Fi roam)). `vmnet-bridge -s 6 -n 0` runs without a fixed interface (automatic bridging).
+- Suspect (~60%): automatic bridging takes over / re-attaches to interfaces on link events, and frames from the phone are lost meanwhile. Fix needs the user's OK (plan U6): pin vmnet0 to a fixed adapter or exclude enp0s20f0u1. No PC change made.
+
 ### 2026-10-28 20:40 a ~10-15 s window of lost packets shortly after link-up
 - Seen in the boot-to-SSH analysis: ~10-15 s after the USB link comes up, packets from the phone stop reaching the PC for ~10-15 s (PC ARP every 1 s, phone answers each, PC keeps asking; NCM rx 94 -> 109, tx 137 -> 288 frames between 10 and 20 s). Causes the 36-41 s boots-to-SSH. Not yet known whether the phone's NCM TX or the host side drops them. Next: tcpdump on the PC's USB interface during one boot + a SWEET USB tx-error counter.
 
