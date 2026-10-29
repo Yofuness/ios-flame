@@ -4,12 +4,16 @@ Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-br
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
-1. **Audio via the SM7150 reference** (B16/B23): DSP addresses carry the SMMU stream (IOVA | 3<<32), pd-mapper adsp
-   domains, root PD attach first (xorbidden/hakios-sm7150 facts; no hyp assign needed). Done: FastRPC, ADSP stable, APR, AFE, PCM stream, CS35L41
-   powers up (PLL lock, PUP_DONE, OTP trims). Unheard by the PC mic; VI loopback records zeros (sp8, parked). Waits
-   for U5 (the user listens). (audio.md)
-2. ▶ **Bluetooth (B15)**: chip works from btup (firmware, address, LE scan 26 devices). Next: the iOS side: research
-   bluetoothd's transport + BlueTool (read-only RE first), then a tty/shim. (bluetooth.md)
+Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md) and iOSPlus10 (MIT).
+1. ▶ **Speaker** (B16): redfin's amp recipe: clear AMP_OUT_MUTE after GLOBAL_EN, SP_RATE_CTRL/FS_MON clocks, then
+   internal boost (stock DT values) if still silent. One sp run each; laptop mic + U5. (audio.md)
+2. ▶ **Bluetooth in iOS** (B15): btbridge + BlueTool stand-in under test (bt4); if bluetoothd refuses the pty, port
+   redfin 1015/1010 (kernel control com.apple.uart.bluetooth). (bluetooth.md)
+3. **iOS sound path**: redfin's kernel APR stream + RedwoodAudio.driver HAL plug-in, once the speaker plays. (audio.md)
+4. **Sensors -> auto-rotate** (B12): redfin fastrpcd + sensd + HID patches 0971/0972/1031. (display.md, sensors)
+5. **Battery %** from the fuel gauge (redfin 0966, PM6150 addresses). (battery.md)
+Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
+IMX363/IMX355 sensors; 3-5 days).
 
 Done 2026-10-30: Bluetooth LE scan from btup (bt3, 26 devices), Bluetooth chip answers (bt1), H/K home+lock commands, B34 closed, reproducibility audit (docs/setup.md, docs/device-changes.md, tools/sunfish-setup-phone.sh), zero-copy flip mode works (kernel103 manual, no fps gain; parked, O2/O7). Done 2026-10-29: rotation incl. landscape touch (`R 3`/`R 1`; auto-rotate waits for sensors B12), Notes keyboard typing, fake taps/swipes for tests (`T`/`W`, methods.md), Location Services on (`L 1`), rotation follows app switches (rot12), rotation via the front scene's settings (Calculator landscape), r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
