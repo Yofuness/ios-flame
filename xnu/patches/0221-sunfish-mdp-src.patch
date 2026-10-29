@@ -1,0 +1,110 @@
+From 3b5eee7eb34fe5f12219ce588159620e6430323d Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 11:53:47 -0400
+Subject: [PATCH] sunfish: kern.sweet_mdp_src points VIG0 at another splash
+ address and flushes CTL0 (0221)
+
+---
+ bsd/dev/sweet_mdpdump.c | 68 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 67 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_mdpdump.c b/bsd/dev/sweet_mdpdump.c
+index 7d3e583..ff071ab 100644
+--- a/bsd/dev/sweet_mdpdump.c
++++ b/bsd/dev/sweet_mdpdump.c
+@@ -6,6 +6,9 @@
+  * maps only the 4 KB MDSS pages it reads, one ml_io_map each (as SweetFramebuffer),
+  * never 0x0ae44000 (hangs the bus); SMMU part dropped (adspboot reads it).
+  * sweetmdpdump=0 skips registration.
++ * 0221: kern.sweet_mdp_src (RW quad): a write points VIG0 SRC0_ADDR at another
++ * address inside the splash carveout and flushes VIG0 + CTL in CTL0 (zero-copy step A);
++ * a read returns SRC0_ADDR. Also skipped by sweetmdpdump=0.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <stdarg.h>
+@@ -67,6 +70,20 @@ md_rd(uint32_t off)
+ 	return v;
+ }
+ 
++/* 0221: store through md_rd's page table (md_rd maps the page first). */
++static void
++md_wr(uint32_t off, uint32_t v)
++{
++	(void)md_rd(off);
++	for (unsigned i = 0; i < md_npg; i++) {
++		if (md_pg[i].pg == (off & ~0xfffu)) {
++			*(volatile uint32_t *)(md_pg[i].va + (off & 0xfffu)) = v;
++			__asm__ volatile("dsb sy" ::: "memory");
++			return;
++		}
++	}
++}
++
+ static void
+ md_out(const char *fmt, ...)
+ {
+@@ -155,11 +172,60 @@ SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdpdump,
+     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
+     0, 0, sysctl_sweet_mdpdump, "A", "sunfish MDP register dump (0220)");
+ 
++/* 0221: splash carveout and VIG0/CTL0 registers (flush bits as ios-s9 0096: VIG0 bit 0, CTL bit 17) */
++#define SPLASH_PA       0x9c000000ull
++#define SPLASH_LEN      0x1700000ull
++#define SPLASH_FB_LEN   (4352ull * 2340)
++#define VIG0_SRC0_ADDR  0x5014u
++#define CTL0_FLUSH      0x2018u
++#define CTL0_FLUSH_BITS ((1u << 17) | (1u << 0))
++
++static int
++sysctl_sweet_mdp_src SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	if (!OSCompareAndSwap(0, 1, (volatile UInt32 *)&dump_busy)) {
++		return EBUSY;
++	}
++	uint64_t addr = md_rd(VIG0_SRC0_ADDR);
++	int err = SYSCTL_OUT(req, &addr, sizeof(addr));
++	if (err || !req->newptr) {
++		goto out;
++	}
++	err = SYSCTL_IN(req, &addr, sizeof(addr));
++	if (err) {
++		goto out;
++	}
++	if (addr < SPLASH_PA || addr + SPLASH_FB_LEN > SPLASH_PA + SPLASH_LEN || (addr & 0xf)) {
++		err = EINVAL;
++		goto out;
++	}
++	dump_len = 0;
++	if (md_rd(CTL0_FLUSH) == 0xffffffffu) {
++		err = EIO;
++		goto out;
++	}
++	md_wr(VIG0_SRC0_ADDR, (uint32_t)addr);
++	md_wr(CTL0_FLUSH, CTL0_FLUSH_BITS);
++	printf("SWEET MDP: VIG0 src %#llx (flush %#x)\n", addr, CTL0_FLUSH_BITS);
++	delay_for_interval(20, NSEC_PER_MSEC);
++	printf("SWEET MDP: after 20 ms src %#x flush %#x\n",
++	    md_rd(VIG0_SRC0_ADDR), md_rd(CTL0_FLUSH));
++out:
++	dump_busy = 0;
++	return err;
++}
++
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_mdp_src,
++    CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_mdp_src, "QU", "sunfish VIG0 source address (0221)");
++
+ static void
+ md_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ {
+ 	sysctl_register_oid(&sysctl__kern_sweet_mdpdump);
+-	printf("SWEET MDP: kern.sweet_mdpdump ready\n");
++	sysctl_register_oid(&sysctl__kern_sweet_mdp_src);	/* 0221 */
++	printf("SWEET MDP: kern.sweet_mdpdump, kern.sweet_mdp_src ready\n");
+ }
+ 
+ /* Called from SweetBattery::start, like sweet_camprobe_register(); sweetmdpdump=0 skips. */
+-- 
+2.56.0
+
