@@ -983,6 +983,23 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 			}
 			return;
 		}
+		if (buf[0] == 'L') {	/* B32 "L 0|1": Location Services off/on as Settings does it (plist edit had no effect) */
+			if (!bbd) {
+				@try {
+					dlopen("/System/Library/Frameworks/CoreLocation.framework/CoreLocation", RTLD_NOW);
+					Class lm = objc_getClass("CLLocationManager");
+					SEL ge = sel_registerName("locationServicesEnabled"), se = sel_registerName("setLocationServicesEnabled:");
+					BOOL before = [lm respondsToSelector:ge] ? ((BOOL (*)(id, SEL))objc_msgSend)(lm, ge) : -1;
+					if ([lm respondsToSelector:se])
+						((void (*)(id, SEL, BOOL))objc_msgSend)(lm, se, buf[2] == '1');
+					BOOL after = [lm respondsToSelector:ge] ? ((BOOL (*)(id, SEL))objc_msgSend)(lm, ge) : -1;
+					sm2_log("orient: L: class %p set %d, enabled %d -> %d", lm, [lm respondsToSelector:se], before, after);
+				} @catch (id ex) {
+					sm2_log("orient: L exception %s", [[ex description] UTF8String]);
+				}
+			}
+			return;
+		}
 		if (buf[0] == 'R') {	/* "R N": D N 0 in backboardd; E N + front scenes in SpringBoard */
 			long rn = strtol(buf + 1, NULL, 10);
 			if (rn < 1 || rn > 4)

@@ -22,7 +22,7 @@ history in the feature Logs.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B31 oslog (/var/local/bin/oslog) crashes with SIGSEGV (far 0x10/0x20) on some captures; low priority tool bug.
-- B32 Location Services off (Maps/Weather ask to turn it on): check the Settings toggle and locationd (no GPS driver yet; Wi-Fi location needs Apple servers).
+- B32 Location Services: switched on with `echo "L 1" > /var/local/sweet-orient` (2026-10-29); check it survives a reboot. No position source yet (no GPS driver; Wi-Fi location needs Apple servers).
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)

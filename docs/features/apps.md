@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 22:40 B32 Location Services on via `L 1` (loc1, loc2; kernel98)
+- loc1: plist edit `LocationServicesEnabledIn7.0`=true in /var/root/Library/Preferences/com.apple.locationd.plist (backup .bak-b32) + locationd restart (kill; no launchctl on the phone): no effect, Maps still showed "Turn On Location Services".
+- New SweetMetal2 command `L 0|1` (SpringBoard calls +[CLLocationManager setLocationServicesEnabled:]). loc2: `orient: L: class 0x2174c8528 set 1, enabled 0 -> 1`; Maps opened to "What's New in Maps" with no Location Services alert (loc2-a). The root plist still has no Enabled key (the state lives elsewhere).
+- Open: survives a reboot? Maps' own "Allow location" prompt needs a tap; no position source yet (no GPS driver, Wi-Fi location needs Apple servers).
+
 ### 2026-10-29 10:20 kernel95 idle soak: 0 crashes, AegirPoster and App Store fixed (k95idle; ssh up 18 s, 4455 mV)
 - 11 min untouched, whole boot (to 719 s): 0 CRASH lines (kernel94 boots today: 33-66, mostly AegirPoster). AegirPoster exec'd at 387.9 s ("not listed ... no Metal device") and did not abort.
 - Lock screen: clock and date clean; the two buttons still noisy (B29).
