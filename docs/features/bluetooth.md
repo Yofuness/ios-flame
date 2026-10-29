@@ -23,6 +23,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:20 iOS side: how bluetoothd finds the controller (read-only; research/notes/bt-ios.md)
+- Facts from our 16.7 bluetoothd (strings, research/re/bt/, out of git): it opens /dev/cu.bluetooth or /dev/uart.bluetooth ("No valid serial port found (tried cu.bluetooth and uart.bluetooth)"), reads env BT_HCI_TRANSPORT ("not set - Attempting to read from plist"), and talks to com.apple.BlueTool (job: /usr/sbin/BlueTool -R, mobile). iPhone X ADT: uart1 child "bluetooth,n88", 3 Mbaud, H4. No /etc/bluetool scripts on the root (inside BlueTool).
+- From hakios-sm8150 (16.5, reference only, no licence): BlueTool reply {result: 0, firmware, manufacturer 29}; bluetoothd stops after 0x0c31 unless Supported_Commands octet 18 bit 3 is set (then 0x0c5b needs status 0); 0xfd48 must get the chip's own answer; other OGF 0x3f -> status 0. Their restart loop is unsolved.
+- Plan: (1) BlueTool stub answering result 0; (2) bridge daemon = btup firmware load + openpty, /dev/cu.bluetooth -> pty slave, BT_HCI_TRANSPORT=H4 for bluetoothd; (3) an H4 shim in the bridge that logs every command and applies the fixes above, then new ones from our trace.
+
 ### 2026-10-30 06:50 LE SCAN WORKS: 26 devices (bt3, kernel98; btup 51134a5)
 - Root cause of bt2's garbled reply: the chip also sends H4 ACL packets (handle 0xedc, ~497 B: the QCA debug log); the old parser (btup.c event(), old lines 420-440) skipped to the next 0x04 byte and framed "events" out of ACL payload. New reader parses events + ACL, resyncs one byte at a time, counts S_RX_FIFO_WR_ERR overruns.
 - `btup fw /var/local/fw/bt --scan 10`: patch 210348 B in 20.0 s, NVM 4722 B; HCI_Reset OK; drain 0 events, 0 dropped, 0 overruns; Read_BD_ADDR OK (address not recorded in git); local version: HCI 9 (5.0), LMP 9, manufacturer 0x1d (Qualcomm), subversion 0x2be.
