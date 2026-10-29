@@ -9,6 +9,7 @@
 #include "smmu.h"
 
 int smmu_dry;
+uint64_t smmu_alias = 3ull << 32;	/* ap6: the stream bits of the L1 alias (T_ALIAS); adspboot --pcm sets 1<<32 for 0x1b21 */
 
 #define SMMU_PA		0x15000000ull
 #define SMMU_SIZE	0x00100000u
@@ -193,7 +194,7 @@ int smmu_translate(const char *name, const uint16_t *sids, unsigned n, uint64_t 
 	uint32_t tcr = ref ? R_TCR : t39 ? T_TCR39 : T_TCR, sctlr = ref ? R_SCTLR : T_SCTLR;
 	uint32_t tcr2 = ref ? R_TCR2 : T_TCR2, mair0 = ref ? R_MAIR0 : T_MAIR0, cbar = ref ? R_CBAR : CB_CBAR;
 	uint64_t page = ref ? R_PAGE : T_PAGE;
-	unsigned l1i = (unsigned)((iova >> 30) & (t39 ? 0x1ff : 3)), l1a = (unsigned)(((iova | T_ALIAS) >> 30) & 0x1ff);
+	unsigned l1i = (unsigned)((iova >> 30) & (t39 ? 0x1ff : 3)), l1a = (unsigned)(((iova | smmu_alias) >> 30) & 0x1ff);
 	uint64_t asid = (uint64_t)cb << 48;	/* audio step 2: ASID = bank number, as the SM7150 reference */
 	uint64_t tbl = pm_alloc(3 * 0x1000, 0x1000);
 	if (!tbl) {

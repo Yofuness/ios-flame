@@ -18,6 +18,8 @@
  *                     (audio step 5), then serve its listener (apps_std files, step 6) for --watch seconds
  *                     [--sensors]  then also attach the sensors PD (second half of the buffer, step 6)
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
+ *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
+ *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   adspboot boot --apr [--watch 40]  ap3: also open apr_audio_svc in this process and send the APR core
  *                     queries (GET_STATE, FWK_VERSION); combines with --rpc --root --sensors. Channels are
  *                     CLOSEd at exit only with ADSP_CLOSE=1 (apr3: closing the FastRPC channel crashed the ADSP: fastrpc_port_s.c:176)
@@ -38,6 +40,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
+#include <math.h>
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
@@ -76,13 +79,40 @@ static const uint16_t adsp_sids[] = { 0x1b21, 0x1b23, 0x1b24, 0x1b25, 0x1b26, 0x
 static const uint16_t rpc_sids[] = { 0x1b23 };
 static int rpc_on;
 
+/* ap6: `--pcm` buffer (see the ASM/ADM section): its own translating bank for the audio-ion stream (0x1b21 by
+ * default, `--pcm-sid SID`), same reference values as 0x1b23's; the DSP gets IOVA | (sid & 0xf) << 32 (`--pcm-shift N`). */
+#define PCM_IOVA	0xa0000000ull
+#define PCM_PERIODS	8
+#define PCM_STRIDE	0x1000		/* one page per period */
+#define PCM_BUF		(PCM_PERIODS * PCM_STRIDE)
+static int pcm_on;
+static uint32_t pcm_sid = 0x1b21, pcm_shift = 1;
+static uint64_t pcm_pa, pcm_dsp;
+
+static int pcm_smmu(void)
+{
+	uint16_t sids[1] = { (uint16_t)pcm_sid };
+	pcm_pa = smmu_dry ? 0x100000000ull : pm_alloc(PCM_BUF, 0x1000);
+	if (!pcm_pa)
+		return 1;
+	pcm_dsp = PCM_IOVA | (uint64_t)pcm_shift << 32;
+	smmu_alias = (uint64_t)pcm_shift << 32;
+	int bad = smmu_translate("ADSP pcm", sids, 1, PCM_IOVA, pcm_pa, PCM_BUF);
+	smmu_alias = 3ull << 32;
+	printf("pcm: buffer pa %llx (%u B), DSP address %llx (sid %#x, stream bits %u)%s\n", (unsigned long long)pcm_pa,
+	       PCM_BUF, (unsigned long long)pcm_dsp, pcm_sid, pcm_shift, bad ? ": SMMU FAILED" : "");
+	if (!bad && !smmu_dry)
+		smmu_faults("ADSP pcm", pcm_sid);	/* before */
+	return bad;
+}
+
 static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
 {
 	if (one)
 		return smmu_identity("ADSP", sid, mask);
 	int bad = 0;
 	for (unsigned i = 0; i < sizeof(adsp_sids) / sizeof(adsp_sids[0]); i++)
-		if (!rpc_on || adsp_sids[i] != rpc_sids[0])
+		if ((!rpc_on || adsp_sids[i] != rpc_sids[0]) && !(pcm_on && adsp_sids[i] == pcm_sid))
 			bad |= smmu_identity("ADSP", adsp_sids[i], 0);
 	if (rpc_on && !bad) {
 		uint64_t pa = smmu_dry ? 0x100000000ull : pm_alloc(FASTRPC_DMA_SIZE, 0x1000);
@@ -92,6 +122,8 @@ static int adsp_smmu(int one, uint32_t sid, uint32_t mask)
 		if (!bad && !smmu_dry)
 			fastrpc_buffer(pa, RPC_DSP_ADDR);
 	}
+	if (pcm_on && !bad)
+		bad |= pcm_smmu();
 	return bad;
 }
 
@@ -883,7 +915,9 @@ static void afe_clock(uint32_t opcode, int enable)
 	afe_send(0, opcode, b, sizeof(b));
 }
 
-/* Run the step afe_step now holds; AFE_HOLD only arms the 2 s timer. */
+static void pcm_start(void);
+
+/* Run the step afe_step now holds; AFE_HOLD only arms the 2 s timer (--pcm: runs the PCM sequence instead). */
 static void afe_run(void)
 {
 	uint16_t port = AFE_PORT_SEC_MI2S_RX;
@@ -909,8 +943,14 @@ static void afe_run(void)
 		break;
 	}
 	case AFE_HOLD:
-		printf("afe: port started, holding 2 s\n");
 		afe_op = 0;
+		if (pcm_on) {	/* ap6: the port stays started until the PCM sequence is over */
+			printf("afe: port started, PCM next\n");
+			apr_due = UINT64_MAX;
+			pcm_start();
+			break;
+		}
+		printf("afe: port started, holding 2 s\n");
 		apr_due = now_ms() + 2000;
 		break;
 	case AFE_CLK_OFF: afe_clock(afe_clk_op, 0); break;
@@ -945,6 +985,305 @@ static void afe_next(int ok, uint32_t status)
 	afe_run();
 }
 
+/*
+ * ap6: `--pcm` (implies --afe): step 3 of apr-plan.md, a 1 kHz sine at -20 dBFS (48 kHz, 16-bit stereo) for 3 s
+ * through ASM + ADM while the AFE holds SEC_MI2S_RX started (amps untouched: no sound). Order as the SM7150
+ * reference (sound_sm7150.c stream_on/play/stream_off): ASM maps our buffer, ADM opens a COPP on the port, ASM opens
+ * session 1 stream 1 for writing, the matrix routes session 1 to the COPP, media format, run, 10 ms writes refilled
+ * on every WRITE_DONE; then 8 zero periods, pause, close, ADM close, unmap, and the AFE stop/clock off. The first
+ * failed setup step goes straight to the teardown of what was opened. Payloads: Linux apr_audio-v2.h layouts as the
+ * reference sends them, but 16-bit PCM and bit width (the reference: 24 in 32).
+ */
+#define APR_SVC_ASM		0x7
+#define APR_SVC_ADM		0x8
+#define ASM_CMD_SHARED_MEM_MAP_REGIONS	0x00010d92
+#define ASM_CMDRSP_SHARED_MEM_MAP_REGIONS 0x00010d93
+#define ASM_CMD_SHARED_MEM_UNMAP_REGIONS 0x00010d94
+#define ASM_STREAM_CMD_OPEN_WRITE_V3	0x00010db3
+#define ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2 0x00010d98
+#define ASM_SESSION_CMD_RUN_V2		0x00010daa
+#define ASM_SESSION_CMD_PAUSE		0x00010bd3	/* Linux apr_audio-v2.h; not in the reference (it closes running) */
+#define ASM_DATA_CMD_WRITE_V2		0x00010dab
+#define ASM_DATA_EVENT_WRITE_DONE_V2	0x00010d99
+#define ASM_SESSION_EVENT_RX_UNDERFLOW	0x00010c17
+#define ASM_STREAM_CMD_CLOSE		0x00010bcd
+#define ASM_TOPOLOGY_NONE		0x00010c68
+#define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2 0x00010da5
+#define ASM_SHMEM_4K_POOL		3
+#define ADM_CMD_DEVICE_OPEN_V5		0x00010326
+#define ADM_CMDRSP_DEVICE_OPEN_V5	0x00010329
+#define ADM_CMD_DEVICE_CLOSE_V5		0x00010327
+#define ADM_CMD_MATRIX_MAP_ROUTINGS_V5	0x00010325
+#define ADM_TOPOLOGY_NONE		0x00010312	/* the reference's default COPP topology */
+#define PCM_SESSION		1
+#define PCM_STREAM_PORT		(PCM_SESSION << 8 | 1)
+#define PCM_FRAMES		480		/* 10 ms at 48 kHz */
+#define PCM_BYTES		(PCM_FRAMES * 4)	/* 16-bit stereo: 1920 B */
+#define PCM_TONE_PERIODS	300		/* 3 s */
+#define PCM_WTOKEN		0x80000000u	/* | period: what a write's WRITE_DONE carries back */
+
+enum { P_IDLE, P_MAP, P_ADM_OPEN, P_OPEN_WRITE, P_ROUTE, P_FMT, P_RUN, P_PLAY, P_PAUSE, P_CLOSE, P_ADM_CLOSE, P_UNMAP,
+       P_DONE };
+static int pcm_step, pcm_mapped, pcm_copp_open, pcm_stream_open, pcm_running, pcm_failed;
+static uint32_t pcm_op, pcm_rsp, pcm_handle, pcm_copp, pcm_tone_at;
+static uint32_t pcm_sent, pcm_done, pcm_out, pcm_underflow, pcm_werr;
+static uint64_t pcm_due, pcm_t0, pcm_t1;
+static int16_t pcm_sine[48];
+
+static void pcm_tx(uint8_t svc, uint16_t port, uint32_t token, uint32_t opcode, const void *pl, uint16_t len)
+{
+	uint8_t pkt[sizeof(struct apr_hdr) + 64];
+	struct apr_hdr h = {
+		.hdr_field = APR_HDR_FIELD, .pkt_size = (uint16_t)(sizeof(h) + len),
+		.src_svc = svc, .src_domain = APR_DOMAIN_APPS, .src_port = svc == APR_SVC_ASM ? port : 0,
+		.dest_svc = svc, .dest_domain = APR_DOMAIN_ADSP, .dest_port = port,
+		.token = token, .opcode = opcode,
+	};
+	memcpy(pkt, &h, sizeof(h));
+	if (len)
+		memcpy(pkt + sizeof(h), pl, len);
+	chan_send(apr_chan, pkt, h.pkt_size);
+}
+
+/* A command of step pcm_step; RSP = its own response opcode (0 = the basic response). 3 s for the reply. */
+static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl, uint16_t len, uint32_t rsp)
+{
+	printf("pcm: step %d tx svc %x port %x op %x (%u B)\n", pcm_step, svc, port, opcode, (unsigned)(sizeof(struct apr_hdr) + len));
+	pcm_tx(svc, port, 0x200u + (uint32_t)pcm_step, opcode, pl, len);
+	pcm_op = opcode;
+	pcm_rsp = rsp;
+	pcm_due = now_ms() + 3000;
+}
+
+static void pcm_fill(unsigned p)
+{
+	int16_t s[PCM_FRAMES * 2];
+	int tone = pcm_sent < PCM_TONE_PERIODS;
+	for (unsigned f = 0; f < PCM_FRAMES; f++)
+		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
+	pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));	/* pm_wr cleans to PoC: the DSP reads DRAM */
+}
+
+static void pcm_write(unsigned p)
+{
+	uint64_t a = pcm_dsp + (uint64_t)PCM_STRIDE * p;
+	/* asm_data_cmd_write_v2: buf addr lsw/msw, mem_map_handle, buf_size, seq_id, timestamp lsw/msw, flags */
+	uint32_t w[8] = { (uint32_t)a, (uint32_t)(a >> 32), pcm_handle, PCM_BYTES, p, 0, 0, 0 };
+	pcm_fill(p);
+	pcm_tx(APR_SVC_ASM, PCM_STREAM_PORT, PCM_WTOKEN | p, ASM_DATA_CMD_WRITE_V2, w, sizeof(w));
+	pcm_sent++;
+	pcm_out++;
+}
+
+static void afe_next(int ok, uint32_t status);
+
+/* Run step pcm_step; teardown steps with nothing to undo are skipped. P_DONE hands back to the AFE (stop). */
+static void pcm_run(void)
+{
+	for (;; pcm_step++) {
+		switch (pcm_step) {
+		case P_MAP: {
+			/* asm_cmd_shared_mem_map_regions: u16 pool, u16 regions, u32 property; region: addr lsw/msw, size */
+			struct { uint16_t pool, regions; uint32_t prop, lo, hi, size; } __attribute__((packed)) m = {
+				ASM_SHMEM_4K_POOL, 1, 0, (uint32_t)pcm_dsp, (uint32_t)(pcm_dsp >> 32), PCM_BUF };
+			pcm_send(APR_SVC_ASM, 0, ASM_CMD_SHARED_MEM_MAP_REGIONS, &m, sizeof(m), ASM_CMDRSP_SHARED_MEM_MAP_REGIONS);
+			return;
+		}
+		case P_ADM_OPEN: {
+			/* adm_cmd_device_open_v5: u16 flags, mode (1 playback), endpoint 1, endpoint 2 (0xffff), u32 topology,
+			 * u16 channels, bit width, u32 rate, u8 channel map[8]; sent to the AFE port as the reference does */
+			struct { uint16_t flags, mode, ep1, ep2; uint32_t topo; uint16_t ch, bits; uint32_t rate; uint8_t map[8]; }
+			__attribute__((packed)) o = { 0, 1, AFE_PORT_SEC_MI2S_RX, 0xffff, ADM_TOPOLOGY_NONE, 2, 16, 48000,
+						      { 1, 2 } /* FL FR */ };
+			pcm_send(APR_SVC_ADM, AFE_PORT_SEC_MI2S_RX, ADM_CMD_DEVICE_OPEN_V5, &o, sizeof(o), ADM_CMDRSP_DEVICE_OPEN_V5);
+			return;
+		}
+		case P_OPEN_WRITE: {
+			/* asm_stream_cmd_open_write_v3: u32 mode flags, u16 sink endpoint (0 matrix), bits, u32 pp topology, format */
+			struct { uint32_t flags; uint16_t sink, bits; uint32_t topo, fmt; } __attribute__((packed)) w = {
+				0, 0, 16, ASM_TOPOLOGY_NONE, ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2 };
+			pcm_send(APR_SVC_ASM, PCM_STREAM_PORT, ASM_STREAM_CMD_OPEN_WRITE_V3, &w, sizeof(w), 0);
+			return;
+		}
+		case P_ROUTE: {
+			/* adm_cmd_matrix_map_routings_v5: u32 matrix (0 audio rx), sessions; per session: u16 id, copps, copp[] */
+			struct { uint32_t matrix, sessions; uint16_t session, copps, copp[2]; } __attribute__((packed)) r = {
+				0, 1, PCM_SESSION, 1, { (uint16_t)pcm_copp, 0 } };
+			pcm_send(APR_SVC_ADM, 0, ADM_CMD_MATRIX_MAP_ROUTINGS_V5, &r, sizeof(r), 0);
+			return;
+		}
+		case P_FMT: {
+			/* media_fmt_update_v2: u32 block size (20); multi_channel_pcm_fmt_blk_v2: u16 channels, bits, u32 rate,
+			 * u16 signed, reserved, u8 channel map[8] */
+			struct { uint32_t size; uint16_t ch, bits; uint32_t rate; uint16_t sign, res; uint8_t map[8]; }
+			__attribute__((packed)) f = { 20, 2, 16, 48000, 1, 0, { 1, 2 } };
+			pcm_send(APR_SVC_ASM, PCM_STREAM_PORT, ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2, &f, sizeof(f), 0);
+			return;
+		}
+		case P_RUN: {
+			uint32_t r[3] = { 0, 0, 0 };	/* asm_session_cmd_run_v2: flags 0 (run immediately), time lsw/msw */
+			pcm_send(APR_SVC_ASM, PCM_STREAM_PORT, ASM_SESSION_CMD_RUN_V2, r, sizeof(r), 0);
+			return;
+		}
+		case P_PLAY:
+			printf("pcm: playing 1 kHz -20 dBFS for %u x 10 ms, %u periods of %u B in flight\n", PCM_TONE_PERIODS,
+			       PCM_PERIODS, PCM_BYTES);
+			pcm_op = 0;
+			pcm_t0 = pcm_t1 = now_ms();
+			for (unsigned p = 0; p < PCM_PERIODS; p++)
+				pcm_write(p);
+			pcm_due = now_ms() + 1000;
+			return;
+		case P_PAUSE:
+			if (!pcm_running)
+				break;
+			pcm_send(APR_SVC_ASM, PCM_STREAM_PORT, ASM_SESSION_CMD_PAUSE, NULL, 0, 0);
+			return;
+		case P_CLOSE:
+			if (!pcm_stream_open)
+				break;
+			pcm_send(APR_SVC_ASM, PCM_STREAM_PORT, ASM_STREAM_CMD_CLOSE, NULL, 0, 0);
+			return;
+		case P_ADM_CLOSE:
+			if (!pcm_copp_open)
+				break;
+			pcm_send(APR_SVC_ADM, (uint16_t)pcm_copp, ADM_CMD_DEVICE_CLOSE_V5, NULL, 0, 0);
+			return;
+		case P_UNMAP:
+			if (!pcm_mapped)
+				break;
+			pcm_send(APR_SVC_ASM, 0, ASM_CMD_SHARED_MEM_UNMAP_REGIONS, &pcm_handle, sizeof(pcm_handle), 0);
+			return;
+		default:
+			pcm_step = P_DONE;
+			pcm_op = 0;
+			printf("pcm: done: %s; %u periods written, %u done (%u errors) in %llu ms, %u underflows, handle %x copp %u\n",
+			       pcm_failed ? "FAILED" : "ok", pcm_sent, pcm_done, pcm_werr,
+			       (unsigned long long)(pcm_t1 - pcm_t0), pcm_underflow, pcm_handle, pcm_copp);
+			smmu_faults("ADSP pcm", pcm_sid);	/* after */
+			afe_next(1, 0);	/* AFE_HOLD -> stop, clock off */
+			return;
+		}
+	}
+}
+
+/* Step pcm_step answered (ok = status 0). A failed setup step goes to the teardown; teardown steps always go on. */
+static void pcm_next(int ok, uint32_t status)
+{
+	int s = pcm_step;
+	printf("pcm: step %d op %x: %s (status %x)\n", s, pcm_op, ok ? "ok" : "FAILED", status);
+	if (s == P_MAP)
+		pcm_mapped = ok;
+	else if (s == P_ADM_OPEN)
+		pcm_copp_open = ok;
+	else if (s == P_OPEN_WRITE)
+		pcm_stream_open = ok;
+	else if (s == P_RUN)
+		pcm_running = ok;
+	else if (s == P_PAUSE)
+		pcm_running = 0;
+	else if (s == P_CLOSE)
+		pcm_stream_open = 0;
+	else if (s == P_ADM_CLOSE)
+		pcm_copp_open = 0;
+	else if (s == P_UNMAP)
+		pcm_mapped = 0;
+	if (!ok && s < P_PLAY) {
+		pcm_failed = 1;
+		pcm_step = P_PAUSE;
+	} else
+		pcm_step = s + 1;
+	pcm_run();
+}
+
+/* A period came back: refill and resend it (tone, then 8 zero periods); once all are back, the teardown. */
+static void pcm_back(unsigned p)
+{
+	pcm_done++;
+	if (pcm_out)
+		pcm_out--;
+	pcm_t1 = now_ms();
+	pcm_due = pcm_t1 + 1000;
+	if (pcm_step != P_PLAY)
+		return;
+	if (pcm_sent < PCM_TONE_PERIODS + PCM_PERIODS)
+		pcm_write(p % PCM_PERIODS);
+	else if (!pcm_out) {
+		pcm_step = P_PAUSE;
+		pcm_run();
+	}
+}
+
+/* The APR packets of --pcm; 1 = consumed. */
+static int pcm_rx(const struct apr_hdr *h, const uint32_t *pl, uint32_t len)
+{
+	if (h->opcode == ASM_DATA_EVENT_WRITE_DONE_V2 && (h->token & PCM_WTOKEN)) {
+		if (len >= 4 && pl[3]) {	/* buf addr lsw/msw, mem_map_handle, status */
+			if (!pcm_werr)
+				printf("pcm: WRITE_DONE period %u status %x\n", h->token & 0xff, pl[3]);
+			pcm_werr++;
+		}
+		pcm_back(h->token & 0xff);
+		return 1;
+	}
+	if (h->opcode == APR_BASIC_RSP && (h->token & PCM_WTOKEN)) {	/* a write refused outright */
+		printf("pcm: write period %u refused (status %x)\n", h->token & 0xff, len > 1 ? pl[1] : 0);
+		pcm_werr++;
+		pcm_back(h->token & 0xff);
+		return 1;
+	}
+	if (h->opcode == ASM_SESSION_EVENT_RX_UNDERFLOW) {
+		if (!pcm_underflow++)
+			printf("pcm: underflow (first, after %u periods done)\n", pcm_done);
+		return 1;
+	}
+	if (!pcm_op)
+		return 0;
+	if (pcm_rsp && h->opcode == pcm_rsp && h->opcode == ASM_CMDRSP_SHARED_MEM_MAP_REGIONS) {
+		pcm_handle = len ? pl[0] : 0;
+		printf("pcm: mem_map_handle %x%s\n", pcm_handle, pcm_handle ? "" : " (zero: unexpected)");
+		pcm_next(len > 0, len ? 0 : 0xffffffff);
+		return 1;
+	}
+	if (pcm_rsp && h->opcode == pcm_rsp) {	/* ADM_CMDRSP_DEVICE_OPEN_V5: status, copp_id (low 16 bits) */
+		uint32_t st = len ? pl[0] : 0xffffffff;
+		pcm_copp = len > 1 ? pl[1] & 0xffff : 0;
+		printf("pcm: ADM open status %x copp %u\n", st, pcm_copp);
+		pcm_next(st == 0, st);
+		return 1;
+	}
+	if (h->opcode == APR_BASIC_RSP && len > 1 && pl[0] == pcm_op) {
+		pcm_next(pl[1] == 0, pl[1]);
+		return 1;
+	}
+	return 0;
+}
+
+/* AFE_HOLD with --pcm: the sine table, then step 1 */
+static void pcm_start(void)
+{
+	for (int i = 0; i < 48; i++)
+		pcm_sine[i] = (int16_t)lrint(3277.0 * sin(2 * M_PI * i / 48));	/* -20 dBFS peak */
+	pcm_step = P_MAP;
+	pcm_run();
+}
+
+/* replies overdue: 3 s per command, 1 s between WRITE_DONEs */
+static void pcm_poll(void)
+{
+	if (pcm_step <= P_IDLE || pcm_step >= P_DONE || now_ms() < pcm_due)
+		return;
+	if (pcm_step == P_PLAY) {
+		printf("pcm: no WRITE_DONE in 1 s (%u written, %u done)\n", pcm_sent, pcm_done);
+		pcm_failed = 1;
+		pcm_step = P_PAUSE;
+		pcm_run();
+	} else {
+		printf("pcm: op %x: no reply in 3 s\n", pcm_op);
+		pcm_next(0, 0xffffffff);
+	}
+}
+
 static void apr_rx(const uint8_t *p, size_t n)
 {
 	struct apr_hdr h;
@@ -966,6 +1305,10 @@ static void apr_rx(const uint8_t *p, size_t n)
 		len = 64;
 	memcpy(pl, p + hl, len * 4);
 	uint32_t status = len ? pl[h.opcode == APR_BASIC_RSP && len > 1 ? 1 : 0] : 0;
+	if (h.opcode == ASM_DATA_EVENT_WRITE_DONE_V2 && !getenv("ADSP_APR_HEX")) {	/* ap6: 308 per run, counted */
+		pcm_rx(&h, pl, len);
+		return;
+	}
 	printf("apr: rx svc %x op %x token %u status %x (len %zu, from %u/%u port %u%s%x)\n", h.src_svc, h.opcode,
 	       h.token, status, n, h.src_domain, h.src_svc, h.src_port, h.opcode == APR_BASIC_RSP ? ", for op " : "",
 	       h.opcode == APR_BASIC_RSP ? pl[0] : 0);
@@ -992,11 +1335,14 @@ static void apr_rx(const uint8_t *p, size_t n)
 	else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && afe_op && h.opcode == APR_BASIC_RSP && len > 1 &&
 	    pl[0] == afe_op)
 		afe_next(pl[1] == 0, pl[1]);
+	else if (pcm_step > P_IDLE && pcm_step < P_DONE)
+		pcm_rx(&h, pl, len);
 }
 
 /* --apr: start the queries once apr_audio_svc is open both ways; 3 s per query, then the next one. */
 static void apr_poll(void)
 {
+	pcm_poll();
 	if (apr_on && apr_step > 3) {	/* ap4: --afe sequence after the queries */
 		if (afe_on && afe_step == AFE_IDLE && !apr_ready && !getenv("ADSP_APR_NO_GATE")) {
 			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
@@ -1375,6 +1721,14 @@ int main(int argc, char **argv)
 			apr_on = 1;
 		else if (!strcmp(argv[i], "--afe"))	/* ap4: AFE port start without amps; implies --apr */
 			apr_on = afe_on = 1;
+		else if (!strcmp(argv[i], "--pcm"))	/* ap6: ASM + ADM PCM to the AFE port, amps untouched; implies --afe */
+			apr_on = afe_on = pcm_on = smmu = 1;
+		else if (!strcmp(argv[i], "--pcm-sid") && i + 1 < argc) {
+			pcm_sid = (uint32_t)strtoul(argv[++i], NULL, 0);
+			pcm_shift = pcm_sid & 0xf;
+		}
+		else if (!strcmp(argv[i], "--pcm-shift") && i + 1 < argc)
+			pcm_shift = (uint32_t)strtoul(argv[++i], NULL, 0) & 0xf;
 		else if (!strcmp(argv[i], "--stub-svc") && i + 1 < argc && nstub < MAX_STUB) {
 			char *e;
 			stub[nstub].svc = (uint32_t)strtoul(argv[++i], &e, 0);
@@ -1421,7 +1775,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--dry] [--status] [--sid SID MASK]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe] [--pcm [--pcm-sid SID] [--pcm-shift N]] [--dry] [--status] [--sid SID MASK]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

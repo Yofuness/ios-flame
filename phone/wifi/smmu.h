@@ -11,5 +11,6 @@ void smmu_faults(const char *name, uint32_t sid);	/* FSR/FAR/FSYNR0 of the bank 
 void smmu_status(const char *name, uint32_t sid);	/* sGFSR/sGFSYNR + smmu_faults, read-only */
 void smmu_dump(const char *name, uint32_t sid, uint64_t iova);	/* bank registers + table walk, read-only */
 extern int smmu_dry;	/* 1: only report what would be written */
+extern uint64_t smmu_alias;	/* smmu_translate also maps IOVA | smmu_alias (default 3<<32) */
 
 #endif
