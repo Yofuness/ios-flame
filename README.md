@@ -50,7 +50,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: on, devices listed, an Xbox controller pairs and connects; audio devices (AirPods) crash bluetoothd; serial drops |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
-| [Sensors](docs/features/sensors.md) | 🟡 | all 6 sensors answer on the audio DSP, accelerometer streams at 54 Hz; iOS side (auto-rotate) under test |
+| [Sensors](docs/features/sensors.md) | ✅ | auto-rotate works (accelerometer -> rotation); all 6 sensors answer on the audio DSP |
 
 ## Quick start
 

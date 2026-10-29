@@ -1,5 +1,5 @@
 # Sensors
-**State:** ⬜ not started; survey done 2026-10-28 (waits for the ADSP work). **Updated:** 2026-10-28.
+**State:** ✅ AUTO-ROTATE WORKS (U10, 2026-10-30): the accelerometer drives SweetMetal2 `R N` (adspboot --sns-motion --sns-rot, sweetmotion=0x37); rotates almost at once. All 6 sensors answer. **Updated:** 2026-10-30.
 
 ## Facts
 - No motion/light sensor is on an AP bus (../recon/live.dts, every QUP child checked): SE1 has st21nfc@08 (NFC), SE7 the touch controller, SE9 fsa4480 (USB-C audio switch) and slg51000@75 (camera PMIC); no lsm6/bmi/icm/ak09/mmc/tmd/stk/vl53/bmp/lps node anywhere.
@@ -15,6 +15,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 19:15 AUTO-ROTATE WORKS (U10 by the user; kernel108 sweetmotion=0x37, adspboot --sns-motion --sns-rot)
+- Raw accel during the user's turns (u10c): upright y~9.2 -> orientation 1, landscape x~9.5 -> 3, posted at once and held: the sensor side was right all along.
+- iOS's own path (orientation HID service, sweetmotion=0x77): the oslog (u10e) shows backboardd -> SpringBoard rotating within 0.35 s (SBRotateScenesWorkspaceTransaction Prepare/Animate/Complete, Calculator "will change interface orientation"), plus GraphicsOrientation / display orientation changes, yet the panel only showed it at the next change (user) or not at all (mo3, webcam). Mach-time stamps (u10d) and re-posts (u10b) changed nothing.
+- Fix: --sns-rot writes SweetMetal2 "R N" (scene settings, frame kept portrait: the path that draws, rot10/rot12) on each portrait/landscape change, and iOS's orientation service is left unregistered (sweetmotion=0x37) so SpringBoard does not also rotate the system/display. u10g: the user: "rotated basically right away", stays rotated.
+- Next: make it permanent (launchd job for the sensor feed + sweetmotion=0x37 default + install script); later: why native rotation does not draw (backboardd display orientation vs our framebuffer).
 
 ### 2026-10-30 14:10 U10 auto-rotate by the user: rotates only when the phone is turned back (kernel107 sweetmotion=0x77; adspboot --sns-motion)
 - Per-sensor QRTR ports fixed the feed: 1460 samples in 40 s, 0 rejected (prox off by mask).

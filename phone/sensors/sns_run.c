@@ -22,7 +22,7 @@ static const char *stream_type, *motion_dev = MOTION_DEV;
 static uint32_t svc_node, svc_port;
 static int have_svc;
 static long svc_ms, t0, next_try, last_print, last_want;
-static int motion_fd = -1, orient_clients_seen;
+static int motion_fd = -1, orient_clients_seen, sns_rot;
 static struct motion_sample last_orient;
 static int have_orient;
 static long last_orient_ms;
@@ -41,10 +41,37 @@ static void out(void *ctx, struct sensor *s, const struct motion_sample *m)
 		return;
 	if (s->orient_only && m->type != MOTION_TYPE_ORIENTATION)
 		return;
+	struct motion_sample t;
+	if (m->type == MOTION_TYPE_ORIENTATION) {
+		/* u10c: orientation from the DSP's QTimer stamp rotated only when the NEXT event arrived; the kernel's fake
+		 * path (mach time, now) rotated at once. Stamp orientation with mach time at posting, so re-posts never go
+		 * back in time either. */
+		t = *m;
+		t.ts_mach = mach_absolute_time();
+		m = &t;
+	}
 	if (write(motion_fd, m, sizeof(*m)) == (ssize_t)sizeof(*m))
 		written++;
 	else if (write_errors++ < 5)
 		printf("sns: %s write: %s\n", motion_dev, strerror(errno));
+	if (m->type == MOTION_TYPE_ORIENTATION && sns_rot) {
+		/* mo3: iOS's own rotation (orientation HID service) runs in SpringBoard but the panel does not show it;
+		 * SweetMetal2's "R N" (scene settings, frame kept portrait) is the path that draws (rot10/rot12). So with
+		 * --sns-rot, portrait/landscape changes are written as "R N" to /var/local/sweet-orient. */
+		int o = (int)m->v[0];
+		static int last_r;
+		if ((o == 1 || o == 3 || o == 4) && o != last_r) {
+			int fd = open("/var/local/sweet-orient", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (fd >= 0) {
+				char c[8];
+				int n = snprintf(c, sizeof(c), "R %d\n", o);
+				if (write(fd, c, (size_t)n) == n)
+					printf("sns: rot: R %d\n", o);
+				close(fd);
+			}
+			last_r = o;
+		}
+	}
 	if (m->type == MOTION_TYPE_ORIENTATION) {
 		printf("sns: orientation %.0f posted\n", m->v[0]);
 		last_orient = *m;
@@ -78,6 +105,8 @@ int sns_opt(int argc, char **argv, int *i)
 		mode = M_MOTION;
 	else if (!strcmp(a, "--sns-dump"))
 		dump = 1;
+	else if (!strcmp(a, "--sns-rot"))	/* mo3: drive SweetMetal2 "R N" from orientation changes */
+		sns_rot = 1;
 	else if (!strcmp(a, "--sns-one-port"))		/* sns2: off switch: every stream on port 0x40 (sns1) */
 		one_port = 1;
 	else if (!strcmp(a, "--sns-unregistered"))	/* sns2: off switch: stream to unregistered services too */
@@ -183,7 +212,7 @@ static int follow(void)
 {
 	struct motion_want w;
 	int have = motion_fd >= 0 && ioctl(motion_fd, MOTION_GET_WANT, &w) == 0;
-	int orient_want = have && (w.present & (1u << MOTION_ORIENT)) && w.clients[MOTION_ORIENT] > 0;
+	int orient_want = (have && (w.present & (1u << MOTION_ORIENT)) && w.clients[MOTION_ORIENT] > 0) || sns_rot;	/* u10f: --sns-rot needs orientation without an iOS client (sweetmotion=0x37) */
 	if (orient_want != orient_clients_seen) {
 		if (orient_want)
 			env.orient_cur = env.orient_cand = 0;	/* a new client: post the current orientation again */
