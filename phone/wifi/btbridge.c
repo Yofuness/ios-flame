@@ -17,8 +17,11 @@
  *     answered here with Command Complete status 0 + 8 data bytes, byte 0 = the command's first parameter (bluetoothd's
  *     BCM parser drops answers with fewer than 2 data bytes, and matches 0xfce9 by that sub-opcode echo).
  *   - 0x0c6d Write_LE_Host_Support: Simultaneous_LE_Host -> 0 before the chip; a remaining chip error -> status 0.
- *   - 0x2007 chip status 0x0c -> status 0, 0 dBm.
+ *   - 0x2007 chip status 0x0c -> status 0, 0 dBm; the same 0x0c -> 0 for 0x2006/0x200a/0x200b/0x200c (LE adv/scan
+ *     parameters and enable), and a chip "Unknown HCI Command" (0x01) Command Complete -> status 0 + 8 data bytes
+ *     (sub-opcode echo): both from ios-redfin phone/bt/btd.c bridge_tap (MIT, research/re/redfin/; rules only).
  *   - chip vendor events (0xff) are not forwarded; every other chip error is logged.
+ * When the chip is ready, btbridge writes its pid to /private/var/tmp/btbridge.pid (bluetool-stub waits for it).
  * Always: ACL from handle 0xedc (the QCA debug log) is dropped, not forwarded.
  */
 #include <errno.h>
@@ -39,10 +42,13 @@
 #define WLAND_LOG	"/var/local/wland.log"
 #define DEBUG_HANDLE	0xedc
 #define VSC_DATA	8
+#define READY		"/private/var/tmp/btbridge.pid"
 
 static int shim = 1, master = -1;
 static unsigned n_cmd, n_evt, n_acl_up, n_acl_down, n_local, n_dbg;
 static int cmds_known, chip_err_rd, chip_err_wr;
+static uint16_t last_op;
+static uint8_t last_sub;
 
 static void hexline(const char *dir, const uint8_t *b, unsigned n, unsigned max)
 {
@@ -93,6 +99,8 @@ static int host_cmd(uint8_t *p, unsigned n)
 {
 	uint16_t op = p[1] | p[2] << 8;
 	n_cmd++;
+	last_op = op;
+	last_sub = p[3] && n > 4 ? p[4] : 0;
 	hexline("-> cmd", p, n, 4 + 16);
 	if (!shim)
 		return 0;
@@ -155,6 +163,17 @@ static int chip_evt(uint8_t *p, unsigned n)
 		printf("shim: 0x2007 status 0xc -> 0, 0 dBm\n");
 		p[6] = 0;
 		p[7] = 0;
+	} else if ((op == 0x2006 || op == 0x200a || op == 0x200b || op == 0x200c) && p[6] == 0x0c) {
+		/* btbridge shim (ios-redfin): Command Disallowed on legacy LE adv/scan -> success */
+		printf("shim: %#06x status 0xc -> 0\n", op);
+		p[6] = 0;
+	} else if (p[6] == 0x01) {
+		/* btbridge shim (ios-redfin): unknown command -> success with data, else bluetoothd's parser stalls */
+		uint8_t d[VSC_DATA] = { op == last_op ? last_sub : 0 };
+		printf("shim: %#06x status 0x1 (unknown) -> 0 + %u data bytes\n", op, VSC_DATA);
+		n_evt--;
+		answer(op, 0, d, VSC_DATA);
+		return 0;
 	}
 	return 1;
 }
@@ -292,6 +311,7 @@ int main(int argc, char **argv)
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	printf("btbridge: start, shim %s, firmware %s\n", shim ? "on" : "off (-n)", dir);
+	unlink(READY);
 	pm_init();
 	wait_wifi();
 	int ok = 0;
@@ -310,6 +330,12 @@ int main(int argc, char **argv)
 	}
 	if (open_pty() < 0)
 		return 1;
+	FILE *rf = fopen(READY, "w");
+	if (rf) {
+		fprintf(rf, "%d\n", (int)getpid());
+		fclose(rf);
+		chmod(READY, 0644);
+	}
 	printf("btbridge: ready, pumping\n");
 	double stats = now_s() + 60;
 	for (;;) {

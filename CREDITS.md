@@ -38,6 +38,9 @@ what you need to fetch yourself.
   module (GPL-2.0) and the phone's device tree.
 - **akshaynexus/iOSPlus10** (<https://github.com/akshaynexus/iOSPlus10>, MIT): `phone/wifi/bluetool_stub.c` is adapted
   from their `negroni-bluetool.c`; btbridge's H4 shim rules follow their bluetoothd findings (patches 0333/0336/0337).
+- **DenialOfGravity/ios-redfin** (<https://github.com/DenialOfGravity/ios-redfin>, MIT, Pixel 5 port): btbridge's
+  Command Disallowed / Unknown Command rewrites and bluetool-stub's wait for the bridge and btaddress echo follow
+  their `phone/bt/btd.c` and `bluetool.c` (rules re-implemented, no code copied).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)
