@@ -384,7 +384,7 @@ __attribute__((constructor)) static void sm2_torch_init(void)
  * UIDeviceOrientation (1 portrait, 2 upside down, 3 landscape left, 4 landscape right). "N" = method A, AX
  * setDeviceOrientation:; "B N" = method B, SpringBoard's SBDeviceOrientationUpdateManager; "C N" = method C,
  * BKSHIDServicesSetDeviceOrientationForAutomation after an orientation unlock; "D N [S]" = method D, in backboardd:
- * BKOrientationManager updateDeviceOrientation:N changeSource:S. Delete the file to turn it off.
+ * BKOrientationManager updateDeviceOrientation:N changeSource:S; "P" = read-only scene/host probe in SpringBoard. Delete the file to turn it off.
  */
 static void sm2_orient_b(long n)
 {
@@ -651,6 +651,100 @@ __attribute__((constructor)) static void sm2_app_orient_probe(void)
 	sm2_log("orient: app probe in %s", pn);
 }
 
+/* Probe "P" (SpringBoard, read-only): the front app's scene settings and SpringBoard's scene host views (frame,
+ * layer transforms, window orientation), to see where the rotation stops on the compositing side. */
+static id sm2_get(id o, const char *sel)
+{
+	SEL s = sel_registerName(sel);
+	if (!o)
+		return nil;
+	if (![o respondsToSelector:s]) {
+		sm2_log("orient: P %s missing %s", class_getName(object_getClass(o)), sel);
+		return nil;
+	}
+	return [o valueForKey:@(sel)];
+}
+
+static const char *sm2_desc(id o)
+{
+	return o ? [[o description] UTF8String] : "nil";
+}
+
+static void sm2_tf_str(id v, char *out, size_t len)
+{
+	double m[16] = {0};	/* CATransform3D is 16 CGFloats (double on arm64) */
+	if ([v isKindOfClass:[NSValue class]] && strcmp([v objCType], "{CATransform3D=dddddddddddddddd}") == 0)
+		[v getValue:m size:sizeof(m)];
+	else {
+		snprintf(out, len, "?");
+		return;
+	}
+	snprintf(out, len, "m11 %g m12 %g m21 %g m22 %g m41 %g m42 %g", m[0], m[1], m[4], m[5], m[12], m[13]);
+}
+
+static void sm2_probe_views(id v, int *count)
+{
+	if (*count >= 20 || !v)
+		return;
+	const char *cn = class_getName(object_getClass(v));
+	if (strstr(cn, "SceneLayerHost") || strstr(cn, "SceneHost")) {
+		(*count)++;
+		char t[160], st[160];
+		id layer = [v valueForKey:@"layer"];
+		sm2_tf_str([layer valueForKey:@"transform"], t, sizeof(t));
+		sm2_tf_str([layer valueForKey:@"sublayerTransform"], st, sizeof(st));
+		id w = sm2_get(v, "window");
+		id wo = sm2_get(w, "interfaceOrientation");
+		sm2_log("orient: P view %s frame %s bounds %s transform %s sublayer %s window %s level %s orientation %s", cn,
+		    sm2_desc([v valueForKey:@"frame"]), sm2_desc([v valueForKey:@"bounds"]), t, st,
+		    w ? class_getName(object_getClass(w)) : "nil", sm2_desc(sm2_get(w, "windowLevel")), sm2_desc(wo));
+	}
+	for (id sv in [v valueForKey:@"subviews"])
+		sm2_probe_views(sv, count);
+}
+
+static void sm2_orient_p(void)
+{
+	Class ac = objc_getClass("UIApplication");
+	id app = [ac respondsToSelector:@selector(sharedApplication)] ? [ac performSelector:@selector(sharedApplication)] : nil;
+	sm2_log("orient: P activeInterfaceOrientation %s", sm2_desc(sm2_get(app, "activeInterfaceOrientation")));
+	/* 1. front app and its scene */
+	id fa = sm2_get(app, "_accessibilityFrontMostApplication");
+	sm2_log("orient: P front app %s %s", fa ? class_getName(object_getClass(fa)) : "nil", sm2_desc(sm2_get(fa, "bundleIdentifier")));
+	id sc = sm2_get(sm2_get(fa, "sceneHandle"), "sceneIfExists");
+	if (!sc && fa) {
+		Class fm = objc_getClass("FBSceneManager");
+		id mgr = [fm respondsToSelector:@selector(sharedInstance)] ? [fm performSelector:@selector(sharedInstance)] : nil;
+		id ident = sm2_get(sm2_get(fa, "sceneHandle"), "sceneIdentifier");
+		SEL sw = sel_registerName("sceneWithIdentifier:");
+		if (ident && [mgr respondsToSelector:sw])
+			sc = ((id (*)(id, SEL, id))objc_msgSend)(mgr, sw, ident);
+		else
+			sm2_log("orient: P no scene lookup (manager %p, identifier %s)", mgr, sm2_desc(ident));
+	}
+	if (sc) {
+		id set = sm2_get(sc, "settings"), cs = sm2_get(sc, "clientSettings");
+		sm2_log("orient: P scene %s settings %s orientation %s frame %s deviceOrientation %s",
+		    sm2_desc(sm2_get(sc, "identifier")), set ? class_getName(object_getClass(set)) : "nil",
+		    sm2_desc(sm2_get(set, "interfaceOrientation")), sm2_desc(sm2_get(set, "frame")),
+		    [set respondsToSelector:sel_registerName("deviceOrientation")] ? sm2_desc([set valueForKey:@"deviceOrientation"]) : "n/a");
+		sm2_log("orient: P scene clientSettings %s orientation %s", cs ? class_getName(object_getClass(cs)) : "nil",
+		    sm2_desc(sm2_get(cs, "interfaceOrientation")));
+	}
+	/* 2. scene host views in all of SpringBoard's windows */
+	NSMutableArray *ws = [NSMutableArray arrayWithArray:sm2_get(app, "windows") ?: @[]];
+	SEL aw = sel_registerName("allWindowsIncludingInternalWindows:onlyVisibleWindows:");
+	if ([ac respondsToSelector:aw])
+		for (id w in ((id (*)(id, SEL, BOOL, BOOL))objc_msgSend)(ac, aw, YES, NO))
+			if (![ws containsObject:w])
+				[ws addObject:w];
+	sm2_log("orient: P %lu windows", (unsigned long)ws.count);
+	int count = 0;
+	for (id w in ws)
+		sm2_probe_views(w, &count);
+	sm2_log("orient: P done, %d scene host views", count);
+}
+
 __attribute__((constructor)) static void sm2_orient_init(void)
 {
 	bool bbd = strcmp(getprogname(), "backboardd") == 0;
@@ -684,6 +778,16 @@ __attribute__((constructor)) static void sm2_orient_init(void)
 		if (fd >= 0)
 			close(fd);
 		bool b = buf[0] == 'B', c = buf[0] == 'C', d = buf[0] == 'D', e = buf[0] == 'E';
+		if (buf[0] == 'P') {	/* "P": read-only scene/host probe in SpringBoard */
+			if (!bbd) {
+				@try {
+					sm2_orient_p();
+				} @catch (id ex) {
+					sm2_log("orient: P exception %s", [[ex description] UTF8String]);
+				}
+			}
+			return;
+		}
 		char *end = NULL;
 		long n = strtol(b || c || d || e ? buf + 1 : buf, &end, 10);
 		if (n < 1 || n > 4)
