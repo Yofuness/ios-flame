@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 00:20 Auto-Lock Never; last Settings panes (tap4, kernel98)
+- Auto-Lock set to Never by fake taps (was 1 minute). Battery pane fine (100 %, graph); Wallpaper pane opens (previews washed out white); Privacy & Security opens but has NO Location Services row (list starts at Tracking) -> B35.
+- `openapp` was ignored twice with the phone unlocked and Settings in front (B34); earlier in a boot it works. Injected home swipes from Settings only scrolled the list (B33 stays open).
+- Tap y on the Settings list ran ~0.05 higher than predicted from the frame; aim at the row's centre.
+
 ### 2026-10-29 23:55 Settings panes by fake taps (tap3, tap3b; kernel98)
 - tap3 got stuck (Notes left in landscape with the keyboard, `openapp` ignored); a fresh boot cleared it. tap3b: `openapp` is ignored while the screen is locked (Auto-Lock is 1 minute); `W 0.5 0.99 0.5 0.5 600` goes from the lock screen to the home screen.
 - Settings rows (portrait y): Wi-Fi 0.37, Bluetooth 0.42, Sounds 0.57, General 0.78, Display & Brightness 0.89; back = `T 0.08 0.075`.

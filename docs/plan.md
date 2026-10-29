@@ -14,7 +14,7 @@ Done 2026-10-29: rotation incl. landscape touch (`R 3`/`R 1`; auto-rotate waits 
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
 button, SE9 I2C + amps, boot-arg defaults.
 
-3. **B33 home swipe + B26 Settings sub-panes** with fake taps (quick).
+3. **B34 openapp ignored, B35 no Location Services row, B33 home swipe** (quick checks).
 
 ## Questions for you (Claude took the recommended path meanwhile)
 - (none open)
