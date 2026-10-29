@@ -35,6 +35,7 @@ history in the feature Logs.
 ## Optimize (last)
 - O2 panel rate ~21 updates/s: zero-copy scanout (ios-s9 0096/0097) now planned as priority 3; second GPU ring no longer needed if it works.
 - O3 Reduce Transparency speed (with B10).
+- O7 ~21 fps limit = backboardd's GPU 25-30 ms per frame (blur passes) + CPU/GPU never overlap (research/notes/fps-limit.md): try A76 pinning, no-blur bench, then 2 frames in flight (QuartzCore RE).
 - O4 [DONE 2026-10-29] lskdd respawn cost: dropped.
 - O5 display-off CPU fade when sweetpanelsleep is off.
 - O6 failed GPU hang recovery takes 3.9-12.8 s: fail faster.
