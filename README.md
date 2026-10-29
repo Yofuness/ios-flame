@@ -19,7 +19,7 @@ iOS root lives in the `userdata` partition.
 > mostly switched off (permissive AMFI and sandbox, stub keystore), and many parts are missing. Do not put
 > anything personal on it.
 
-## Status (2026-10-29)
+## Status (2026-10-30)
 
 States: ✅ works, 🟡 partial, ❌ broken, ⬜ not started. Each row links to the feature file with the details; the
 plan is [docs/plan.md](docs/plan.md).
@@ -48,7 +48,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
-| [Bluetooth](docs/features/bluetooth.md) | ⬜ | not started; surveyed: a UART driver + firmware + an iOS shim, 1-3 weeks |
+| [Bluetooth](docs/features/bluetooth.md) | 🟡 | WCN3990 answers over its UART (HCI reset, version; btup); firmware load next, iOS side not started |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ⬜ | not started; all sensors sit behind the audio DSP, so they wait for it |
 

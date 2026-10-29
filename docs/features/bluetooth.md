@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** ⬜ not started; survey done 2026-10-28 (later: after charging, probably after audio). **Updated:** 2026-10-28.
+**State:** 🟡 the WCN3990 answers over its UART (HCI reset + version, btup, 2026-10-30); firmware download next; iOS side not started. **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,16 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 06:00 THE CHIP TALKS: HCI reset + version over SE3 (bt1, kernel98; btup 1aa1fea)
+- Plan: research/notes/bt-plan.md (hakios-sm7150 bt_wcn3990.c as reference, no licence -> no code copied). Tool phone/wifi/btup.c, install tools/sunfish-install-bt.sh (btup + crbtfw21.tlv/crnv21.bin into /var/local/fw/bt).
+- `btup status` (read-only): GCC vote 0x41bc1bc0 (wrapper-0 m/s ahb, core, core2x on; SE3 bit 13 off), SE3 cbcr 0x80004220 (off), RCG cfg 0x100000; gpio38-41 func 0 (not qup03). So ABL leaves SE3 unclocked.
+- `uart-loop`: SE3 FW rev 0x20c, protocol 2 (UART) after btup's clock/vote setup; internal loopback 6/6 bytes OK.
+- `power`: ldoa10 vote (was already on: "on -> 0"; Wi-Fi up), 0xC0 @2400 then 0xFC @115200; 1 byte 00 back.
+- `hci-reset`: `04 0e 04 01 03 0c 00` = Command Complete, status 0. **First reply from the Bluetooth chip.**
+- `version`: `04 ff 0e 00 02 0a 00 00 00 99 66 01 10 24 02 01 40` -> product 0xa, patch 0x6699, rom 0x1001, soc 0x40010224 (hakios' phone: rom 0x201, soc 0x40020140; different chip rev). Stock vendor has only crbtfw21.tlv / crnv21.bin, so those stay.
+- `off`: ldoa10 off. No reset; 4438 mV.
+- Next: `btup fw /var/local/fw/bt` (patch + NVM, ~22 s at 115200), then Read_BD_ADDR; then inquiry/LE scan.
 
 ### 2026-10-28 14:30 survey (read-only)
 - Findings above; total 1-3 weeks before audio. Recommendation: later.
