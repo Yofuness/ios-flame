@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-29 09:30 B28: AegirPoster crash loop vs mtl2-clients (b28a, kernel94, default args)
+- Symbolized (b19a, 66 crashes 305.8-626.5 s, all the same bt): uncaught exception on an FBSSerialQueue block -> std::terminate -> _objc_terminate -> abort. 60 ms before each: `MTL2[pid AegirPoster]: not listed (/var/local/mtl2-clients): no Metal device`. Pairs ~0.4 s apart every ~10 s; starts at the idle auto-lock (~300 s) and stops on its own (~626 s).
+- b28a (AegirPoster added to mtl2-clients, reboot, 11 min untouched; ssh up 17 s, 4456 mV): 2 crashes (sig 9, 310.0 / 315.1 s), then none to 756 s. Device created ("_MTLDevice is 528 bytes") but many "no device answer" queries. 0 UIWDT, 0 GPU hangs.
+- But the lock-screen clock rendered as noise (webcam b28a vs a clean "8:16" on mc2); the two bottom lock-screen buttons are noise in both. Reverted mtl2-clients to SpringBoard, com.apple.WebKit.GPU, MobileSafari (backup /var/local/mtl2-clients.pre-b28 = same).
+
 ### 2026-10-29 09:05 B19: three looping jobs dropped (b19a, kernel94, default args)
 - Analysis (mc1 boot, ~620 s): lskdd 215 execs (1 s, from 400 s, ThrottleInterval 0), fairplayd.H2 59 (10 s, KeepAlive), bluetoothd 54 (10 s, no controller), wifip2pd 48 (10 s, from the Wi-Fi join), xpcproxy 633. None crash; they exit on their own (no exit status in the kernel log).
 - Dropped lskdd, fairplayd.H2, wifip2pd (tools/sunfish-launchd-drop.sh). Backup: phone /System/Library/xpc/launchd.plist.pre-b19, local work/userland/launchd.plist.pre-b19. bluetoothd kept (Settings BT pane, BT audio HAL plugin; re-check with B15).

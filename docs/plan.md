@@ -5,7 +5,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 1. ▶ **Quick backlog items:** B1 mtl2.log truncation check on the next Metal install; B28 AegirPoster
-   crash loop (symbolize); B24 Maps listed alone in mtl2-clients; B25 Music NULL library path.
+   (listing it garbles the clock; find why); B29 noisy lock-screen button icons; B24 Maps listed alone in mtl2-clients; B25 Music NULL library path.
 2. **Screen rotation** (B20): SpringBoard and Safari rotate (method E), the screen stays portrait; next: the
    compositing side (backboardd display transform / our framebuffer). (display.md)
 3. **Audio: share memory with the DSP via the hypervisor** (B16/B23): read-only research of the SCM mem-assign
