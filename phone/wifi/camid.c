@@ -1,7 +1,9 @@
 /*
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
- *   camid [--dry-run] [--addr 0x10|0x1a] [--keep]
+ *   camid [--dry-run] [--addr 0xNN] [--keep] [--front]
+ * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
+ * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
  * --dry-run: reads only the SLG51000, GCC, TLMM and the TITAN_TOP GDSC; every write and every other read is
  * printed as planned. Without --keep everything is powered down at exit (error and SIGINT/SIGTERM too).
  * Hazard rule: no CAMCC register but GDSC/GDSC_CLK before the GDSC is on, no CCI register before the GDSC and
@@ -34,6 +36,8 @@
 #define CCI0_CBCR	0xad0c0dc
 #define MCLK0_RCG	0xad05004
 #define MCLK0_CBCR	0xad0501c
+#define MCLK2_RCG	0xad05044
+#define MCLK2_CBCR	0xad0505c
 
 #define CCI		0xac4a000
 #define CCI_END		0xac4b000
@@ -43,7 +47,7 @@
 #define TLMM_S		0x3d00000
 #define TLMM_N		0x3900000
 
-static int dry, keep;
+static int dry, keep, front;
 static int gdsc_on, cci_clk_on, in_pd;
 
 /* --- MMIO with the hazard rule --- */
@@ -116,13 +120,21 @@ struct ldo {
 	const char *what;
 };
 /* power-up order */
-static const struct ldo ldos[5] = {
+static const struct ldo ldos_rear[5] = {
 	{ 7, 0x3100, 0x31c1, 0x3c, "1.8 V" },
 	{ 3, 0x2300, 0x23c1, 0xa5, "2.85 V" },
 	{ 1, 0x2000, 0x20c1, 0x5a, "2.85 V" },
 	{ 4, 0x2500, 0x25c1, 0x3c, "1.8 V" },
 	{ 6, 0x2900, 0x29c1, 0x82, "1.05 V" },
 };
+/* --front: vio, vana (LDO2 needs the 2.4 V base), vdig (0.4 V + 160 x 5 mV) */
+static const struct ldo ldos_front[3] = {
+	{ 7, 0x3100, 0x31c1, 0x3c, "1.8 V" },
+	{ 2, 0x2200, 0x22c1, 0x50, "2.8 V" },
+	{ 5, 0x2700, 0x27c1, 0xa0, "1.2 V" },
+};
+static const struct ldo *ldos = ldos_rear;
+static int nldo = 5;
 static unsigned ldo_on;		/* bits we set in MATRIX_CONF_A */
 
 /* --- TLMM --- */
@@ -132,13 +144,26 @@ struct pin {
 	uint32_t newctl, old;
 	int saved;
 };
-static struct pin pins[4] = {
+static struct pin pins_rear[4] = {
 	{ 17, TLMM_S + 0x1000 * 17, 1 << 2 | 3 | (2 / 2 - 1) << 6, 0, 0 },
 	{ 18, TLMM_S + 0x1000 * 18, 1 << 2 | 3 | (2 / 2 - 1) << 6, 0, 0 },
 	{ 13, TLMM_S + 0x1000 * 13, 1 << 2 | 0 | (4 / 2 - 1) << 6, 0, 0 },
 	{ 43, TLMM_N + 0x1000 * 43, 0 << 2 | 0 | (2 / 2 - 1) << 6 | 1 << 9, 0, 0 },
 };
-#define RESET_IO	(TLMM_N + 0x1000 * 43 + 4)
+static struct pin pins_front[4] = {
+	{ 19, TLMM_S + 0x1000 * 19, 1 << 2 | 3 | (2 / 2 - 1) << 6, 0, 0 },
+	{ 20, TLMM_S + 0x1000 * 20, 1 << 2 | 3 | (2 / 2 - 1) << 6, 0, 0 },
+	{ 15, TLMM_S + 0x1000 * 15, 1 << 2 | 0 | (4 / 2 - 1) << 6, 0, 0 },
+	{ 68, TLMM_N + 0x1000 * 68, 0 << 2 | 0 | (2 / 2 - 1) << 6 | 1 << 9, 0, 0 },
+};
+static struct pin *pins = pins_rear;
+static int reset_gpio = 43;
+static uint64_t reset_io = TLMM_N + 0x1000 * 43 + 4;
+#define RESET_IO	reset_io
+/* --front swaps these: MCLK2 and CCI0 master 1 (offset +0x100, queue regs +0x200, status bits) */
+static uint64_t mclk_rcg = MCLK0_RCG, mclk_cbcr = MCLK0_CBCR;
+static unsigned cci_m, cci_mo, cci_qo;
+static uint32_t cci_rd_done = 1u << 0, cci_q_report = 1u << 4, cci_err = CCI_ERRORS;
 
 static int st_pins, st_reset, st_mclk, st_cci, st_ahb[3], st_gdsc;
 
@@ -160,7 +185,7 @@ static void power_down(void)
 	if (st_reset)
 		mwr(RESET_IO, 0), printf("camid: pd reset low\n");
 	if (st_mclk)
-		mwr(MCLK0_CBCR, mrd(MCLK0_CBCR) & ~1u), printf("camid: pd mclk0 off\n");
+		mwr(mclk_cbcr, mrd(mclk_cbcr) & ~1u), printf("camid: pd mclk off\n");
 	for (int i = 3; i >= 0; i--)
 		if (pins[i].saved)
 			mwr(pins[i].ctl, pins[i].old), printf("camid: pd gpio%d ctl restored %#x\n", pins[i].gpio, pins[i].old);
@@ -175,7 +200,7 @@ static void power_down(void)
 		gdsc_on = 0;
 		printf("camid: pd gdsc collapse\n");
 	}
-	for (int i = 4; i >= 0; i--)	/* 6, 4, 1, 3, 7 */
+	for (int i = nldo - 1; i >= 0; i--)	/* rear 6, 4, 1, 3, 7; front 5, 2, 7 */
 		if (ldo_on & (1u << (ldos[i].n - 1))) {
 			ldo_off(ldos[i].n);
 			delay_ms(1);
@@ -227,25 +252,25 @@ static void rcg_xo(const char *name, uint64_t base, int mnd)
 	printf("camid: %s rcg %#llx = XO, cmd %#x\n", name, (unsigned long long)base, mrd(base));
 }
 
-/* --- CCI M0 Q0 --- */
+/* --- CCI M0 Q0 (M1 Q0 with --front) --- */
 static int cci_run(const uint32_t *w, int n, uint32_t done)
 {
 	for (int i = 0; i < n; i++)
-		mwr(CCI + 0x310, w[i]);
-	mwr(CCI + 0x300, n);
-	mwr(CCI + 0x008, 1);
+		mwr(CCI + 0x310 + cci_qo, w[i]);
+	mwr(CCI + 0x300 + cci_qo, n);
+	mwr(CCI + 0x008, 1u << (cci_m * 2));
 	if (dry)
 		return 0;
 	uint32_t s = 0;
 	for (int i = 0; i <= 10; i++) {
 		s = mrd(CCI_IRQ_STATUS);
-		if (s & (done | CCI_ERRORS))
+		if (s & (done | cci_err))
 			break;
 		delay_ms(1);
 	}
 	mwr(CCI + 0xc08, s);
 	mwr(CCI + 0xc00, 1);
-	if (s & CCI_ERRORS) {
+	if (s & cci_err) {
 		printf("camid: cci status %#x (error)\n", s);
 		return -1;
 	}
@@ -256,36 +281,63 @@ static int cci_run(const uint32_t *w, int n, uint32_t done)
 	return 0;
 }
 
-static int read_id(unsigned a)
+static int read_reg(unsigned a, unsigned reg)
 {
-	uint32_t w1[3] = { 1 | a << 4, 9 | 2 << 4 | 0x00 << 8 | 0x16 << 16, 0x108 };
+	uint32_t w1[3] = { 1 | a << 4, 9 | 2 << 4 | (reg >> 8) << 8 | (reg & 0xff) << 16, 0x108 };
 	uint32_t w2[3] = { 1 | a << 4, 10 | 2 << 4, 0x108 };
-	if (cci_run(w1, 3, 1u << 4)) {
+	if (cci_run(w1, 3, cci_q_report)) {
 		printf("camid: 0x%02x: address write failed\n", a);
 		return -1;
 	}
-	if (cci_run(w2, 3, 1u << 0)) {
+	if (cci_run(w2, 3, cci_rd_done)) {
 		printf("camid: 0x%02x: read failed\n", a);
 		return -1;
 	}
 	if (dry)
 		return 0;
-	uint32_t lvl = mrd(CCI + 0x11c), b[8 * 4];
+	uint32_t lvl = mrd(CCI + 0x11c + cci_mo), b[8 * 4];
 	unsigned nb = 0;
 	if (lvl > 8)
 		lvl = 8;
 	for (unsigned i = 0; i < lvl; i++) {
-		uint32_t v = mrd(CCI + 0x118);
+		uint32_t v = mrd(CCI + 0x118 + cci_mo);
 		for (int k = 0; k < 4; k++)
 			b[nb++] = (v >> (8 * k)) & 0xff;
 	}
-	printf("camid: 0x%02x: level %u bytes:", a, lvl);
+	if (front)
+		printf("camid: front sensor answers at 0x%02x: reg %#06x level %u bytes:", a, reg, lvl);
+	else
+		printf("camid: 0x%02x: level %u bytes:", a, lvl);
 	for (unsigned i = 0; i < nb; i++)
 		printf(" %02x", b[i]);
 	printf("\n");
-	if (nb >= 3 && b[1] == 0x03 && b[2] == 0x63)
+	if (!front && nb >= 3 && b[1] == 0x03 && b[2] == 0x63)
 		printf("camid: IMX363 ID OK\n");
 	return 0;
+}
+
+static int read_id(unsigned a)
+{
+	if (read_reg(a, 0x0016))
+		return -1;
+	if (front)
+		(void)read_reg(a, 0x0000);
+	return 0;
+}
+
+/* CCI reset (all masters) + clear IRQ status; also run after a front NACK so the next address starts clean */
+static void cci_reset(void)
+{
+	mwr(CCI + 0xc04, 0);
+	mwr(CCI + 0x004, 0x0f73f3f7);
+	if (!dry) {
+		if (wait_bit(CCI_IRQ_STATUS, 1u << 24, 1, 10))
+			die("CCI reset ack timeout");
+	}
+	uint32_t s = mrd(CCI_IRQ_STATUS);
+	mwr(CCI + 0xc08, s);
+	mwr(CCI + 0xc00, 1);
+	printf("camid: cci reset done, status %#x\n", s);
 }
 
 int main(int argc, char **argv)
@@ -296,15 +348,24 @@ int main(int argc, char **argv)
 			dry = 1;
 		else if (!strcmp(argv[i], "--keep"))
 			keep = 1;
+		else if (!strcmp(argv[i], "--front"))
+			front = 1;
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0x10|0x1a] [--keep]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front]\n");
 			return 2;
 		}
 	}
-	if (addr && addr != 0x10 && addr != 0x1a)
+	if (addr && addr != 0x10 && addr != 0x1a && !(front && (addr == 0x36 || addr == 0x2d)))
 		return 2;
+	if (front) {
+		ldos = ldos_front, nldo = 3;
+		pins = pins_front, reset_gpio = 68, reset_io = TLMM_N + 0x1000 * 68 + 4;
+		mclk_rcg = MCLK2_RCG, mclk_cbcr = MCLK2_CBCR;
+		cci_m = 1, cci_mo = 0x100, cci_qo = 0x200;
+		cci_rd_done = 1u << 12, cci_q_report = 1u << 16, cci_err = 0x60ee6000u;
+	}
 	pm_init();
 	if (gi2c_init())
 		return 1;
@@ -319,25 +380,26 @@ int main(int argc, char **argv)
 	printf("camid: slg PATN_ID %02x %02x %02x\n", id[0], id[1], id[2]);
 	if (id[0] != 0x05 || id[1] != 0x35 || id[2] != 0xa9)
 		die("not an SLG51000");
-	if (srd(0x2064, &misc))
+	int an = front ? 2 : 1, dn = front ? 5 : 6;	/* analog LDO (needs the 2.4 V base), digital LDO (maybe bypass) */
+	if (srd(front ? 0x2264 : 0x2064, &misc))
 		die("slg read");
-	printf("camid: LDO1 MISC1 %02x (%s base)\n", misc, misc & 1 ? "2.4 V" : "1.2 V");
+	printf("camid: LDO%d MISC1 %02x (%s base)\n", an, misc, misc & 1 ? "2.4 V" : "1.2 V");
 	if (!(misc & 1))
-		die("LDO1 has the 1.2 V base: cannot reach 2.85 V");
-	if (srd(0x2963, &trim))
+		die("analog LDO has the 1.2 V base: cannot reach 2.8 V");
+	if (srd(front ? 0x2763 : 0x2963, &trim))
 		die("slg read");
 	int ldo6_bypass = trim & 1;
-	printf("camid: LDO6 TRIM2 %02x%s\n", trim, ldo6_bypass ? " (bypass switch: VSEL not written)" : "");
+	printf("camid: LDO%d TRIM2 %02x%s\n", dn, trim, ldo6_bypass ? " (bypass switch: VSEL not written)" : "");
 	if (srd(MATRIX_CONF_A, &m))
 		die("slg read");
 	printf("camid: MATRIX_CONF_A %02x\n", m);
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < nldo; i++) {
 		const struct ldo *l = &ldos[i];
 		uint8_t old, rb;
 		if (srd(l->vsel_reg, &old))
 			die("slg read");
-		if (l->n == 6 && ldo6_bypass) {
-			printf("camid: LDO6 VSEL %02x kept (bypass)\n", old);
+		if (l->n == dn && ldo6_bypass) {
+			printf("camid: LDO%d VSEL %02x kept (bypass)\n", dn, old);
 			continue;
 		}
 		if (m & (1u << (l->n - 1))) {
@@ -351,7 +413,7 @@ int main(int argc, char **argv)
 			die("VSEL readback mismatch");
 		printf("camid: LDO%d VSEL %02x -> %02x (%s)\n", l->n, old, rb, l->what);
 	}
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < nldo; i++) {
 		const struct ldo *l = &ldos[i];
 		uint8_t st = 0;
 		if (srd(MATRIX_CONF_A, &m) || swr(MATRIX_CONF_A, m | 1u << (l->n - 1)))
@@ -371,7 +433,7 @@ int main(int argc, char **argv)
 			printf("camid: LDO%d on, status %02x\n", l->n, st);
 		if (!ok)
 			die("LDO VOUT_OK / ILIM");
-		delay_ms(i == 4 ? 5 : 1);
+		delay_ms(i == nldo - 1 ? 5 : 1);
 	}
 
 	/* B. GCC */
@@ -415,7 +477,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < 4; i++) {
 		pins[i].old = mrd(pins[i].ctl);
 		pins[i].saved = !dry;
-		if (pins[i].gpio == 43)
+		if (pins[i].gpio == reset_gpio)
 			mwr(RESET_IO, 0);
 		mwr(pins[i].ctl, pins[i].newctl);
 		printf("camid: gpio%d ctl %#x -> %#x\n", pins[i].gpio, pins[i].old, pins[i].newctl);
@@ -423,8 +485,8 @@ int main(int argc, char **argv)
 	st_pins = 1;
 	st_reset = !dry;
 
-	rcg_xo("mclk0", MCLK0_RCG, 1);
-	branch_on("mclk0", MCLK0_CBCR, 0, &st_mclk);
+	rcg_xo(front ? "mclk2" : "mclk0", mclk_rcg, 1);
+	branch_on(front ? "mclk2" : "mclk0", mclk_cbcr, 0, &st_mclk);
 
 	/* E. reset */
 	delay_ms(1);
@@ -434,23 +496,28 @@ int main(int argc, char **argv)
 
 	/* F. CCI0 */
 	printf("camid: cci hw_version %#x\n", mrd(CCI));
-	mwr(CCI + 0xc04, 0);
-	mwr(CCI + 0x004, 0x0f73f3f7);
-	if (!dry) {
-		if (wait_bit(CCI_IRQ_STATUS, 1u << 24, 1, 10))
-			die("CCI reset ack timeout");
-	}
-	uint32_t s = mrd(CCI_IRQ_STATUS);
-	mwr(CCI + 0xc08, s);
-	mwr(CCI + 0xc00, 1);
-	printf("camid: cci reset done, status %#x\n", s);
-	mwr(CCI + 0x100, 0x004E0072);
-	mwr(CCI + 0x104, 0x001C001C);
-	mwr(CCI + 0x108, 0x000A004D);
-	mwr(CCI + 0x10c, 0x76);
-	mwr(CCI + 0x110, 0x161);
+	cci_reset();
+	mwr(CCI + 0x100 + cci_mo, 0x004E0072);
+	mwr(CCI + 0x104 + cci_mo, 0x001C001C);
+	mwr(CCI + 0x108 + cci_mo, 0x000A004D);
+	mwr(CCI + 0x10c + cci_mo, 0x76);
+	mwr(CCI + 0x110 + cci_mo, 0x161);
 	int rc = 1;
-	if (addr)
+	if (front && !addr) {
+		static const unsigned fa[4] = { 0x1a, 0x10, 0x36, 0x2d };
+		for (int i = 0; i < 4 && rc; i++) {
+			if (read_id(fa[i]) == 0) {
+				rc = 0;
+				break;
+			}
+			cci_reset();	/* a NACK poisons the next try (rear run): reset + reprogram master 1 */
+			mwr(CCI + 0x200, 0x004E0072);
+			mwr(CCI + 0x204, 0x001C001C);
+			mwr(CCI + 0x208, 0x000A004D);
+			mwr(CCI + 0x20c, 0x76);
+			mwr(CCI + 0x210, 0x161);
+		}
+	} else if (addr)
 		rc = read_id(addr) ? 1 : 0;
 	else if (read_id(0x10) == 0 || read_id(0x1a) == 0)
 		rc = 0;
