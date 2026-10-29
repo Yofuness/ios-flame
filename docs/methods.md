@@ -5,7 +5,7 @@ Results live in the feature logs (`docs/features/`); the plan is `docs/plan.md`.
 `docs/sunfish/display-perf.md` ("Methods and tools", "Per-frame timeline") and `docs/sunfish/status.md` ("How to boot").
 
 ## Listening to the phone
-- USB measurement mic EVERSOLO EM-01 on the laptop (set up by the user 2026-10-30, no calibration file): PulseAudio source `alsa_input.usb-EVERSOLO_EM-01_2614211098-01.iec958-stereo`, the default of `tools/sunfish-tone-detect.sh SECONDS [FREQ]` (TONE_SRC= overrides). Recordings stay in /tmp and are deleted.
+- USB measurement mic EVERSOLO EM-01 on the laptop (set up by the user 2026-10-30, no calibration file; the card must be on profile input:analog-stereo, `pactl set-card-profile alsa_card.usb-EVERSOLO_EM-01_2614211098-01 input:analog-stereo`; a laptop-speaker 1 kHz tone reads ~150x the neighbours): PulseAudio source `alsa_input.usb-EVERSOLO_EM-01_2614211098-01.analog-stereo`, the default of `tools/sunfish-tone-detect.sh SECONDS [FREQ]` (TONE_SRC= overrides). Recordings stay in /tmp and are deleted.
 
 ## Phone control file (/var/local/sweet-orient, SweetMetal2, read every 1 s)
 `echo "CMD" > /var/local/sweet-orient` over SSH; results in /var/local/mtl2.log.

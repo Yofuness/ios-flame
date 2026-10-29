@@ -8,7 +8,7 @@
 set -eu
 secs=${1:?seconds}
 freq=${2:-1000}
-src=${3:-${TONE_SRC:-alsa_input.usb-EVERSOLO_EM-01_2614211098-01.iec958-stereo}}
+src=${3:-${TONE_SRC:-alsa_input.usb-EVERSOLO_EM-01_2614211098-01.analog-stereo}}
 wav=$(mktemp /tmp/tone-XXXXXX.wav)
 trap 'rm -f "$wav"' EXIT
 timeout "$((secs + 1))" parecord --device="$src" --rate=48000 --channels=1 --format=s16le --file-format=wav "$wav" || true
