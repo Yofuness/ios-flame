@@ -26,7 +26,7 @@ github.com/Yofuness/ios-flame. One file per feature under [features/](features/)
 | [Apps](features/apps.md) | ✅ | 32 staged apps installed in /Applications; crash-looping launchd jobs dropped | 2026-10-28 |
 | [Sleep and wake](features/sleep-wake.md) | ✅ | power-button sleep/wake; panel off via LM alpha blank + DCS 28/10, on via 11/29 (sweetpanelsleep=1, xnu 0202-0205, 10/10) | 2026-10-28 |
 | [Audio](features/audio.md) | 🟡 | speaker amps answer on I²C (SE9 0215 + resets 0217); the ADSP boots and runs, then dies in its sensor PD (needs a FastRPC file listener) | 2026-10-28 |
-| [Camera](features/camera.md) | ⬜ | SE9 I²C up (shared with the camera PMIC slg51000 @0x75); PMIC enable GPIOs behind sweetcampmic (0218), probe pending | 2026-10-28 |
+| [Camera](features/camera.md) | 🟡 | rear IMX363 answers over CCI (ID 0x0363, camid: SLG51000 rails, camcc clocks, MCLK, reset); no frames yet | 2026-10-28 |
 | [Sensors](features/sensors.md) | ⬜ | survey done: all behind the SSC in the ADSP; waits for the ADSP boot | 2026-10-28 |
 | [Bluetooth](features/bluetooth.md) | ⬜ | survey done: WCN3990 over a QUP UART + QCA firmware, then a Broadcom shim for bluetoothd; later | 2026-10-28 |
 | [Not started](features/not-started.md) | ⬜ | Bluetooth, cellular, sensors (audio and camera have their own files now) | 2026-10-23 |

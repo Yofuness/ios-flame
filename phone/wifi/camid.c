@@ -384,11 +384,10 @@ int main(int argc, char **argv)
 	if (!(g & 1))
 		mwr(GCC_CAM_XO, g | 1);
 	printf("camid: gcc camera_xo %#x\n", g);
-	g = mrd(GCC_CAM_HF_AXI);
-	mwr(GCC_CAM_HF_AXI, g | 1);
-	if (mpoll(GCC_CAM_HF_AXI, 1u << 31, 0, 1))
-		die("gcc camera_hf_axi stuck off");
-	printf("camid: gcc camera_hf_axi was %#x, now %#x\n", g, mrd(GCC_CAM_HF_AXI));
+	/* cam2: hf_axi (and xo) stay CLK_OFF until the camera GDSC is up: enable now, check after the GDSC. */
+	uint32_t hf = mrd(GCC_CAM_HF_AXI);
+	mwr(GCC_CAM_HF_AXI, hf | 1);
+	printf("camid: gcc camera_hf_axi was %#x (enabled; checked after the GDSC)\n", hf);
 
 	/* C. CAMCC */
 	g = mrd(GDSC_CLK);
@@ -401,6 +400,9 @@ int main(int argc, char **argv)
 		die("TITAN_TOP GDSC not on");
 	gdsc_on = !dry;
 	printf("camid: titan gdsc was %#x, now %#x\n", g, dry ? 0 : rd32(TITAN_GDSC));
+	if (!dry)
+		(void)wait_bit(GCC_CAM_HF_AXI, 1u << 31, 0, 1);
+	printf("camid: after gdsc: gcc camera_hf_axi %#x, camera_xo %#x\n", mrd(GCC_CAM_HF_AXI), mrd(GCC_CAM_XO));
 	branch_on("cpas_ahb", CPAS_AHB, 0, &st_ahb[0]);
 	branch_on("core_ahb", CORE_AHB, 1, &st_ahb[1]);
 	branch_on("camnoc_axi", CAMNOC_AXI, 0, &st_ahb[2]);
