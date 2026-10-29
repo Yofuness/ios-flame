@@ -25,10 +25,10 @@ session scratchpad with absolute paths.
 Never read or write physical addresses with pmem except the exact addresses a spec lists (a stray `pmem r 0x0` blacked
 the screen on 2026-10-28; 0x0ae44000 hangs the bus).
 
-Screen: if `work/night` exists the user is asleep with the phone in the bedroom: keep it at the night level
-(`tools/sunfish-dim.sh 10`, which `tools/sunfish-test.sh` applies after every boot; after any other boot or a
-SpringBoard/backboardd restart run it yourself), never raise the brightness, no brightness tests. Without
-`work/night`, don't dim after boot; run `tools/sunfish-dim.sh N` only when the spec asks for it.
+Screen: never use `tools/sunfish-dim.sh` (it stacks on the working iOS brightness and the webcam can't see the
+screen); if a dim is left over, `tools/sunfish-dim.sh 100` removes it. If `work/night` exists the user is asleep
+with the phone in the bedroom: keep the iOS brightness slider (Control Center) at its minimum (iOS keeps it across
+reboots; if a boot comes up bright, drag it down again), never raise it, no brightness tests.
 
 Webcam frames: `ffmpeg -hide_banner -loglevel error -y -f v4l2 -i /dev/videoN -frames:v 1 OUT.jpg`. Find N for "Iriun"
 with `v4l2-ctl --list-devices`. Save frames in the session scratchpad and give their absolute paths.
