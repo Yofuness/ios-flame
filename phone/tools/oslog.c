@@ -170,14 +170,18 @@ int main(int argc, char **argv)
 	stream_set_event_handler(s, ^(os_activity_stream_t st, os_activity_stream_event_t ev) {
 		if (ev == OS_ACTIVITY_STREAM_EVENT_FAILED || ev == OS_ACTIVITY_STREAM_EVENT_STOPPED) {
 			fprintf(stderr, "oslog: stream %s\n", ev == OS_ACTIVITY_STREAM_EVENT_FAILED ? "failed" : "stopped");
-			exit(ev == OS_ACTIVITY_STREAM_EVENT_FAILED);
+			fflush(stdout);
+			_exit(ev == OS_ACTIVITY_STREAM_EVENT_FAILED);
 		}
 	});
 	stream_resume(s);
 	if (secs > 0)
 		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)secs * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+			/* B31: exit() ran atexit/teardown while LoggingSupport threads still delivered entries
+			 * (SIGSEGV far 0x10/0x20 at the timeout); flush and leave without teardown */
 			stream_cancel(s);
-			exit(0);
+			fflush(stdout);
+			_exit(0);
 		});
 	dispatch_main();
 }
