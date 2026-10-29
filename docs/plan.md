@@ -12,6 +12,7 @@ U1. [ ] **Flashlight button (priority 5):** on a boot with `sweettorch=1` and /v
 U2. [ ] **Wi-Fi join from Settings (priority 4):** in Settings > Wi-Fi, forget nothing, just tap the home network and type its password once; then Claude checks that com.apple.wifi.known-networks.plist appears and survives a reboot. ~2 min.
 U3. [ ] **Battery % while discharging (B13):** unplug the phone for 30 min while Claude logs the on-screen % against SWEET BATTERY mV/mA; plug back in after. ~30 min (mostly waiting).
 U5. [ ] **Speaker beep (audio M1, dream):** after Claude has run adspboot / aprtest / apr_tone --no-amp successfully, listen while Claude plays a 2 s 1 kHz tone at -20 dB from the bottom speaker (apr_tone), and say whether you heard it. ~2 min.
+U6. [ ] **OK a PC network change (B22, ~1 min):** a NetworkManager rule that keeps the phone's USB Ethernet (MAC 02:00:5e:77:ee:01) permanently unmanaged (`/etc/NetworkManager/conf.d/90-sunfish.conf`: `[keyfile] unmanaged-devices=mac:02:00:5e:77:ee:01`, then `nmcli general reload`), so NetworkManager never touches the link during the first seconds after a boot. Suspected cause of the ~10-15 s packet-loss window. Say yes and Claude writes it (sudo).
 U4. [ ] **Charging on a strong port (B14, optional):** plug the phone into the TB4 port with the 240 W cable for one boot so Claude can read the charger status registers on both sources. ~1 min.
 
 ## Resume here (paused 2026-10-28 ~19:00, the user needed the PC)
