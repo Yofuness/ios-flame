@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 03:10 Speaker self-check: no level register; VMON/IMON loopback is the proof (read-only; research/notes/cs35l41-selfcheck.md)
+- Facts (Linux cs35l41.h): VMON/IMON/VPMON/VBSTMON/TEMPMON are only routing sources (0x18/0x19/0x28/0x29/0x3A), not readable values; PWR_CTRL2 0x2018 bit 12 VMON_EN, bit 13 IMON_EN; IRQ1 status 0x10010 / raw 0x10090 hold fault bits only; ASP_TX1..4_SRC 0x4C20-0x4C2C, SP_ENABLES 0x4800 (TX1 bit 0, TX2 bit 1, RX1 bit 16).
+- Plan (inference): ASP_TX1_SRC=VMON, ASP_TX2_SRC=IMON, enable VMON/IMON + TX1/TX2, record SEC_MI2S_TX (AFE 0x1003) on the ADSP during the tone; IMON rising = current through the coil. Needs: the sunfish MI2S data-in lane and an AFE TX record client in adspboot.
+
 ### 2026-10-29 19:30 OTP trims + on-window diagnostics: amp clean, still unheard (sp6, sp7; adspboot 1018f0f)
 - 1018f0f: CS35L41 OTP unpack (OTPID 0x8 -> Linux otp_map_1, 98 trim fields written, test-key unlocked), PWR_CTRL3 = 0x201C, diag reads at 0.5 s / 2.5 s, `--amp-pcm-stop-test`.
 - sp6: `--amp-check` with OTP: 98 trims, read-back ok. The play run right after it on the same boot exited early at `adsp: vote lcx.lvl level [5]=384 -> 5` (the AOSS vote failed; quirk: don't run --amp-check before a play run on one boot).
