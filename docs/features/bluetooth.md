@@ -23,6 +23,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:20 Firmware loads; BD_ADDR read garbled (bt2, kernel98)
+- `btup fw /var/local/fw/bt`: patch 210348 B in 866 segments, 20.1 s; NVM 4722 B, 20 segments, 0.6 s ("hci tag 82 01 11 -> ibs off, baud 115200"); HCI_Reset after -> `04 0e 04 01 03 0c 00` OK.
+- Then a burst of mis-framed data ("dropped" bytes `c6 0b 00 20 14 00 ff ...`, a 98-byte "event" `04 05 5f 0e ...`), and Read_BD_ADDR read `04 fd 01 00` -> failed, rc 1. Version afterwards unchanged (patch 0x6699; the ROM version reply doesn't reflect the RAM patch). No reset.
+- Guess: the polled RX loses bytes or mis-counts the last FIFO word, so H4 framing slips. Next: robust H4 reader + matching-opcode waits, then `btup fw DIR --scan N`.
+
 ### 2026-10-30 06:00 THE CHIP TALKS: HCI reset + version over SE3 (bt1, kernel98; btup 1aa1fea)
 - Plan: research/notes/bt-plan.md (hakios-sm7150 bt_wcn3990.c as reference, no licence -> no code copied). Tool phone/wifi/btup.c, install tools/sunfish-install-bt.sh (btup + crbtfw21.tlv/crnv21.bin into /var/local/fw/bt).
 - `btup status` (read-only): GCC vote 0x41bc1bc0 (wrapper-0 m/s ahb, core, core2x on; SE3 bit 13 off), SE3 cbcr 0x80004220 (off), RCG cfg 0x100000; gpio38-41 func 0 (not qup03). So ABL leaves SE3 unclocked.
