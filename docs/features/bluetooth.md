@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** ✅🟡 Bluetooth works in iOS Settings: on, discoverable, nearby devices listed (bt7, kernel105+, btbridge=1 default + btbridge). Pairing, audio, speed (115200 baud, polled UART) untested/open. **Updated:** 2026-10-30. **Updated:** 2026-10-30.
+**State:** ✅🟡 Bluetooth works in iOS Settings: on, discoverable, nearby devices listed (bt7, kernel105+, btbridge=1 default + btbridge). Pairing works (Xbox controller, U9); audio devices crash bluetoothd (AirPods; redfin 1016 next); 115200-baud polled UART drops bytes. **Updated:** 2026-10-30. **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,12 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 13:45 PAIRING WORKS: Xbox controller connected (U9 by the user; kernel107, btbridge)
+- First try: the Settings switch only spun. btbridge log: bluetoothd sent scan disable (0x200c->0x2042 lext), then HCI_Reset + Read_Local_Version, and the chip never answered after the bridge had dropped 71 bytes with 4 RX FIFO overruns (polled UART at 115200). btbridge's SIGTERM was ignored (needed kill -9). Restarting btbridge (power cycle + firmware, 20 s) fixed it.
+- Second try: an Xbox controller paired and showed connected (stats: acl up 183 / down 316 packets, cmd 598, evt 1693; 42 bytes dropped, 1 overrun).
+- AirPods Pro 2: bluetoothd crashed (kernel "CRASH bluetoothd reason ns 2 code 0xb") during pairing, launchd restarted it 6 s later and it reconnected to the kernel control. Matches redfin's note for audio devices (their 1016 Skywalk user-pipe privilege for A2DP).
+- Bugs to fix: (1) the chip goes silent after RX overruns (no recovery: btbridge should power-cycle/re-init on a host HCI_Reset that gets no answer, or on overrun); (2) btbridge ignores SIGTERM; (3) port redfin 1016; (4) 3 Mbaud or interrupt RX to stop the drops.
 
 ### 2026-10-30 10:40 DEVICES LISTED in Settings > Bluetooth (bt7, kernel105 btbridge=1; btbridge e739ed8)
 - Legacy -> extended LE translation (from iOSPlus10 0338, MIT; phone/wifi/bt_lext.c, host test tools/bt-shim-test 41/41): bt6 showed bluetoothd had sent 0x204a (an extended command) before 0x200b, so the chip rejected legacy scans. Now 0x200b/0x200c -> 0x2041/0x2042, answers delivered as legacy; extended reports -> legacy reports.
