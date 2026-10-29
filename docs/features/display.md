@@ -20,6 +20,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-28 22:30 SpringBoard scene-settings probe found no scenes
+- Added to the SpringBoard probe: FBSceneManager sharedInstance -> allScenes/scenes -> each app scene's settings frame/orientation. On iOS 16 neither selector answers (no lines, no exception), so Safari's scene frame is still unknown. Next: find FBSceneManager's scene accessor (class dump in research/re/sb/objc.txt) or go through SBApplication -> sceneHandle -> scene.
+
 ### 2026-10-28 22:20 rotation: where to look next
 - RE opinion (no disassembly confirmed): on iOS 16 iPhones the app rotates its own picture (UIWindow _updateToInterfaceOrientation / _UIWindowRotationAnimationController: landscape bounds + a layer transform); the host and the display stay portrait. Safari logged `_endAnimatedResize` but no `_beginAnimatedResize`, so the window rotation step probably never runs, or the scene settings carry a portrait frame with orientation 3 (~60 / 25 %).
 - An in-app probe (keyWindow bounds/transform, scene orientation/coordinate space) was added to SweetMetal2 for MobileSafari, but apps don't load SweetMetal2 (only SpringBoard, backboardd, com.apple.WebKit.GPU; MobileSafari only once, lazily), so it didn't run. Next: a small dylib injected into one app (DYLD_INSERT_LIBRARIES through its launchd/RunningBoard environment, or a tweak-loader style hook) to log those values, or read the scene settings frame from SpringBoard (FBSScene settings of Safari's scene).

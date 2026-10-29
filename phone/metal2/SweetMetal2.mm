@@ -529,6 +529,30 @@ static void sm2_orient_probe(long n)
 		int locked = [lm respondsToSelector:il] ? ((BOOL (*)(id, SEL))objc_msgSend)(lm, il) : -1;
 		sm2_log("orient: SB probe after D %ld: notify orientation %llu raw %llu lock %llu, UIDevice %ld, app interface %ld, locked %d",
 		    n, st[0], st[1], st[2], dor, aio, locked);
+		/* the foreground app scenes' settings as FrontBoard holds them (frame + orientation) */
+		@try {
+			Class fm = objc_getClass("FBSceneManager");
+			id mgr = [fm respondsToSelector:@selector(sharedInstance)] ? [fm performSelector:@selector(sharedInstance)] : nil;
+			id scenes = nil;
+			for (NSString *k in @[ @"allScenes", @"scenes" ]) {
+				if ([mgr respondsToSelector:NSSelectorFromString(k)]) {
+					scenes = [mgr valueForKey:k];
+					break;
+				}
+			}
+			for (id sc in scenes) {
+				NSString *ident = [[sc valueForKey:@"identifier"] description];
+				if ([ident rangeOfString:@"com.apple."].location == NSNotFound || [ident rangeOfString:@"springboard"].location != NSNotFound)
+					continue;
+				id set = [sc valueForKey:@"settings"];
+				sm2_log("orient: SB scene %s: frame %s orientation %s fg %s", [ident UTF8String],
+				    [[[set valueForKey:@"frame"] description] UTF8String],
+				    [[[set valueForKey:@"interfaceOrientation"] description] UTF8String],
+				    [[[set valueForKey:@"foreground"] description] UTF8String]);
+			}
+		} @catch (id ex) {
+			sm2_log("orient: SB scene probe exception %s", [[ex description] UTF8String]);
+		}
 	});
 }
 
