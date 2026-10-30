@@ -48,7 +48,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine; Files "On My iPhone" opens; app extensions work: widgets, share sheet, emoji keyboard (2026-10-30) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
-| [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); Camera.app works on the rear camera: live colour preview and saved photos (2026-10-30); front preview still black, no autofocus; both cameras stream from tools (rear 60 fps, front 30 fps) |
+| [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); Camera.app works: live colour preview on both cameras and saved photos (2026-10-30); exposure not right yet, switching cameras takes ~16 s, no autofocus; both cameras stream from tools (rear 60 fps, front 30 fps) |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); AirPods play music (2026-10-30) |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ✅ | Compass works (heading + dial, 2026-10-30, kernel126); auto-rotate works (accelerometer -> rotation); proximity turns the screen off when near (kernel122); all 6 sensors answer on the audio DSP; auto-brightness parked |

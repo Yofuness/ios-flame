@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP WORKS ON THE REAR CAMERA: live colour preview and saved HEIC photos (2026-10-30 cam35, cam36); open: front preview black in Camera.app, autofocus, exposure. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); open: auto-exposure (rear dark, front blown out), 16 s camera switch, autofocus. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 19:30 cam37: THE FRONT CAMERA WORKS IN CAMERA.APP; it takes ~16 s to switch, exposure is off
+- kernel127. Rear first (START 0 after 3936 ms), tap on the switch button: "the Back Camera's frames stop for the Front Camera's", "START -> 0 after 16068 ms", "frames of 1640x924 (the Front Camera, 30.0 fps mode)", imx355 tuning loaded, "PrimaryScaler: the first picture given". camd.log: rear "session end: ok, 97 frames published, 1 dropped"; front "+4.231 s first frame published (exposure 2604 lines)". Preview (work/shots/cam37-front.png): ceiling and the iPhone 11 at the bottom, bright, blown out. Earlier "black" = the tests and the user gave up before 16 s. Back to rear works. DEVLOST 0.
+- AE: front "frame 4: exposure 33.2 ms, gain 1.0x, green 44 above black" with camd gain code 512 -> 636 (rising on a white picture); rear "exposure 16.5 ms, gain 1.0x, green 4 above black", camd stuck at 1568 lines, gain code 448, preview almost black. Fix in progress (cam38).
 
 ### 2026-10-30 17:30 cam36: PHOTOS WORK (rear); front through camd works, Camera.app front preview black (kernel127, port 4009f97)
 - camd no longer latches a false FAULT: `camclient -s 1 -n 2` rc 0 then `camclient -s 2 -n 2 -o` rc 0 (front 1640x924 stride 2064, START after 8.39 s, 2 frames, 0 torn); camd.log "session end: ok" for both, "past the ring: 0 nonzero". Front raw is dim (gray 15..17).
