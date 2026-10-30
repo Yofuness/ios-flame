@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs. Finished items move to [completed.md](completed.md).
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B44 Garbled image areas in Maps, TV, Mail, Voice Memos, Compass, Tips (sv1 shots): probably B29's texture-shadow problem in bigger images.
+- B44 Garbled image areas in Maps, TV, Mail, Voice Memos, Compass, Tips (sv1 shots): probably B29's texture-shadow problem in bigger images. 2026-10-30: 0109 shadow repack tried, no change (apps.md rp1).
 - B45 Measure (ARKit) and Watch (Bridge) don't stay open; Weather has no data (needs Apple's weather service).
 - B42 Auto-brightness (parked 2026-10-30, sensors.md): lux reaches iOS, AAB ramps, but legacy mode writes only the slider value and new-arch mode needs a CADisplay brightness control we don't have. Option: our own lux -> brightness loop (night flag respected).
 - B38 Boot cmdline limit: CAMERA=1 plus 3 extra boot args = 606 bytes > 592; sunfish-boot.sh refuses (sp16 dropped sweetrtcoff by hand). Shorten the defaults or raise the limit (D6 in plan.md). 2026-10-30: flamereboot=0 (kernel default) dropped and the double space gone (-15 B: 575 with sweetse9=2 sweetcampmic=2), sunfish-boot.sh now fails fast with the length. Still 1 B short for a third arg like sweetampreset=1 (592); real fix = a kernel-side second arg string (e.g. from the ADT /chosen), later.

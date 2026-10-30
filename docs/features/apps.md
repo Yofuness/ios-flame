@@ -48,6 +48,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 13:00 rp1: bridge 0109 (M2V_SHADOW_REPACK=1, acfbc93) does not fix the garbled images
+- A/B with flame-shot (work/shots/rp1-A-*/rp1-B-*): Voice Memos header stripes, Compass needle, Mail banner, Control Center tiles identical; Tips hero banner as torn (B a bit worse). The repack fired 8 times, all in backboardd (180x180 4B row 720->768, 142x62 / 156x62 1B row 160->192), none in the apps. So unaligned shadow copies are not (or not the only) cause; the garbled images are app-side. Knob left off (mtl2-env empty); 0109 stays in the build, default off. B44 stays open (next idea: which format/path the apps' images take: compressed/ASTC, CGImage decode into IOSurface, 16-bit formats).
+
 ### 2026-10-30 12:00 sv1: app survey with screenshots (kernel121, flame-shot; work/shots/sv1-*.png)
 - OK (real UI or first-run sheet): Safari (UI; last page can't reach 192.168.7.1), Settings, Reminders, Calendar, Camera (UI; preview black at 5 s: camera start takes 11 s, see camera.md), Maps, Clock, Calculator, Music, Podcasts, TV, News, App Store, Health, Wallet, Mail, FaceTime (sign-in), Fitness, Voice Memos, Compass, Translate, Find My, Shortcuts, Tips. EMPTY-OK: Notes, Photos, Contacts, Files (On My iPhone "Folder is Empty"), Messages.
 - Broken: Measure (back to home within 5 s, no crash report; ARKit app), Watch/Bridge (home + "Watch would like to send notifications"), Magnifier (preview black: same 11 s camera start), Weather ("Cupertino --", no data).
