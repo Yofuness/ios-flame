@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:45 cam15 (kernel109): FRAME LANDS in RAM (SID 0x8c0 bypass), then RESET ~10 s later
+- `CAPMODE="--bypass --sid 0x8c0" sunfish-cam-rx.sh --capture`: SMR15 0x800008c0 -> S2CR 0xf -> CB15 (SCTLR 0xe0); no read-back mismatch. Stream ~1040 ms, buf done ~200 ms, CSID 3810240/3810240, IFE VIOLATION 0, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0, CB15 FSR 0x400 (no fault), sGFSR 0.
+- **Frame region: 1889286 of 3810240 bytes nonzero** (data landed); **guard: 5896 of 7724096 nonzero** (the IFE wrote past 3810240; where is still unknown). SMMU restore lines OK, camnoc back to XO.
+- **RESET**: the live log stops at 790.8 s, ~10 s after the capture (780 s), no panic line; phone in fastboot at 22:09-22:12 (4438 mV). Rescued as cam15r (22:13). The frame file written on the phone was lost (not flushed; /var/local/cam/frame.raw is still cam14's from 22:05). Same pattern as cam12 (log stops ~7 s after the capture). cam14 (trap) did not reset.
+- Hypothesis (unverified): unmatched-stream (global) SMMU faults from the IFE trigger the reset (hypervisor); cam12 had them from the start, cam15 probably after its SMR was removed while the IFE still wrote. Next: cleanup keeps the SID on a trap bank (late writes -> context faults, reported), IFE global reset before the SMMU teardown, fsync the frame; trap SMRs for the other IFE SIDs.
+- Live log: the per-boot split stopped at the 20:57 boot (boots/current.log -> 20261029-205717.log); ../logs/usb-live.log has all boots.
+
 ### 2026-10-31 00:30 cam14 (kernel109, same boot): trap capture finds the IFE-lite write SID = 0x8c0
 - `sunfish-cam-rx.sh --install --capture` (CAPMODE --trap): SMR15 0x900/0x460, SMR16 0x880/0x460, SMR17 0x820/0x440 -> CB14 (SCTLR 0x21 M|CFRE, TCR EPD0|EPD1); every write read back as written.
 - Stream ~1060 ms, buf done at ~210 ms, CSID 3810240/3810240. **CB14 FSR 0x402 (TF), FAR 0x9cb00000 (= our IMAGE_ADDR), FSYNR0 0x00400010 (write), CBFRSYNRA 0x8c0 -> SID 0x8c0** (in the DT list, 0x8c0/0x460). sGFSR 0. Buffer/guard nonzero 0/0.
