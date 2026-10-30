@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:20 jack7 (kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2; SunfishAudio.driver 95bacae + jackset, fake plug): iOS sees the jack property, no headphone route yet
+- `jackset 1` / `3` / `0` 15 s apart: mediaserverd logged "sunfish: audio: jack plugged, microphone no" (06:14:47.705), "... microphone yes" (06:15:02.727), "jack empty" (06:15:17.743).
+- Only at `jackset 1`: PickableRoutesDidChange x8 (06:14:47.520-.523), then "HALS_AHPPlugIn::ObjectGetPropertyData: got an error from the plug-in routine, Error: 1852797556" ('unkn') x3 (06:14:47.574-.577): iOS asks the plug-in for a property we don't answer. The active route stayed "Speaker" (IsHeadphones false). No 'jdhp'/'jdhs'/"wired-headphones" lines.
+- mediaserverd pid 29 the whole run and 3 min after; no crash reports (only OTAUpdate .ips); no reset. /var/local/sunfish-jack-enable left in place.
+- Next: log which property gets 'unkn' (selector/scope/element) and give the "Codec" device an output stream (Port_HeadphonesWired is an output port).
+
 ### 2026-10-30 06:50 S4 corrected: iOS learns about wired headphones from kAudioDevicePropertyJackIsConnected on the "Codec" HAL device (VirtualAudio RE)
 - VirtualAudio.plugin (copied read-only from the IPSW; research/re/va/va.s): HALJackStateHandler (listener 0x212c30) watches 'jack' on a real HAL device (the code sits in Device_Codec_Aspen.cpp: very likely UID "Codec") and reads {'jack','outp',0} and {'jack','inpt',0} (0x21385c/0x2139ac): output only -> descriptor 'jdhp' (headphones), output + input -> 'jdhs' (headset) (0x213fe8-0x21402c); optional {'head','glob'} skipped when absent; creates a Port_HeadphonesWired_Aspen ("Wired Headphones") port (0x23fa60). MediaExperience _vaemHeadphoneJackIsConnected checks the VAD port type. The earlier 'hdpn'/'ssrc' draft was wrong.
 - Design: the "Codec" device answers {'jack','outp',0} (0/1) and {'jack','inpt',0} (mic detected), PropertiesChanged on change; behind a flag file. Open: Codec is input-only today (the headphone port is an output: may need an output stream); what sets the handler's flags at +0x60/+0x61.
