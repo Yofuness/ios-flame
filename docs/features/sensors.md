@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 13:45 cs1/cs2: Compass waits for a "DeviceMotion" HID service we don't have (page 0xFF0C usage 4)
+- Compass (pid 334, kernel122) stays alive in the background but shows no heading; its CoreLocation log: "[CLIoHidInterface] Service for device with usage pair {65292, 4} is not ready" + "Could not set all properties after too many retries. Giving up." x22. 65292/4 = kHIDPage_AppleVendorMotion / DeviceMotion (AppleHIDUsageTables.h:105): the fused motion output a real iPhone's motion coprocessor provides. Accelerometer {0xFF00,3} and gyro {0xFF00,9} were accepted and stream; magnetometer samples flow too (kernel "compass #1000: x -43931 y -42412 z -115256 nT"), iOS asked compass at 25 ms.
+- Backlog B46: a DeviceMotion service (host-side fusion of accel+gyro+mag -> quaternion events in Apple's format): RE + new service, days. Not now.
+
 ### 2026-10-30 13:30 px3: PROXIMITY WORKS in iOS (kernel122, sweetmotion=0x3f, now the default)
 - Two fixes: xnu 0241 (prox service Placement = 1: backboardd's discrete prox wrapper, no NSNull crash loop) and detection mode 3 or 6 (backboardd treats every other mode as inactive: research/notes/proximity.md, backboardd 0x10002d820).
 - `proxon 3 60` + `m fake prox 1` / `0`: proxon "active yes, near" during the fake, "active yes, far" around it; kernel "prox #1 (fake): near (mask 0x41)" 106.566 -> "SWEET FB: display off" 107.107 (0.5 s); "far" 118.006 -> "display on" 118.020. Mode 6 the same (off 147.380, on 152.951). backboardd exec count 1 throughout, no reset.

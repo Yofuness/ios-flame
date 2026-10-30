@@ -5,6 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs. Finished items move to [completed.md](completed.md).
 
 ## Broken (cheapest first; [phone] = needs the phone)
+- B46 Compass shows no heading: CoreLocation waits for a DeviceMotion HID service (page 0xFF0C usage 4, fused motion from Apple's motion coprocessor); accel/gyro/mag already stream (sensors.md cs1). Needs host-side fusion + Apple's event format: days.
 - B44 Garbled image areas in Maps, TV, Mail, Voice Memos, Compass, Tips (sv1 shots): probably B29's texture-shadow problem in bigger images. 2026-10-30: 0109 shadow repack tried, no change (apps.md rp1).
 - B45 Measure (ARKit) and Watch (Bridge) don't stay open; Weather has no data (needs Apple's weather service).
 - B42 Auto-brightness (parked 2026-10-30, sensors.md): lux reaches iOS, AAB ramps, but legacy mode writes only the slider value and new-arch mode needs a CADisplay brightness control we don't have. Option: our own lux -> brightness loop (night flag respected).
