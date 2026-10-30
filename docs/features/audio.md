@@ -34,6 +34,14 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 05:55 jack5 (adspboot 2c36d58 --swr-init a-d): THE HEADPHONE CODEC ANSWERS over SoundWire (S2 done), no reset
+- Each stage a fresh kernel112 CAMERA=1 boot, sensors.off, 4437-4438 mV; all writes read back as written; every stage torn down (pins/gpio24/macro restored, clocks 0x30c-0x30f off).
+- a: tx-macro MCLK +0x00 0->1, FS_CNT +0x04 0->1, SWR control +0x08 0->2->3->1; SoundWire pins gpio18/19/20 0x401 -> 0xca/0xce/0xca; master +0x14 = 0, COMP_PARAMS +0x100 = 0x036840c1, version 0x01050000.
+- b: + codec reset release: gpio24 cfg 0x401 -> 0x7c8, value 0 -> 0x2.
+- c: + master init (Linux order; +0x1044 reads 0 after writing 0x2; +0x1048 already 0x3fff00): **frame generator on** (+0x14 0 -> 0x1 after one poll); slave status +0x1090 = 0x4 (device 1 attached); INT_STATUS +0x200 = 0x6 (attached + status change, no cmd error, no auto-enum failure).
+- d: + FIFO reads of slave 1 regs 0x50..0x55 = **23 02 17 01 0a 00** -> manufacturer 0x0217, part 0x010a = WCD937x (as wcd937x-sdw.c); the enumerator regs +0x530/+0x534 stay 0 (auto-enum writes nothing there on v1.5.0, or a different offset). The codec's supplies are on as the phone runs (we never touched them).
+- Next S3: WCD937x MBHC mechanical detect over SoundWire (codec register writes through the command FIFO), poll the plug status with headphones in/out: needs the user.
+
 ### 2026-10-30 05:30 jack4 (adspboot 8039500): BOTH SOUNDWIRE MASTERS ANSWER (S0 done), no reset
 - Per-group clocks: hw vote ok; clock mask 0x1e: 0x30c tx_core, 0x30d tx_npl (19.2 MHz), 0x30e rx_core, 0x30f rx_npl (22.5792 MHz, DT) on/off ok; 0x30b va_core refused "APR status 0x2" (clock_set v1 attr 1 root 0; va-macro not needed for the headphone path).
 - Reads: tx-macro 0x62ec0000 = 0; **TX SoundWire master 0x62ed0000 = 0x01050000** (SWR v1.5.0), +0x4..+0x3c = 0; **RX SoundWire master 0x62ef0000 = 0x01050000**. Batteries 4438-4440 mV; restored (sensors job pid 37, camd idle, btbridge up).
