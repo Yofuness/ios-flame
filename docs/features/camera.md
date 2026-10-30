@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:25 cam3 (kernel108, sweetse9=2; no sweetcampmic): camera PMIC off, sensor not reached
+- Battery 4455 mV; boot 5 s, SSH 16 s; webcam: Apple logo (dim, night mode). No reset.
+- `pll2 on`: locked again (MODE 0xc0000006, 0xc0000007 after OUTCTRL), same register values as cam2.
+- `camid --keep`: "slg rd 0x1105 err 6", "ABORT: slg read" (SE9 fw 0x303 status 0, so the I2C bus is up). Cause: the boot lacked `sweetcampmic=2` (xnu 0218, the PM6150L GPIOs that enable the SLG51000); cm1/cam2 on 2026-10-28 had both args.
+- `mclk 0 24`: RCG updated (CFG 0x2501, M 1, N 0xec, D 0xeb), branch stuck off (CBCR 0x80000001) as in cam2: consistent with the TITAN GDSC still off (camid aborted before it).
+- `camclk off`: all back off. Next (cam4): same with `sweetse9=2 sweetcampmic=2`.
+
 ### 2026-10-30 21:15 cam2 (kernel108, no reboot; no sweetse9): PLL2 locks; MCLK0 branch stays off
 - camclk (commit c8633dc) installed. `pll2 on`: L=0x64, USER_CTL 0x30b, CONFIG_CTL 0x20000954, CONFIG_CTL_U 0x400003d6, then BYPASSNL/RESET_N/OUTCTRL; all read back; "pll2 locked, MODE 0xc0000006" (VCO 1920 MHz, aux 480 MHz). Lock Y.
 - Correction to cam1: the Agera PLL2 register offsets differ from Fabia; the as-read status0 was USER_CTL 0x1, USER_CTL_U 0x20000954, CONFIG_CTL 0x3d6, CONFIG_CTL_U 0x04000400 (reset values).
