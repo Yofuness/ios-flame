@@ -190,7 +190,8 @@ static int allowed(uint32_t pa)
 		if (pa == ok[i])
 			return 1;
 	/* stage c2; cam-f1: only the selected path's timer RCG, branches and CSIPHY (CSIPHY0 or CSIPHY2) */
-	if (pa == PHYTIMER_RCG || pa == PHYTIMER_RCG + 4 || pa == CSIPHY_CBCR || pa == PHYTIMER_CBCR)
+	if (pa == PHYTIMER_RCG || pa == PHYTIMER_RCG + 4 || pa == CSIPHY_CBCR || pa == PHYTIMER_CBCR ||
+	    (cam->phy != 0 && pa == CSIPHY0_CBCR))	/* cam31: the DT lists csiphy0_clk for CSIPHY1-3 too */
 		return 1;
 	if (pa >= CSIPHY && pa < CSIPHY_END && !(pa & 3))	/* stage c2 */
 		return 1;
@@ -618,6 +619,15 @@ int phy_on(int settle_arg)
 	const struct { const char *n; uint32_t cbcr; } pb[] = {
 		{ "csi0phytimer", PHYTIMER_CBCR }, { "csiphy0", CSIPHY_CBCR },
 	};
+	/* cam31: live.dts:12730-12749 lists csiphy0_clk in CSIPHY2's (and 1's, 3's) clocks: downstream turns it on
+	 * for every PHY. Our front path didn't, and CSID-lite got 0 packets while CSIPHY2 saw the lanes. */
+	if (cam->phy != 0) {
+		wr(CSIPHY0_CBCR, rd32(CSIPHY0_CBCR) | 1, "csiphy0 (shared, for the front PHY)");
+		if (poll(CSIPHY0_CBCR, CBCR_CLK_OFF, 0, 200, 1000)) {
+			printf("camrx: csiphy0 (shared) stuck off (CBCR %#x)\n", rd32(CSIPHY0_CBCR));
+			return 1;
+		}
+	}
 	for (unsigned i = 0; i < N(pb); i++) {
 		wr(pb[i].cbcr, rd32(pb[i].cbcr) | 1, pb[i].n);
 		if (poll(pb[i].cbcr, CBCR_CLK_OFF, 0, 200, 1000)) {
@@ -704,6 +714,8 @@ int phy_off(void)
 		if (poll(cb[i], CBCR_CLK_OFF, CBCR_CLK_OFF, 200, 1000))
 			printf("camrx: CBCR %#x CLK_OFF not set (%#x)\n", cb[i], rd32(cb[i]));
 	}
+	if (cam->phy != 0 && rd32(CSIPHY0_CBCR) & 1)	/* cam31: the shared csiphy0 branch */
+		wr(CSIPHY0_CBCR, rd32(CSIPHY0_CBCR) & ~1u, "csiphy0 (shared) off");
 	return 0;
 }
 
