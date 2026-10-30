@@ -37,8 +37,11 @@
  * command the chip leaves unanswered for 2 s (HCI_Reset 0x0c03 at once, others after 3 in a row) -> bring-up again
  * (off, power, version, firmware); a pending HCI_Reset is then answered locally with status 0 (U9: chip silent
  * after RX overruns, bluetoothd retried forever).
+ * o12: while the screen is blanked, no ACL link is up and no HCI traffic for 500 ms, the pump sleeps DARK_MS between
+ * passes instead of polling every 1-2 ms (automatic RFR holds the chip's data meanwhile). Env BT_DARK=0: off.
  */
 #include <errno.h>
+#include <notify.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -244,12 +247,22 @@ static int chip_evt(uint8_t *p, unsigned n)
 /* H4 framing of the host stream: 01 cmd, 02 ACL, 03 SCO; anything else is dropped a byte at a time */
 static uint8_t hb[4096];
 static unsigned hn, host_dropped;
+/*
+ * o12: screen blanked (backboardd's notify state "com.apple.springboard.hasBlankedScreen", as sns_run.c) + no link
+ * (connection / LE connection complete minus disconnection complete) + no HCI traffic for DARK_QUIET s -> sleep
+ * DARK_MS per pass. 3 Mbaud fills the 128-byte RX FIFO in ~0.4 ms, so this relies on auto RFR (not with -F).
+ */
+#define DARK_MS		10
+#define DARK_QUIET	0.5
+static int dark_token = -1, dark, dark_off, dark_idle, links;
+static double last_traffic;
 
 static void host_input(void)
 {
 	ssize_t r = read(master, hb + hn, sizeof(hb) - hn);
 	if (r <= 0)
 		return;
+	last_traffic = now_s();		/* o12 */
 	hn += (unsigned)r;
 	for (;;) {
 		unsigned need = 0;
@@ -276,6 +289,8 @@ static void host_input(void)
 			       need - (hb[0] == 0x02 ? 5 : 4));
 		/* bt9 (AirPods, U9b): bluetoothd's HCI_Reset came while an older command was still watched, so the reset
 		 * was never checked and no recovery ran: a host HCI_Reset always (re)arms the watchdog */
+		if (hb[0] == 0x01 && (hb[1] | hb[2] << 8) == 0x0c03)
+			links = 0;		/* o12: a reset drops every link */
 		if (!done && hb[0] == 0x01 && (!wd_op || (hb[1] | hb[2] << 8) == 0x0c03)) {
 			wd_op = hb[1] | hb[2] << 8;
 			wd_since = now_s();
@@ -300,16 +315,53 @@ static void chip_input(void)
 			n_dbg++;
 			return;
 		}
+		last_traffic = now_s();		/* o12 (not for the debug log) */
 		if ((n_acl_down++ < 8 || n_acl_down % 256 == 0) && verbose)
 			printf("<- acl handle %#x len %u\n", h, n - 5);
 		up(p, n);
 	} else {
+		last_traffic = now_s();		/* o12: link up/down from status-0 events */
+		if (n >= 4 && p[1] == 0x03 && p[3] == 0)
+			links++;
+		else if (n >= 5 && p[1] == 0x3e && (p[3] == 0x01 || p[3] == 0x0a) && p[4] == 0)
+			links++;
+		else if (n >= 4 && p[1] == 0x05 && p[3] == 0 && links > 0)
+			links--;
 		if (n >= 3 && (p[1] == 0x0e || p[1] == 0x0f)) {
 			wd_op = 0;		/* bt8: the chip answers */
 			wd_misses = 0;
 		}
 		if (chip_evt(p, n))
 			up(p, n);
+	}
+}
+
+/* o12: poll the blanked state (a shared-memory check), then decide the pump period; logs each change */
+static void dark_check(void)
+{
+	int changed = 0;
+	uint64_t st = 0;
+	if (dark_off)
+		return;
+	if (dark_token < 0) {
+		const char *e = getenv("BT_DARK");
+		if ((e && !strcmp(e, "0")) || !rx_auto_rfr ||
+		    notify_register_check("com.apple.springboard.hasBlankedScreen", &dark_token) != NOTIFY_STATUS_OK) {
+			dark_off = 1;
+			return;
+		}
+		changed = 1;
+	} else if (notify_check(dark_token, &changed) != NOTIFY_STATUS_OK)
+		changed = 0;
+	if (changed && notify_get_state(dark_token, &st) == NOTIFY_STATUS_OK)
+		dark = st != 0;
+	int idle = dark && !links && now_s() - last_traffic > DARK_QUIET;
+	if (idle != dark_idle) {
+		dark_idle = idle;
+		if (idle)
+			printf("btbridge: idle (screen blanked, no link): %d ms\n", DARK_MS);
+		else
+			printf("btbridge: active\n");
 	}
 }
 
@@ -537,6 +589,9 @@ int main(int argc, char **argv)
 			host_input();
 		chip_input();
 		watchdog_check();
+		dark_check();
+		if (dark_idle)
+			usleep(DARK_MS * 1000);	/* o12: the next pass reads whatever RX/TX came meanwhile */
 		if (now_s() > stats) {
 			printf("stats: cmd %u evt %u local %u acl up %u down %u debug-log %u; host dropped %u, uart dropped %u, "
 			       "overruns %u, rx restarts %u, recoveries %u\n", n_cmd, n_evt, n_local, n_acl_up, n_acl_down, n_dbg,
