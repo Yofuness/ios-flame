@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 07:30 cam29 + cam30 (kernel111 CAMERA=1): front CSIPHY2 sees lane activity, CSID-lite still 0 packets with every PHY select
+- cam29 (manual front sequence): sensor frame_count 30/60/90 at 1 s steps; `rx report` RX_PKTS 0, ECC 0, CRC 0, bytes 0/0, top/RX/RDI0 IRQ 0. CSIPHY2 status 0x8b0..0x8d8 after the stream: settle 24 `00 01 00 20 00 00 04 00 80 40 00` (= the rear's pattern after a working stream, cam8), settle 14 and 40 `04 01 80 20 00 10 04 00 82 40 04`. So the PHY sees the lanes; nothing reaches CSID-lite.
+- cam30 (camrx afd3bfe, CAMRX_PHY_SEL): RX_CFG0 PHY_NUM_SEL 3, 1, 0, 2 -> RX_PKTS 0 every time (sensor streaming each time). Cleanup OK (GDSC off), camd restored and idle. No reset.
+- Open: what else routes CSIPHY2 to a CSID (a combo/C-PHY mode bit in CSIPHY2, its own lane-enable/positions, a different CSIPHY table for this PHY, or CSID-lite only fed from PHY0/1). Read-only investigation queued; front camera parked behind U12 / the rear Camera.app.
+
 ### 2026-10-31 07:05 cam28 (kernel111 CAMERA=1): front IMX355 streams, but CSIPHY2 -> CSID-lite gets 0 bytes; rear regression OK (a22e43f)
 - Front path: module file com.qti.sensormodule.primax_imx355.bin from ../restore/factory/vendor.img (debugfs; research/notes/camx/, not in git); modes (4-lane RAW10): 0/3 3280x2464@30 688 Mb/s/lane, 1 3280x1848@30 720, 2 1640x924@30 (2x2) 360 -> mode 2 (1894200 B, stride 2050). CSIPHY2 0xace4000 (DT cam-sensor@1: cci-master 1, csiphy-sd-index 2), csi2phytimer RCG 0xad0604c 300 MHz, branches 0xad06064/0xad06068 on; settle 24; RX_CFG0 0x00232103 (4 lanes, map 0x3210, PHY_NUM_SEL 2 as Linux csid-gen2 does). laneAssign in both module files = 0x3210, isComboMode 0.
 - camid --front: ID 35 03 55 55, 103 writes, readback 0x0136 0x18 (24 MHz), 0x0112 0x0a, 0x0114 0x03, stream on, **frame_count 30/60/90/.../181 at 1 s steps (sensor streams 30 fps)**; but CSID bytes 0/0, 0 SOF, CSIPHY2 status after phy on all 0. No faults, no reset. Rear regression (`--stream 5`): 60.00 fps, 0 faults.
