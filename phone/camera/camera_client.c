@@ -188,7 +188,8 @@ camera_client_open(unsigned sensor)
 
 	/* cam-f2: SENSOR before START, so camd brings up that camera at once (no rear bring-up first); its reply is
 	 * skipped by the loop below (not START's) */
-	struct redwood_camera_command sel = { REDWOOD_CAMERA_SENSOR, sensor, REDWOOD_CAMERA_MODE_ANY, REDWOOD_CAMERA_MODE_ANY, 0, 0 };
+	struct redwood_camera_command sel = { REDWOOD_CAMERA_SENSOR, 0, sensor, REDWOOD_CAMERA_MODE_ANY, REDWOOD_CAMERA_MODE_ANY, 0 };
+	/* (2026-10-30: the sensor once sat in `bytes`: camd skipped that many bytes of START and stalled in its read) */
 
 	if (sensor != 0 && write(c.sock, &sel, sizeof(sel)) != (ssize_t)sizeof(sel)) {
 		logf_("open: SENSOR %u: %s", sensor, strerror(errno));
@@ -199,11 +200,19 @@ camera_client_open(unsigned sensor)
 			if (poll(&p, 1, 500) <= 0) {
 				continue;
 			}
-			if (read(c.sock, &r, sizeof(r)) != (ssize_t)sizeof(r)) {
+			struct sunfish_camera_reply x;
+			if (read(c.sock, &x, sizeof(x)) != (ssize_t)sizeof(x)) {
 				r.status = -EPIPE;
 				break;
 			}
-			got = r.command == SUNFISH_CAMERA_START;
+			if (x.command != SUNFISH_CAMERA_START) {	/* SENSOR's: a refusal is logged, a timeout stays one */
+				if (x.status != 0) {
+					logf_("open: SENSOR %u -> %d", sensor, x.status);
+				}
+				continue;
+			}
+			r = x;
+			got = true;
 		}
 	}
 	logf_("open: START -> %d after %.0f ms (camd pid %u, state %u, %u slots of %u B)", r.status, now_ms() - t0, sh->pid,
