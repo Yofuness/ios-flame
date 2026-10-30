@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:45 dm11: gyro-aided calibration + gyro-stabilised tilt (port 1af814a; replay only, not on the phone yet)
+- Bias order SEE > gyro-aided > sphere; off: SNS_MAG_GYROFIT=0. Heading gravity default q (SNS_HEADING_GRAVITY=lp restores). Gate kept at 25%. magcal.txt keeps `fit`, adds an optional `gm` state line.
+- Replay of rec1, no starting cal: bias source gyro -34.40 -41.35 -59.70 (sphere -34.06 -39.89 -59.43), acc 2, 555 pairs, eig 531/676/805, res 3.55; calibrates from CSV T ~301. Gravity q vs lp: flat RMS 15.61 vs 15.80, settled (first 5 s of each flat stretch dropped) 5.88 vs 6.11; with --cal: 10.32 vs 10.52, settled 4.10 vs 4.38; T 259-297 RMS 2.83 vs 3.44. Gyro-aided off, q: flat 17.14, settled 7.51.
+- Known weak spot (accepted for now): the first ~5 s after a tumble still catch up (the stretch from CSV T 343: RMS ~23 over 343-409). My original <= 8.5 flat-RMS target is met only on the settled metric. DM_GM_RES_GOOD was tuned on this one recording. Real batching lag untested.
+
 ### 2026-10-30 19:15 rec1: real sensor recording analysed offline: the magnetometer is sound; the desk distorts the field; gyro-aided calibration works
 - Recording work/cal/motion-rec1.csv (405 s, 20027 mag samples, the user: flat circles, tumble, still at a fixed target, back at the desk; prototype research/notes/dipfit-prototype.py). The user: "much more in line" and smoother; still small jumps; 4a 288 vs Pixel 8 Pro 318 a metre apart (recording: 289 at T 425-450, so the published value matches).
 - Field after calibration: |B| 52 uT, dip 67 deg, V -48, H 20: plausible for Earth. All fits agree on z and x; y differs: sphere (-33.7,-40.1,-60.4) r 51.8; joint sphere + dip (-34.1,-40.3,-60.8); circle from flat samples y -45.1; best xy against the gyro on the flat turn (-35.1,-44.3,-60.8), rms 5.0 deg; phone's own fit (-34.1,-39.9,-59.4).
