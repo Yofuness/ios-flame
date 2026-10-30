@@ -37,5 +37,6 @@ build vtdecode vtdecode.m -fobjc-arc -framework Foundation -framework AVFoundati
 build memwarn memwarn.c
 build pmem pmem.c
 build pinsample pinsample.c	# sp15: fast read-only register sampler
+build camclk camclk.c ../wifi/pmem.c	# camera a2: camcc PLL2 + 24 MHz MCLK
 build a2s a2s.c
 ls -l out
