@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 06:45 Camera preview support in the Metal bridge built, not installed (615c313)
+- NativeBridgeMetalFrontend.mm (0112): newTextureWithDescriptor:iosurface:plane: no longer refuses planar IOSurfaces for MTLPixelFormatYCBCR8_420_2P(_sRGB) 500/501 on 420v/420f (CPU BT.601 conversion into an RGBA8 copy; video/full range from the fourcc) and RGB10A8_2P_XR10 550/551 (XR10 colour + plane-1 alpha into BGRA8); refreshed on bind when the IOSurface seed changes; other planar kinds refused and logged once. Off: `M2V_PLANAR=0` in backboardd's env. After ios-redfin (MIT).
+- Risks: CPU cost in backboardd's encode thread (~5-15 ms per 1080p refresh), possible tearing (replaceRegion while in flight), double colour conversion if CA's shader expects YCbCr. Install by day with the Camera.app test (U12): tools/build-metal2-linux.sh done; `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out --no-restart` then reboot.
+
 ### 2026-10-31 06:20 cam27 (kernel111, CAMERA=1): the worker fix holds, no unwanted stream; camd enabled + idle
 - 7de5516 + ebf31dd installed (SunfishAudio.driver), camd re-enabled. Battery 4455 mV, boot OK, lock screen at +60 s.
 - camdev.log: the boot prewarm "stream: frames begin (format 0, a photo mode)" -> socket not there yet -> "device: streams given back (1)" -> **"reopen skipped: stream given back (1)"** -> "stream: stop (0 frames, 0 pictures given)". camd.log: only its start; no START/STOP; no camid child. camd CPU 0.06 / 0.11 / 0.13 / 0.19 s over ~4 min (idle polling). camera_avtest: "Back Camera", 16 formats; still idle after it. 2 min stable.
