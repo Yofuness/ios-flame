@@ -15,10 +15,15 @@
  * Stage d (one frame through IFE-lite RDI0 WM0 into RAM; spec research/notes/camera-stage-d.md):
  *   camrx [--dry-run] capture OUTFILE [--stream-cmd "CMD"] [--alloc32]  one process for the whole DMA: buffer =
  *       display carveout slot1 PA 0x9cb00000 + 0xB00000 (zero-copy slot 1, unused without sweetfb_zerocopy; XNU has
- *       no RAM below 4 GB, cam10), zeroed through /dev/pmem first; --alloc32: 8 MB PMEM_ALLOC32 instead. SMMU identity for SIDs 0x800/0x5e0 (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
+ *       no RAM below 4 GB, cam10), zeroed through /dev/pmem first; --alloc32: 8 MB PMEM_ALLOC32 instead. SMMU (cam13): --trap = the 3 DT IFE SMRs
+ *       (0x900/0x460 0x880/0x460 0x820/0x440) into one free bank with M=1 + EPD0|EPD1 (every access faults, the
+ *       bank reports the SID), --bypass --sid X = one mask-0 SMR into an identity bank; refused if any valid SMR
+ *       overlaps (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
  *       mode, runs CMD (default: camid mode 8 stream), WM0 off at the first buf done, readbacks, guard check,
  *       frame -> OUTFILE, SMMU restore, PMEM_FREE (--alloc32 only). Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
+ *   camrx smmu [SID...]   read-only: sCR0, valid SMRs/S2CRs, their banks, faults; which SMRs each SID (default: the
+ *                         14 DT IFE SIDs) matches
  * Never enables PLLs/GDSCs/regulators, never writes GCC/RPMh/refgen. Writes only the whitelist in allowed();
  * every write is logged with its read-back. No camcc register is read before the GDSC check passes, no CSID
  * register before its two branches run.
@@ -157,8 +162,6 @@
 #define CAP_BUF		0x800000u	/* --alloc32: frame + guard (must stay zero) */
 #define CAP_CO_PA	0x9cb00000ull	/* display carveout zero-copy slot 1 (SweetSurface SWEET_ZC_SLOT_PA(1)) */
 #define CAP_CO_LEN	0xB00000u	/* frame + guard */
-#define CAM_SID		0x800u		/* redfin: one SMR covers all msm_cam_smmu_ife SIDs (notes section 2) */
-#define CAM_SID_MASK	0x5e0u
 #define STREAM_CMD	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt"
 
 #define RAW10		0x2b
@@ -760,6 +763,330 @@ static int rx_stop(void)
 	return 0;
 }
 
+/* ---- stage d: the camera's own SMMU mapping (cam12: SMR5 0x800/0x440 already matched 0x800, nothing was written,
+ * the IFE wrote somewhere else and the phone reset). Apps SMMU v2 at 0x15000000; layout as phone/wifi/smmu.c. ---- */
+
+#define SMMU		0x15000000ull
+#define SMMU_SIZE	0x00100000u
+#define SM_SCR0		0x0
+#define SM_GFSR		0x48
+#define SM_TLBGSYNC	0x70
+#define SM_TLBGSTATUS	0x74
+#define SM_SMR(n)	(0x800 + 4 * (n))
+#define SM_S2CR(n)	(0xc00 + 4 * (n))
+#define CB_SCTLR_	0x00
+#define CB_RESUME	0x08
+#define CB_TCR2		0x10
+#define CB_TTBR0	0x20
+#define CB_TTBR1	0x28
+#define CB_TCR		0x30
+#define CB_MAIR0	0x38
+#define CB_MAIR1	0x3c
+#define CB_FSR		0x58
+#define CB_FAR		0x60
+#define CB_FSYNR0	0x68
+#define CB_TLBIALL	0x618
+#define CB_TLBSYNC	0x7f0
+#define CB_TLBSTATUS	0x7f4
+#define TRAP_SCTLR	0x00000021u	/* M | CFRE; CFIE 0 (no IRQ), CFCFG 0 (terminate, no stall) */
+#define TRAP_TCR	(25u | 1u << 7 | 1u << 23)	/* T0SZ 25, EPD0 | EPD1: no walks, every access a translation fault */
+#define BYP_SCTLR	0x000000e0u	/* as smmu.c CB_SCTLR: CFCFG | CFIE | CFRE, M = 0 (identity) */
+#define CAM_CBAR	0x0001f000u	/* as smmu.c CB_CBAR: S1 translation, S2 bypass */
+#define CAM_CBA2R	0x00000001u	/* AArch64 */
+
+/* DT msm_cam_smmu_ife (../recon/live.dts:13150): the SIDs and the three SMRs that cover them */
+static const uint16_t ife_sids[14] = { 0x900, 0xd00, 0x880, 0xc80, 0x820, 0xc20, 0x920, 0xd20, 0x8a0, 0xca0, 0x940,
+				       0xd40, 0x8c0, 0xcc0 };
+static const uint16_t ife_smr[3][2] = { { 0x900, 0x460 }, { 0x880, 0x460 }, { 0x820, 0x440 } };
+
+static struct {
+	uint32_t nsmr, ncb, psize, npage;
+} sg;
+
+static void smmu_geom(void)
+{
+	uint32_t id0 = rd32(SMMU + 0x20), id1 = rd32(SMMU + 0x24);
+	sg.nsmr = id0 & 0xff;
+	sg.ncb = id1 & 0xff;
+	sg.psize = (id1 >> 31) ? 0x10000 : 0x1000;
+	sg.npage = 1u << (((id1 >> 28) & 7) + 1);
+	if (sg.nsmr > 128)
+		sg.nsmr = 128;
+}
+
+static uint64_t gr1(void)
+{
+	return SMMU + sg.psize;
+}
+
+static uint64_t cbpage(uint32_t cb)
+{
+	return SMMU + (uint64_t)sg.npage * sg.psize + (uint64_t)cb * sg.psize;
+}
+
+/* two SMRs (or an SMR and a SID with mask 0) match a common SID */
+static int smr_overlap(uint32_t id1, uint32_t m1, uint32_t id2, uint32_t m2)
+{
+	return ((id1 ^ id2) & ~(m1 | m2) & 0x7fff) == 0;
+}
+
+static void show_scr0(uint32_t v)
+{
+	printf("smmu: sCR0 %08x: CLIENTPD %u GFRE %u GFIE %u EXIDENABLE %u GCFGFRE %u GCFGFIE %u STALLD %u GSE %u "
+	       "USFCFG %u VMIDPNE %u PTM %u FB %u SMCFCFG %u NSCFG %u\n", v, v & 1, (v >> 1) & 1, (v >> 2) & 1,
+	       (v >> 3) & 1, (v >> 4) & 1, (v >> 5) & 1, (v >> 8) & 1, (v >> 9) & 1, (v >> 10) & 1, (v >> 11) & 1,
+	       (v >> 12) & 1, (v >> 13) & 1, (v >> 21) & 1, (v >> 28) & 3);
+	printf("smmu: unmatched streams: %s\n", v & 1 ? "CLIENTPD=1, the whole SMMU is bypassed" :
+	       (v >> 10) & 1 ? "USFCFG=1: fault (terminated, sGFSR.USF)" : "USFCFG=0: bypass (untranslated, PA)");
+	if ((v >> 3) & 1)
+		printf("smmu: EXIDENABLE=1: SMR valid bit is S2CR.EXIDVALID (bit 10), not SMR bit 31 (this dump assumes "
+		       "bit 31; guess)\n");
+}
+
+static const char *s2cr_type[4] = { "translate", "bypass", "fault", "res" };
+
+static void show_cb(uint32_t cb)
+{
+	uint64_t p = cbpage(cb), g = gr1();
+	uint32_t sc = rd32(p), cbar = rd32(g + 4 * cb), fsr = rd32(p + CB_FSR);
+	printf("smmu:  CB%u SCTLR %08x (M %u TRE %u AFE %u CFRE %u CFIE %u CFCFG %u) CBAR %08x (TYPE %u VMID %#x "
+	       "IRPTNDX %u) CBA2R %08x TCR %08x TCR2 %08x TTBR0 %08x%08x TTBR1 %08x%08x\n", cb, sc, sc & 1,
+	       (sc >> 1) & 1, (sc >> 2) & 1, (sc >> 5) & 1, (sc >> 6) & 1, (sc >> 7) & 1, cbar, (cbar >> 16) & 3,
+	       cbar & 0xff, cbar >> 24, rd32(g + 0x800 + 4 * cb), rd32(p + CB_TCR), rd32(p + CB_TCR2),
+	       rd32(p + CB_TTBR0 + 4), rd32(p + CB_TTBR0), rd32(p + CB_TTBR1 + 4), rd32(p + CB_TTBR1));
+	printf("smmu:  CB%u FSR %08x (%s) FAR %08x%08x FSYNR0 %08x CBFRSYNRA %08x\n", cb, fsr,
+	       fsr & 0xc00001feu ? "FAULT" : "no fault", rd32(p + CB_FAR + 4), rd32(p + CB_FAR), rd32(p + CB_FSYNR0),
+	       rd32(g + 0x400 + 4 * cb));
+}
+
+/* camrx smmu [SID...]: read-only, no writes at all */
+static int smmu_report(int n, char **sids)
+{
+	smmu_geom();
+	uint32_t scr0 = rd32(SMMU + SM_SCR0);
+	printf("smmu: %u SMRs, %u context banks, page %#x x %u; sGFSR %08x sGFSYNR0 %08x sGFSYNR1 %08x\n", sg.nsmr,
+	       sg.ncb, sg.psize, sg.npage, rd32(SMMU + SM_GFSR), rd32(SMMU + 0x50), rd32(SMMU + 0x54));
+	show_scr0(scr0);
+	uint64_t shown[4] = { 0 };
+	for (uint32_t i = 0; i < sg.nsmr; i++) {
+		uint32_t smr = rd32(SMMU + SM_SMR(i)), s2 = rd32(SMMU + SM_S2CR(i));
+		if (!(smr >> 31))
+			continue;
+		uint32_t t = (s2 >> 16) & 3, cb = s2 & 0xff;
+		printf("smmu: SMR%u %08x id %#x mask %#x -> S2CR %08x TYPE %s CBNDX %u PRIVCFG %u INSTCFG %u SHCFG %u "
+		       "NSCFG %u\n", i, smr, smr & 0x7fff, (smr >> 16) & 0x7fff, s2, s2cr_type[t], cb, (s2 >> 24) & 3,
+		       (s2 >> 26) & 3, (s2 >> 8) & 3, (s2 >> 18) & 3);
+		if (t == 0 && cb < sg.ncb && !(shown[cb / 64] & (1ull << (cb % 64)))) {
+			shown[cb / 64] |= 1ull << (cb % 64);
+			show_cb(cb);
+		}
+	}
+	uint16_t list[64];
+	unsigned nl = 0;
+	for (int k = 0; k < n && nl < 64; k++)
+		list[nl++] = (uint16_t)(strtoul(sids[k], NULL, 0) & 0x7fff);
+	if (!nl)
+		for (; nl < 14; nl++)
+			list[nl] = ife_sids[nl];
+	for (unsigned k = 0; k < nl; k++) {
+		int hits = 0, first = -1;
+		uint32_t s2 = 0;
+		for (uint32_t i = 0; i < sg.nsmr; i++) {
+			uint32_t smr = rd32(SMMU + SM_SMR(i));
+			if ((smr >> 31) && smr_overlap(smr & 0x7fff, (smr >> 16) & 0x7fff, list[k], 0)) {
+				if (first < 0) {
+					first = (int)i;
+					s2 = rd32(SMMU + SM_S2CR(i));
+				}
+				hits++;
+			}
+		}
+		if (!hits)
+			printf("smmu: SID %#x: no SMR -> %s\n", list[k], scr0 & 1 ? "bypass (CLIENTPD)" :
+			       (scr0 >> 10) & 1 ? "unmatched: fault" : "unmatched: bypass");
+		else if (hits == 1)
+			printf("smmu: SID %#x: SMR%d -> %s CB%u\n", list[k], first, s2cr_type[(s2 >> 16) & 3], s2 & 0xff);
+		else
+			printf("smmu: SID %#x: %d SMRs match (first SMR%d): CONFLICT (multi-match fault, sGFSR.SMCF if "
+			       "SMCFCFG)\n", list[k], hits, first);
+	}
+	return 0;
+}
+
+/* what capture installed; cam_smmu_down puts it back */
+static struct {
+	int on, cb, nslot, slot[3];
+	uint32_t smr[3], s2cr[3];
+	uint32_t sctlr, cbar, cba2r, tcr, tcr2, ttbr0[2], ttbr1[2], mair[2];
+} cs = { .cb = -1 };
+
+/* SMMU whitelist: only the SMR/S2CR slots and the bank capture allocated, plus sTLBGSYNC */
+static int smmu_allowed(uint64_t pa)
+{
+	if (pa == SMMU + SM_TLBGSYNC)
+		return 1;
+	for (int k = 0; k < cs.nslot; k++)
+		if (pa == SMMU + SM_SMR(cs.slot[k]) || pa == SMMU + SM_S2CR(cs.slot[k]))
+			return 1;
+	if (cs.cb < 0)
+		return 0;
+	if (pa == gr1() + 4 * cs.cb || pa == gr1() + 0x800 + 4 * cs.cb)
+		return 1;
+	uint64_t p = cbpage((uint32_t)cs.cb);
+	return pa >= p && pa < p + 0x1000 && !(pa & 3);
+}
+
+static void sw(uint64_t pa, uint32_t v, const char *why)
+{
+	if (!smmu_allowed(pa)) {
+		printf("camrx: BLOCKED smmu wr %#llx = %#x (%s)\n", (unsigned long long)pa, v, why);
+		exit(1);
+	}
+	if (dry) {
+		printf("[dry] smmu wr %#llx = %#010x  [%s]\n", (unsigned long long)pa, v, why);
+		return;
+	}
+	uint32_t old = rd32(pa);
+	wr32(pa, v);
+	printf("camrx: smmu wr %#llx %#010x -> %#010x, reads %#010x  [%s]\n", (unsigned long long)pa, old, v, rd32(pa),
+	       why);
+}
+
+static void smmu_sync(void)
+{
+	sw(SMMU + SM_TLBGSYNC, 0, "sTLBGSYNC");
+	for (int i = 0; !dry && i < 1000 && (rd32(SMMU + SM_TLBGSTATUS) & 1); i++)
+		usleep(1000);
+}
+
+/*
+ * NSMR SMRs (ids/masks) through one free bank, only if no valid SMR overlaps any of them. TRAP: stage-1 bank with
+ * M=1 and both walks disabled (every access faults, nothing written); else M=0 identity (as smmu_identity).
+ */
+static int cam_smmu_up(int nsmr, const uint16_t (*m)[2], int trap)
+{
+	smmu_geom();
+	uint64_t used[4] = { 0 };
+	int bad = 0;
+	cs.nslot = 0;
+	for (uint32_t i = 0; i < sg.nsmr; i++) {
+		uint32_t smr = rd32(SMMU + SM_SMR(i)), s2 = rd32(SMMU + SM_S2CR(i));
+		if (!(smr >> 31)) {
+			if (cs.nslot < nsmr)
+				cs.slot[cs.nslot++] = (int)i;
+			continue;
+		}
+		if (((s2 >> 16) & 3) == 0)
+			used[(s2 & 0xff) / 64] |= 1ull << ((s2 & 0xff) % 64);
+		for (int k = 0; k < nsmr; k++)
+			if (smr_overlap(smr & 0x7fff, (smr >> 16) & 0x7fff, m[k][0], m[k][1])) {
+				printf("camrx: smmu CONFLICT: SMR%u %08x (id %#x mask %#x, S2CR %08x) overlaps %#x/%#x\n", i,
+				       smr, smr & 0x7fff, (smr >> 16) & 0x7fff, s2, m[k][0], m[k][1]);
+				bad = 1;
+			}
+	}
+	for (uint32_t c = 0; c < sg.ncb && c < 256 && cs.cb < 0; c++)
+		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbpage(c)) & 1) && rd32(gr1() + 4 * c) == 0)
+			cs.cb = (int)c;
+	if (bad || cs.nslot < nsmr || cs.cb < 0 || (uint64_t)(sg.npage + cs.cb + 1) * sg.psize > SMMU_SIZE) {
+		printf("camrx: smmu: no dedicated mapping (conflict %d, free SMRs %d of %d, bank %d): abort before any "
+		       "IFE write\n", bad, cs.nslot, nsmr, cs.cb);
+		cs.nslot = 0;
+		cs.cb = -1;
+		return -1;
+	}
+	uint64_t p = cbpage((uint32_t)cs.cb), g = gr1();
+	for (int k = 0; k < nsmr; k++) {
+		cs.smr[k] = rd32(SMMU + SM_SMR(cs.slot[k]));
+		cs.s2cr[k] = rd32(SMMU + SM_S2CR(cs.slot[k]));
+		printf("camrx: smmu: %#x/%#x -> SMR%d, CB%d (%s)\n", m[k][0], m[k][1], cs.slot[k], cs.cb,
+		       trap ? "trap" : "bypass");
+	}
+	cs.sctlr = rd32(p);
+	cs.cbar = rd32(g + 4 * cs.cb);
+	cs.cba2r = rd32(g + 0x800 + 4 * cs.cb);
+	cs.tcr = rd32(p + CB_TCR);
+	cs.tcr2 = rd32(p + CB_TCR2);
+	cs.ttbr0[0] = rd32(p + CB_TTBR0), cs.ttbr0[1] = rd32(p + CB_TTBR0 + 4);
+	cs.ttbr1[0] = rd32(p + CB_TTBR1), cs.ttbr1[1] = rd32(p + CB_TTBR1 + 4);
+	cs.mair[0] = rd32(p + CB_MAIR0), cs.mair[1] = rd32(p + CB_MAIR1);
+	cs.on = 1;
+	sw(p + CB_SCTLR_, 0, "CB SCTLR 0 while set up");
+	sw(p + CB_FSR, 0xffffffff, "CB FSR clear");
+	sw(p + CB_TTBR0, 0, "TTBR0");
+	sw(p + CB_TTBR0 + 4, 0, "TTBR0 hi");
+	sw(p + CB_TTBR1, 0, "TTBR1");
+	sw(p + CB_TTBR1 + 4, 0, "TTBR1 hi");
+	sw(p + CB_TCR, trap ? TRAP_TCR : 0, trap ? "TCR EPD0|EPD1" : "TCR");
+	sw(p + CB_TCR2, trap ? 0x2 : 0, "TCR2");
+	sw(p + CB_MAIR0, 0, "MAIR0");
+	sw(p + CB_MAIR1, 0, "MAIR1");
+	sw(g + 0x800 + 4 * cs.cb, CAM_CBA2R, "CBA2R AArch64");
+	sw(g + 4 * cs.cb, CAM_CBAR, "CBAR S1, S2 bypass");
+	sw(p + CB_TLBIALL, 0, "TLBIALL");
+	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
+	for (int i = 0; !dry && i < 1000 && (rd32(p + CB_TLBSTATUS) & 1); i++)
+		usleep(1000);
+	sw(p + CB_SCTLR_, trap ? TRAP_SCTLR : BYP_SCTLR, trap ? "SCTLR M|CFRE (trap)" : "SCTLR M=0 (identity)");
+	for (int k = 0; k < nsmr; k++)
+		sw(SMMU + SM_S2CR(cs.slot[k]), (uint32_t)cs.cb, "S2CR translate -> bank");
+	for (int k = 0; k < nsmr; k++)
+		sw(SMMU + SM_SMR(cs.slot[k]), 1u << 31 | (uint32_t)m[k][1] << 16 | m[k][0], "SMR valid (last)");
+	smmu_sync();
+	return 0;
+}
+
+/* every exit path: SMRs back (invalid) first, then S2CRs, then the bank registers, TLB sync */
+static void cam_smmu_down(void)
+{
+	if (!cs.on)
+		return;
+	cs.on = 0;
+	uint64_t p = cbpage((uint32_t)cs.cb), g = gr1();
+	for (int k = 0; k < cs.nslot; k++)
+		sw(SMMU + SM_SMR(cs.slot[k]), cs.smr[k], "SMR restore");
+	smmu_sync();
+	for (int k = 0; k < cs.nslot; k++)
+		sw(SMMU + SM_S2CR(cs.slot[k]), cs.s2cr[k], "S2CR restore");
+	sw(p + CB_SCTLR_, cs.sctlr, "SCTLR restore");
+	sw(p + CB_TCR, cs.tcr, "TCR restore");
+	sw(p + CB_TCR2, cs.tcr2, "TCR2 restore");
+	sw(p + CB_TTBR0, cs.ttbr0[0], "TTBR0 restore");
+	sw(p + CB_TTBR0 + 4, cs.ttbr0[1], "TTBR0 hi restore");
+	sw(p + CB_TTBR1, cs.ttbr1[0], "TTBR1 restore");
+	sw(p + CB_TTBR1 + 4, cs.ttbr1[1], "TTBR1 hi restore");
+	sw(p + CB_MAIR0, cs.mair[0], "MAIR0 restore");
+	sw(p + CB_MAIR1, cs.mair[1], "MAIR1 restore");
+	sw(g + 4 * cs.cb, cs.cbar, "CBAR restore");
+	sw(g + 0x800 + 4 * cs.cb, cs.cba2r, "CBA2R restore");
+	sw(p + CB_FSR, 0xffffffff, "FSR clear");
+	sw(p + CB_TLBIALL, 0, "TLBIALL");
+	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
+	smmu_sync();
+	printf("camrx: smmu restored (%d SMRs, CB%d)\n", cs.nslot, cs.cb);
+}
+
+/* --trap: what the bank caught; then clear FSR (write back) and, if stalled, terminate (RESUME TnR=1). 1 = a fault */
+static int cam_smmu_trap_report(void)
+{
+	if (dry || !cs.on)
+		return 0;
+	uint64_t p = cbpage((uint32_t)cs.cb);
+	uint32_t fsr = rd32(p + CB_FSR), sy = rd32(p + CB_FSYNR0), fr = rd32(gr1() + 0x400 + 4 * cs.cb);
+	printf("camrx: trap CB%d: FSR %08x (TF %u AFF %u PF %u EF %u TLBMCF %u MULTI %u SS %u FORMAT %u) FAR %08x%08x "
+	       "FSYNR0 %08x (WNR %u PLVL %u) CBFRSYNRA %08x (SID %#x, guess: bits 14:0)\n", cs.cb, fsr, (fsr >> 1) & 1,
+	       (fsr >> 2) & 1, (fsr >> 3) & 1, (fsr >> 4) & 1, (fsr >> 5) & 1, fsr >> 31, (fsr >> 30) & 1,
+	       (fsr >> 9) & 3, rd32(p + CB_FAR + 4), rd32(p + CB_FAR), sy, (sy >> 4) & 1, sy & 3, fr, fr & 0x7fff);
+	printf("camrx: trap: sGFSR %08x (USF %u SMCF %u)\n", rd32(SMMU + SM_GFSR), (rd32(SMMU + SM_GFSR) >> 1) & 1,
+	       (rd32(SMMU + SM_GFSR) >> 2) & 1);
+	if (fsr & 0xc00001feu) {
+		sw(p + CB_FSR, fsr, "FSR clear (write back)");
+		if ((fsr >> 30) & 1)
+			sw(p + CB_RESUME, 1, "RESUME TnR=1 (terminate)");
+	}
+	return (fsr & 0xc00001feu) != 0;
+}
+
 /* ---- stage d: one frame through IFE-lite RDI0 WM0 ---- */
 
 static struct {
@@ -800,7 +1127,7 @@ static void cap_down(void)
 	msleep_(100);	/* > 1 frame at ~30 fps: a write in flight finishes */
 	if (cap.smmu) {
 		cap.smmu = 0;
-		smmu_release("cam");
+		cam_smmu_down();	/* cam13: own SMRs, not smmu_identity/smmu_release */
 	}
 	/* cam11: a camnoc RCG left on PLL0 even outlives `camclk off` and then camid can't start camnoc_axi
 	 * (its source is off); put it back on XO while PLL0 still runs (the WM is stopped by now) */
@@ -1001,11 +1328,26 @@ static int cap_zero(uint64_t pa, uint32_t len)
 	return bad != 0;
 }
 
-static int capture(const char *out, const char *cmd, int alloc32)
+static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid)
 {
+	/* cam13: no IFE DMA without a dedicated SMMU mapping; --trap first, --bypass only for the SID it found */
+	if (trap == (sid >= 0)) {
+		printf("camrx: capture needs --trap, or --bypass --sid 0xNNN (the SID --trap reported)\n");
+		return 2;
+	}
+	uint16_t one[1][2] = { { (uint16_t)(sid & 0x7fff), 0 } };
+	if (sid >= 0) {
+		int in = 0;
+		for (int k = 0; k < 3; k++)
+			in |= smr_overlap(ife_smr[k][0], ife_smr[k][1], one[0][0], 0);
+		if (!in) {
+			printf("camrx: --sid %#x is not covered by the DT IFE SMRs: refused\n", sid);
+			return 2;
+		}
+	}
 	if (!dry && cap_precheck())
 		return 1;
-	printf("camrx: note: SMMU SIDs 0x800/0x5e0 (redfin), WM frame mode values (redfin/Linux) and that one frame = "
+	printf("camrx: note: SMMU SIDs/masks from the DT msm_cam_smmu_ife (guess: IFE-lite is one of them), WM frame mode values (redfin/Linux) and that one frame = "
 	       "%u B (cam8 CSID bytes) are taken over, not verified here\n", FRAME_BYTES);
 	atexit(cap_down);
 	if (alloc32) {
@@ -1031,14 +1373,13 @@ static int capture(const char *out, const char *cmd, int alloc32)
 			return 1;
 		cap.pa = CAP_CO_PA;
 	}
-	stage("smmu identity cam 0x800/0x5e0");
-	smmu_dry = dry;
-	uint32_t gfsr0 = dry ? 0 : rd32(0x15000048u);
-	if (smmu_identity("cam", CAM_SID, CAM_SID_MASK))
+	stage(trap ? "smmu: 3 DT SMRs -> one trap bank (M=1, EPD0|EPD1)" : "smmu: one SMR (mask 0) -> identity bank");
+	uint32_t gfsr0 = rd32(SMMU + SM_GFSR);
+	cap.smmu = 1;	/* cam_smmu_down undoes whatever part was written */
+	if (trap ? cam_smmu_up(3, ife_smr, 1) : cam_smmu_up(1, (const uint16_t (*)[2])one, 0))
 		return 1;
-	cap.smmu = 1;
-	uint64_t cbp = smmu_last.cbp;
-	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, smmu_last.cb, dry || !cbp ? 0 : rd32(cbp + 0x58));
+	uint64_t cbp = cbpage((uint32_t)cs.cb);
+	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, cs.cb, dry ? 0 : rd32(cbp + CB_FSR));
 	signal(SIGINT, on_sig);
 	signal(SIGTERM, on_sig);
 	if (rx_arm())
@@ -1089,15 +1430,20 @@ static int capture(const char *out, const char *cmd, int alloc32)
 	       ir(BUS_IRQ_STATUS(1)), ir(BUS_IRQ_STATUS(2)), ir(BUS_COMP_ERROR), ir(WM0_STATUS0), ir(WM0_STATUS1));
 	int bad = 0;
 	if (!dry) {
-		uint32_t fsr = cbp ? rd32(cbp + 0x58) : 0;
+		uint32_t fsr = rd32(cbp + CB_FSR);
 		/* FSR 0x400 is the FORMAT field, not a fault (redfin 0934:42) */
 		printf("camrx: smmu after: GFSR %#x GFSYNR1 %#x; CB%d FSR %#x (fault bits %#x) FAR %#x%08x FSYNR0 %#x\n",
-		       rd32(0x15000048u), rd32(0x15000054u), smmu_last.cb, fsr, fsr & 0x800001feu,
-		       cbp ? rd32(cbp + 0x64) : 0, cbp ? rd32(cbp + 0x60) : 0, cbp ? rd32(cbp + 0x68) : 0);
+		       rd32(SMMU + SM_GFSR), rd32(SMMU + 0x54), cs.cb, fsr, fsr & 0x800001feu,
+		       rd32(cbp + CB_FAR + 4), rd32(cbp + CB_FAR), rd32(cbp + CB_FSYNR0));
+		int tf = trap ? cam_smmu_trap_report() : 0;
 		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, cap.len - FRAME_BYTES);
 		printf("camrx: nonzero bytes: frame %llu of %u, guard %llu of %u%s\n", (unsigned long long)nf, FRAME_BYTES,
 		       (unsigned long long)ng, cap.len - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
-		bad = (fsr & 0x800001feu) || ng;
+		if (trap)
+			printf("camrx: trap verdict: %s; buffer/guard nonzero %llu/%llu (expected 0/0)\n",
+			       tf ? "fault caught (SID above)" : "NO fault in the trap bank: the IFE stream is not one of the 3 SMRs",
+			       (unsigned long long)nf, (unsigned long long)ng);
+		bad = trap ? (!tf || nf || ng) : ((fsr & 0x800001feu) || ng);
 		if (save_frame(cap.pa, out)) {
 			printf("camrx: writing %s failed\n", out);
 			bad = 1;
@@ -1121,6 +1467,8 @@ int main(int argc, char **argv)
 	pm_init();
 	if (!strcmp(argv[a], "status"))
 		return status();
+	if (!strcmp(argv[a], "smmu"))	/* cam13: read-only */
+		return smmu_report(argc - a - 1, argv + a + 1);
 	if (precheck())
 		return 1;
 	if (!strcmp(argv[a], "clocks") && a + 2 == argc) {
@@ -1149,16 +1497,24 @@ int main(int argc, char **argv)
 	}
 	if (!strcmp(argv[a], "capture") && a + 2 <= argc) {
 		const char *cmd = STREAM_CMD;
-		int a32 = 0;
+		int a32 = 0, trap = 0, byp = 0, sid = -1;
 		for (int i = a + 2; i < argc; i++) {
 			if (!strcmp(argv[i], "--alloc32"))
 				a32 = 1;
+			else if (!strcmp(argv[i], "--trap"))
+				trap = 1;
+			else if (!strcmp(argv[i], "--bypass"))
+				byp = 1;
+			else if (!strcmp(argv[i], "--sid") && i + 1 < argc)
+				sid = (int)(strtoul(argv[++i], NULL, 0) & 0x7fff);
 			else if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
 				cmd = argv[++i];
 			else
 				goto usage;
 		}
-		return capture(argv[a + 1], cmd, a32);
+		if (trap == byp || (byp && sid < 0) || (trap && sid >= 0))
+			goto usage;
+		return capture(argv[a + 1], cmd, a32, trap, sid);
 	}
 	if (!strcmp(argv[a], "tpg") && a + 2 >= argc) {
 		int s = a + 1 < argc ? atoi(argv[a + 1]) : 1;
@@ -1168,6 +1524,7 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop | capture OUTFILE [--stream-cmd \"CMD\"] [--alloc32]\n");
+			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN "
+			"[--stream-cmd \"CMD\"] [--alloc32]\n");
 	return 2;
 }
