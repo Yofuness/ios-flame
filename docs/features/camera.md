@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:45 Plug-in camera open stalled camd: SENSOR fields in the wrong order (fixed in 2ed9d22, not yet on the phone)
+- Seen (kernel112 CAMERA=1, after mediaserverd restarts in jack8): camdev.log "open: START -> -22 after 30064 ms (camd pid 42, state 0)" twice; camd.log only "client fd 6 connected/gone". camd alone works: `camclient -n 30` START 0 after 10.80 s, 30 frames, 14.19 fps read, 0 torn, STOP 0.
+- Cause (investigator, code reading): camera_client.c built SENSOR as { SENSOR, sensor, ~0, ~0, 0, 0 }, i.e. the sensor in `bytes`; camd skipped 1-2 bytes of the following START as payload, replied -EINVAL to a = ~0, then blocked in read_full() for the rest of START, freezing its whole loop until the client closed (30 s). The -22 logged was SENSOR's reply left in `r`.
+- Fix 2ed9d22: { SENSOR, 0, sensor, ~0, ~0, 0 }; non-START replies are read into a scratch reply (a SENSOR refusal is logged). Hardening left open: camd trusts `bytes` and reads blocking, so one bad client can still freeze it.
+- Next: install the driver after sp16, restart mediaserverd, expect "open: START -> 0" in /var/local/camdev.log; then U12 can go ahead.
+
 ### 2026-10-30 04:30 O8: camera_isp renders split into row bands (9e8aa03): 8x faster on the phone, identical output
 - isp_render_nv12 / _bgra / _full_nv12 / _still_nv12: a whole-frame call is cut into isp_threads bands (dispatch_apply_f on iOS, pthreads on the host); partial-row calls stay single-threaded (camera_device.c's render_into already splits frames 8 ways with dispatch_apply_f in mediaserverd, so the live preview was already parallel; camisp's 83 ms was single-threaded). isp_measure stays single-threaded (float sums). isp_threads 0/1 = old path; default ISP_THREADS env or hw.ncpu capped at 8.
 - Phone (camisp on cam21.raw, 8 threads): binned 1008x756 84.79 -> **10.61 ms/frame**; full 2016x1512 NV12 371.75 -> **47.12 ms**; md5 of 1- vs 8-thread output identical (78396d4a...). Host: 13.3 -> 2.53 ms, 35.2 -> 8.87 ms, all byte-identical.
