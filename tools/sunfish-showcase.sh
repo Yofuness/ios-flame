@@ -22,15 +22,15 @@ SET_SOUNDS="0.5 0.57"
 BACK="0.08 0.075"
 SCROLL_UP="0.5 0.8 0.5 0.3 300"       # scrolls a Settings pane down
 CC_OPEN="0.92 0.005 0.92 0.6 400"     # Control Center: swipe down from top-right (apps.md)
-CC_CLOSE="0.5 0.95 0.5 0.2 300"       # TODO runner: confirm (or use H)
-CC_BRIGHT="0.62 0.60 0.62 0.45 0.62 0.62"  # TODO runner: brightness slider x, y_low, y_high, end y (flame-shot of CC)
-HAPTIC_SWITCH="0.88 0.50"             # TODO runner: a switch in Settings > Sounds & Haptics (e.g. "Play Haptics in Ring Mode")
-NOTES_NEW="0.90 0.94"                 # TODO runner: Notes "new note" (compose) button, bottom right
+CC_CLOSE="0.5 0.95 0.5 0.2 300"       # confirmed vid1
+CC_BRIGHT="0.61 0.52 0.61 0.38 0.52"  # slider x, y_start, y_up, y_back (vid1 flame-shot)
+HAPTIC_SWITCH="0.85 0.443"            # "Change with Buttons" switch in Sounds & Haptics
+NOTES_NEW="0.92 0.93"                  # Notes compose button (bottom right)
 # Keyboard (portrait, iOS QWERTY): row y and the x of the first key; key pitch 0.1. TODO runner: check with a flame-shot.
-KB_Y1=0.735; KB_Y2=0.795; KB_Y3=0.855; KB_SPACE="0.5 0.915"; KB_SHIFT="0.07 0.855"
+KB_Y1=0.678; KB_Y2=0.744; KB_Y3=0.81; KB_SPACE="0.5 0.876"; KB_SHIFT="0.063 0.81"
 KB_X1=0.05; KB_X2=0.10; KB_X3=0.20
-FILES_BROWSE="0.83 0.95"              # TODO runner: Files "Browse" tab
-FILES_ONMYIPHONE="0.5 0.30"           # TODO runner: "On My iPhone" row in Browse
+FILES_BROWSE="0.83 0.93"
+FILES_ONMYIPHONE="0.5 0.375"
 SAFARI_URL=https://example.com
 
 ts=$(date +%Y%m%d-%H%M%S)
@@ -45,7 +45,7 @@ cmd() { ph "echo '$*' > /var/local/sweet-orient"; sleep 1.3; }   # the control f
 tap() { cmd "T $*"; }
 swipe() { cmd "W $*"; }
 app() { ph "openapp $*"; sleep 1.5; }
-now() { echo "$(date +%s.%N) - $t0" | bc; }
+now() { awk -v a="$(date +%s.%N)" -v b="$t0" 'BEGIN { printf "%.3f", a - b }'; }
 srtt() { awk -v t="$1" 'BEGIN { if (t < 0) t = 0; ms = int(t * 1000 + 0.5); printf "%02d:%02d:%02d,%03d", ms / 3600000, ms / 60000 % 60, ms / 1000 % 60, ms % 1000 }'; }
 cap_s=; cap_t=
 cap() {   # cap "text": closes the previous caption, opens a new one
@@ -68,9 +68,9 @@ key() {
 	' ') tap "$KB_SPACE"; return ;;
 	[A-Z]) tap "$KB_SHIFT"; c=$(echo "$c" | tr A-Z a-z) ;;
 	esac
-	i=$(expr index "$r1" "$c"); [ "$i" -gt 0 ] && { tap "$(echo "$KB_X1 + ($i - 1) * 0.1" | bc) $KB_Y1"; return; }
-	i=$(expr index "$r2" "$c"); [ "$i" -gt 0 ] && { tap "$(echo "$KB_X2 + ($i - 1) * 0.1" | bc) $KB_Y2"; return; }
-	i=$(expr index "$r3" "$c"); [ "$i" -gt 0 ] && { tap "$(echo "$KB_X3 + ($i - 1) * 0.1" | bc) $KB_Y3"; return; }
+	i=$(expr index "$r1" "$c"); [ "$i" -gt 0 ] && { tap "$(awk -v x="$KB_X1" -v i="$i" 'BEGIN { printf "%.2f", x + (i - 1) * 0.1 }') $KB_Y1"; return; }
+	i=$(expr index "$r2" "$c"); [ "$i" -gt 0 ] && { tap "$(awk -v x="$KB_X2" -v i="$i" 'BEGIN { printf "%.2f", x + (i - 1) * 0.1 }') $KB_Y2"; return; }
+	i=$(expr index "$r3" "$c"); [ "$i" -gt 0 ] && { tap "$(awk -v x="$KB_X3" -v i="$i" 'BEGIN { printf "%.2f", x + (i - 1) * 0.1 }') $KB_Y3"; return; }
 	warn "no key for '$c'"   # digits: skipped
 }
 type_text() { local s=$1 k; for ((k = 0; k < ${#s}; k++)); do key "${s:k:1}"; done; }
@@ -128,7 +128,8 @@ app com.apple.mobilesafari "$SAFARI_URL"; dwell 6
 
 cap "Notes: typing with the keyboard"
 app com.apple.mobilenotes; tap "$NOTES_NEW"; dwell 2
-type_text "Hello from a Pixel"; dwell
+tap "0.5 0.575"; dwell 1   # dismisses the one-off "Enable Dictation?" prompt
+type_text "hi from a pixel"; dwell   # first letter is auto-capitalised
 cmd H; dwell 1
 
 cap "Calculator: rotation to landscape and back"
