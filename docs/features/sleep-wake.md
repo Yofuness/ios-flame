@@ -13,6 +13,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:30 UI hang after a lock/wake on kernel126 (sv2 end): backboardd stuck in "U" state
+- kernel126 (everyday recipe, sweetmotion=0x4bf; Compass DeviceMotion services + DSP mag_cal/gyro_cal running). After run sv2 ended with H then K (~14:50), the display stayed frozen at 2:51 (Watch app's notification prompt on screen); later H/T had no effect; openapp failed for every app (FBSOpenApplicationServiceErrorDomain code 5, "XPC error received on message reply handler").
+- Kernel alive (Wi-Fi, AKS lines continue; SSH fine). Last frames: "SWEET FB: backboardd notifications type 5 off" + "sel 72" at 377.9 s, "5s: 30 swaps (6.0 fps)" at 382 s, then no swaps. ps: backboardd (pid 60) "Us+" (uninterruptible wait), SpringBoard and Bridge alive.
+- Not known yet: whether this is the display-dark path (0242), the GPU, or the new motion services (backboardd owns every HID service). Reboot + details: hg1.
+
 ### 2026-10-30 16:00 Reset during screen-off cycles with the btbridge idle mode (see bluetooth.md): kernel123 itself was clean in dk1 (4 cycles with the old btbridge); old btbridge restored.
 
 ### 2026-10-30 15:45 dk1: kernel123 = xnu 0242 display-dark idle (after iOSPlus10 0382, MIT): works, now the everyday kernel
