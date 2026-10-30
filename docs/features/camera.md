@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:25 cam10 (kernel109, sweetse9=2 sweetcampmic=2): PMEM_ALLOC32 ENOMEM; buffer moves to the display carveout
+- Battery 4455 mV; kernel109 boots (SSH 7 s). `sunfish-cam-rx.sh --install --capture`: power-up, camnoc 150 MHz, CSIPHY ok, then "pmem: alloc32 8388608: Cannot allocate memory"; powered down. No DMA, no reset. (The runner's first boot try passed the kernel directory to sunfish-boot.sh: give it work/kernel109/kernel.development.sweet.)
+- Cause (known since the audio work, audio.md): XNU manages no RAM below 4 GB here (mkadt.py gives XNU 0x1_0000_0000 up); all 680 logged PMEM allocations are at 0x106..-0x12. So 0232 can't succeed; it stays harmless.
+- Next: capture into the splash carveout's zero-copy slot1 (PA 0x9cb00000, 0xB00000; fb + GPU map use 0x9c000000..0x9ca00000; slot1 unused without sweetfb_zerocopy). Open risk: whether the hypervisor lets the camera SIDs write that RAM (a reset if not).
+
 ### 2026-10-30 23:05 cam9 (kernel108, same boot): capture aborted safely, PMEM buffer above 4 GB; xnu 0232 PMEM_ALLOC32 -> kernel109
 - `tools/sunfish-cam-rx.sh --install --capture` (e6d65ae): powered up, camnoc_axi RCG set to 150 MHz (PLL0 even /4, CFG 0x207), then PMEM_ALLOC 8 MB returned PA 0x1afde0000: above 4 GB, IFE IMAGE_ADDR is 32 bit -> "abort", PMEM_FREE 0, powered down. No DMA, no SMMU change, no reset. (Privacy: the phone is in the user's bedroom at night; capture results are checked by numbers only, the picture stays unopened in work/cam/ for the user.)
 - Fix: xnu 0232 `PMEM_ALLOC32` (ioctl 'P' 6): kmem_alloc_contig with max_pnum = 4 GB - 1 page; phone/wifi/pmem.c pm_alloc32(); camrx capture uses it. Kernel: kernel109 = kernel108 + 0232.
