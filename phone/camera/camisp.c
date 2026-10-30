@@ -1,11 +1,11 @@
 /*
- * camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B]
+ * camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N]
  *
  * Camera stage e3: one saved frame (camrx capture/stream: 2016x1512 MIPI RAW10, stride 2520, no header)
  * through ios-redfin's camera_isp.c: a redwood_camera_frame header is made for it in memory, then
  * isp_measure + isp_awb + isp_ae, and a picture: binned 2x2 preview (1008x756) by default, every pixel
  * (2016x1512, bilinear demosaic) with --full. OUT: ppm (from BGRA), raw bgra or raw nv12.
- * Prints ms per frame over N renders (default 5), the size, mean R/G/B and the ISP's AWB/AE values.
+ * Prints ms per frame over N renders (default 5), the render threads (O8: --threads N, 1 = the old path), the size, mean R/G/B and the ISP's AWB/AE values.
  * Builds for the phone (phone/camera/build.sh) and the PC (cc -O2 camisp.c camera_isp.c -lm).
  */
 #include <stdio.h>
@@ -30,7 +30,7 @@ now_ms(void)
 static int
 usage(void)
 {
-	fprintf(stderr, "usage: camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B]\n");
+	fprintf(stderr, "usage: camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N]\n");
 	return 2;
 }
 
@@ -60,6 +60,8 @@ main(int argc, char **argv)
 			frames = atoi(argv[++i]);
 		} else if (i + 1 < argc && !strcmp(argv[i], "--black")) {
 			black = atoi(argv[++i]);
+		} else if (i + 1 < argc && !strcmp(argv[i], "--threads")) {
+			isp_threads = atoi(argv[++i]);
 		} else {
 			return usage();
 		}
@@ -173,8 +175,8 @@ main(int argc, char **argv)
 	}
 	fclose(fp);
 
-	printf("camisp: %ux%u %s %s bayer %s black %d: %.2f ms/frame over %d\n", ow, oh, full ? "full" : "binned", fmt,
-	    orders[bayer], black, ms, frames);
+	printf("camisp: %ux%u %s %s bayer %s black %d: %.2f ms/frame over %d, %d threads\n", ow, oh, full ? "full" : "binned", fmt,
+	    orders[bayer], black, ms, frames, isp_thread_count());
 	printf("mean R/G/B %.1f %.1f %.1f (10-bit above black), bright %.1f, cells %u, grey %u neutral %u\n",
 	    s.mean[0], s.mean[1], s.mean[2], s.bright, s.cells, s.grey_cells, s.neutral_cells);
 	printf("AWB gains R/G/B %.3f %.3f %.3f, digital %.3f\n", isp.wb[0], isp.wb[1], isp.wb[2], isp.digital);

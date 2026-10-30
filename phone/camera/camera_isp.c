@@ -13,6 +13,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+#include <sys/sysctl.h>
+#else
+#include <pthread.h>
+#endif
 #include "camera_isp.h"
 
 #define WHITE           959             /* 1023 less the black level of 64 */
@@ -785,8 +791,8 @@ nv12_pair(const uint8_t *rgb0, const uint8_t *rgb1, uint32_t width, uint8_t *y0,
 	}
 }
 
-void
-isp_render_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+static void
+isp_render_nv12_rows(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
     uint8_t *uv, size_t uv_stride, uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row, bool video_range)
 {
 	uint8_t line[2][3 * 8192];
@@ -804,8 +810,8 @@ isp_render_nv12(const struct isp *isp, const struct redwood_camera_frame *f, con
 	}
 }
 
-void
-isp_render_bgra(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *out, size_t stride,
+static void
+isp_render_bgra_rows(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *out, size_t stride,
     uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row)
 {
 	uint8_t line[3 * 8192];
@@ -957,8 +963,8 @@ full_line(const struct isp *isp, const struct redwood_camera_frame *f, const int
 	}
 }
 
-void
-isp_render_full_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+static void
+isp_render_full_nv12_rows(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
     uint8_t *uv, size_t uv_stride, uint32_t first_row, uint32_t end_row, bool video_range)
 {
 	uint32_t width = f->width;
@@ -1007,8 +1013,8 @@ demosaic_row(const struct isp *isp, const struct redwood_camera_frame *f, const 
 	full_line(isp, f, (const int *const *)l, row, colour, p, rgb);
 }
 
-void
-isp_render_still_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+static void
+isp_render_still_nv12_rows(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
     uint8_t *uv, size_t uv_stride, uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row, bool video_range)
 {
 	uint32_t x0, y0, cw, ch, fw = f->width;
@@ -1091,6 +1097,180 @@ isp_render_still_nv12(const struct isp *isp, const struct redwood_camera_frame *
 
 		nv12_pair(out[0], out[1], width, y + (size_t)row * y_stride, second ? y + (size_t)(row + 1) * y_stride : NULL,
 		    uv + (size_t)(row / 2) * uv_stride, video_range);
+	}
+}
+
+/*
+ * ---- O8: the renders in bands of rows on several cores ---------------------------------------------------
+ * A call for every row (first_row 0, end_row past the last) is cut into isp_threads bands of even rows, each
+ * rendered as the single-threaded path does it (every row depends on the frame only: the output is the same
+ * byte for byte). A call for part of the rows (camera_device.c's own pieces) stays on its thread. isp_threads
+ * (or env ISP_THREADS): 0 or 1 = off, the old path; -1 = hw.ncpu, at most 8. libdispatch on iOS, pthreads on the PC.
+ */
+int isp_threads = -1;
+
+int
+isp_thread_count(void)
+{
+	static int resolved = -1;
+	int n = isp_threads;
+
+	if (n < 0) {
+		if (resolved < 0) {
+			const char *env = getenv("ISP_THREADS");
+			int cpus = 1;
+
+			if (env != NULL && *env != '\0') {
+				cpus = atoi(env);
+			} else {
+#if defined(__APPLE__)
+				size_t size = sizeof(cpus);
+
+				if (sysctlbyname("hw.ncpu", &cpus, &size, NULL, 0) != 0) {
+					cpus = 1;
+				}
+#else
+				cpus = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+			}
+			resolved = cpus < 1 ? 1 : cpus > 8 ? 8 : cpus;
+		}
+		n = resolved;
+	}
+	return n < 1 ? 1 : n > 8 ? 8 : n;
+}
+
+enum { BAND_NV12, BAND_BGRA, BAND_FULL, BAND_STILL };
+
+struct band_job {
+	int kind;
+	const struct isp *isp;
+	const struct redwood_camera_frame *f;
+	const uint8_t *raw;
+	uint8_t *y, *uv;
+	size_t y_stride, uv_stride;
+	uint32_t width, height, bands;
+	bool video_range;
+};
+
+static void
+band(void *context, size_t i)
+{
+	const struct band_job *j = context;
+	uint32_t rows = ((j->height + j->bands - 1) / j->bands + 1) & ~1u, first = (uint32_t)i * rows, end = first + rows;
+
+	end = end > j->height ? j->height : end;
+	if (first >= end) {
+		return;
+	}
+	switch (j->kind) {
+	case BAND_NV12:
+		isp_render_nv12_rows(j->isp, j->f, j->raw, j->y, j->y_stride, j->uv, j->uv_stride, j->width, j->height, first, end,
+		    j->video_range);
+		break;
+	case BAND_BGRA:
+		isp_render_bgra_rows(j->isp, j->f, j->raw, j->y, j->y_stride, j->width, j->height, first, end);
+		break;
+	case BAND_FULL:
+		isp_render_full_nv12_rows(j->isp, j->f, j->raw, j->y, j->y_stride, j->uv, j->uv_stride, first, end, j->video_range);
+		break;
+	default:
+		isp_render_still_nv12_rows(j->isp, j->f, j->raw, j->y, j->y_stride, j->uv, j->uv_stride, j->width, j->height, first, end,
+		    j->video_range);
+		break;
+	}
+}
+
+#if !defined(__APPLE__)
+struct band_thread {
+	struct band_job *job;
+	size_t i;
+};
+
+static void *
+band_main(void *context)
+{
+	struct band_thread *t = context;
+
+	band(t->job, t->i);
+	return NULL;
+}
+#endif
+
+/* true when the job was done in bands; false: the caller renders it on its own thread */
+static bool
+in_bands(struct band_job *j, uint32_t first_row, uint32_t end_row)
+{
+	int n = isp_thread_count();
+
+	if (n < 2 || first_row != 0 || end_row < j->height || j->height < 4 * (uint32_t)n) {
+		return false;
+	}
+	j->bands = (uint32_t)n;
+#if defined(__APPLE__)
+	dispatch_apply_f(j->bands, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), j, band);
+#else
+	pthread_t th[8];
+	struct band_thread bt[8];
+	bool started[8];
+
+	for (uint32_t i = 0; i < j->bands; i++) {
+		bt[i] = (struct band_thread){ j, i };
+		started[i] = i > 0 && pthread_create(&th[i], NULL, band_main, &bt[i]) == 0;
+	}
+	band(j, 0);
+	for (uint32_t i = 1; i < j->bands; i++) {
+		if (started[i]) {
+			pthread_join(th[i], NULL);
+		} else {
+			band(j, i);
+		}
+	}
+#endif
+	return true;
+}
+
+void
+isp_render_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+    uint8_t *uv, size_t uv_stride, uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row, bool video_range)
+{
+	struct band_job j = { BAND_NV12, isp, f, raw, y, uv, y_stride, uv_stride, width, height, 0, video_range };
+
+	if (!in_bands(&j, first_row, end_row)) {
+		isp_render_nv12_rows(isp, f, raw, y, y_stride, uv, uv_stride, width, height, first_row, end_row, video_range);
+	}
+}
+
+void
+isp_render_bgra(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *out, size_t stride,
+    uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row)
+{
+	struct band_job j = { BAND_BGRA, isp, f, raw, out, NULL, stride, 0, width, height, 0, false };
+
+	if (!in_bands(&j, first_row, end_row)) {
+		isp_render_bgra_rows(isp, f, raw, out, stride, width, height, first_row, end_row);
+	}
+}
+
+void
+isp_render_full_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+    uint8_t *uv, size_t uv_stride, uint32_t first_row, uint32_t end_row, bool video_range)
+{
+	struct band_job j = { BAND_FULL, isp, f, raw, y, uv, y_stride, uv_stride, f->width, f->height, 0, video_range };
+
+	if (!in_bands(&j, first_row, end_row)) {
+		isp_render_full_nv12_rows(isp, f, raw, y, y_stride, uv, uv_stride, first_row, end_row, video_range);
+	}
+}
+
+void
+isp_render_still_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
+    uint8_t *uv, size_t uv_stride, uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row, bool video_range)
+{
+	struct band_job j = { BAND_STILL, isp, f, raw, y, uv, y_stride, uv_stride, width, height, 0, video_range };
+
+	if (!in_bands(&j, first_row, end_row)) {
+		isp_render_still_nv12_rows(isp, f, raw, y, y_stride, uv, uv_stride, width, height, first_row, end_row, video_range);
 	}
 }
 

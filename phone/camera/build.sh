@@ -11,5 +11,5 @@ mkdir -p out
 ../../tools/linux-ios-sign out/camera_avtest
 if command -v cc >/dev/null; then
 	mkdir -p ../../work/cam
-	cc -O2 -Wall -o ../../work/cam/camisp-host camisp.c camera_isp.c -lm
+	cc -O2 -Wall -o ../../work/cam/camisp-host camisp.c camera_isp.c -lm -pthread
 fi

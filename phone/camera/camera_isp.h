@@ -133,6 +133,9 @@ void isp_awb(struct isp *isp, const struct isp_stats *s);
  * (rows from first_row to end_row only, for doing it in pieces). NV12: y and uv planes, full range (420f) or video
  * range (420v); BGRA: y only.
  */
+/* O8: threads for a whole-frame render (0/1 = one, the old path; -1 = env ISP_THREADS or hw.ncpu, at most 8) */
+extern int isp_threads;
+int isp_thread_count(void);
 void isp_render_nv12(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *y, size_t y_stride,
     uint8_t *uv, size_t uv_stride, uint32_t width, uint32_t height, uint32_t first_row, uint32_t end_row, bool video_range);
 void isp_render_bgra(const struct isp *isp, const struct redwood_camera_frame *f, const uint8_t *raw, uint8_t *out, size_t stride,
