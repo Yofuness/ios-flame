@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:15 jack1 (kernel112 CAMERA=1, sensors.off): RESET during `adspboot boot --swr-probe` (S0, e0621fd)
+- Run A: ADSP READY 120 ms, "adsp state ready"; the output (over SSH to the PC) stops at "apr: tx svc 3 op 1292c token 2" + qrtr NEW_SERVER lines (svc 43, 366, 15); no "swr:" line at all. ~45 s later SSH timed out and the phone was in fastboot. Per-boot log 20261030-033448.log ends at 83.8 s ("SWEET PMEM: smc 42000205 resumed 7 times -> 0"), no panic. Not known whether the hw vote, the clock/pin setup or the first SoundWire read caused it: the last stdout lines were probably lost with the SSH stream. Run B (--swr-clk) not run.
+- Restored: sensors.off removed, rebooted (jack1d): sensors job (adspboot pid 37) runs, camd idle, Bluetooth up. 4438 mV.
+- Smaller next step (parked till day): the probe logs to a file on the phone with fsync per line; reads in safe-first order (LPI gpio24 cfg first: LPI TLMM was read safely in sp2a; then the macros, then the SoundWire masters); and one read per run if needed.
+
 ### 2026-10-30 04:05 B30 headphone jack: research (research/notes/headphone-jack.md, read-only)
 - Plug detect is the codec's MBHC (HPHL_DET switch, live.dts:20951 qcom,msm-mbhc-hphl-swh/gnd-swh); no jack GPIO on the SoC or PMIC (fsa4480 handle = USB-C switch, likely unused). The WCD937x is reachable only over SoundWire: TX swr2 0x62ed0000 (IRQ SPI 0x128), RX swr1 0x62ef0000; the SoundWire clock comes from the TX macro, whose clocks are AFE votes to the ADSP (lpass-clk-id 0x30b va_core, 0x30c tx_core, 0x30d tx_npl). So no detect without the ADSP.
 - Path: ADSP + LPASS hw vote (works, sp2a) -> AFE clock votes 0x30b-0x30d -> TX macro SWR clock + LPI pins -> SoundWire master init + enumerate (codec ID) -> codec reset (LPI gpio24) -> MBHC mechanical detect, polled over /dev/pmem. Supplies (L11A/L16A 1.8 V, BOB mic bias) only read, never set; mechanical detect needs no mic bias. Effort ~2-4 d detect + ~1 d iOS (a "Headphones" device in SunfishAudio.driver).
