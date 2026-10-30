@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B37 Files has no "On My iPhone": pkd negative-caches the LocalStorage FileProvider extension (8 candidates -> 7); reason not caught yet (oslog drops out); apps.md 2026-10-30 files1-files3.
+- B37 Files has no "On My iPhone": pkd rejects the LocalStorage FileProvider extension, "no sandbox data container" (files4); fix (lsreg -c) being written.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
 - B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.
@@ -26,7 +26,7 @@ history in the feature Logs.
 - B20 Screen rotation: [DONE 2026-10-30] auto-rotate from the accelerometer.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
-- B31 oslog segfaults (rc 139) mostly in the first minutes after boot (b31: old 6/8, new 4/8 back to back right after boot, then 0/6 a few minutes later); _exit fix didn't cure it, no crash report written. Workaround: rerun. Next: a 20-run loop right after boot with the kernel fault line.
+- B31 [MOSTLY FIXED 2026-10-30, a671ac2: reconnects, SIGSEGV handler] oslog segfaults (rc 139) mostly in the first minutes after boot (b31: old 6/8, new 4/8 back to back right after boot, then 0/6 a few minutes later); _exit fix didn't cure it, no crash report written. Workaround: rerun. Next: a 20-run loop right after boot with the kernel fault line.
 - B32 Location Services: switched on with `echo "L 1" > /var/local/sweet-orient` (2026-10-29); survives a reboot (tap1). No position source yet (no GPS driver; Wi-Fi location needs Apple servers).
 - B18 Cellular: not planned. iCloud: not expected to work.
 
