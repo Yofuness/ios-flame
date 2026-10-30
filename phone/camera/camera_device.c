@@ -1094,6 +1094,11 @@ stream_set_property(CMBaseObjectRef o, CFStringRef key, CFTypeRef value)
 		double bias = 0;
 
 		number_of(value, &bias);
+		/* cam39: Camera.app sends an integer 256: a linear 8.8 multiplier (1.0 = no change), not 256 stops; only the
+		 * float form is in stops. Read as stops it pinned AE's target at 0.8 white: every picture too bright. */
+		if (value != NULL && CFGetTypeID(value) == CFNumberGetTypeID() && !CFNumberIsFloatType(value)) {
+			bias = bias > 0 ? log2(bias / 256.0) : 0;
+		}
 		s->ae_bias = (float)(bias < -8 ? -8 : bias > 8 ? 8 : bias);
 		say_once("stream: set", key, value);
 		return 0;

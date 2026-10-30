@@ -552,6 +552,7 @@ struct chan {
 	uint32_t ndone, nreuse;	/* ap7: RX_DONE / RX_DONE_W_REUSE received */
 	int l_n;	/* ap7: our rx intents the remote still holds unused */
 	uint32_t nrx, nreq;	/* ap7: packets received, RX_INTENT_REQs sent */
+	uint32_t nireq;	/* RX_INTENT_REQs from the ADSP (the first 8 are logged) */
 	uint8_t pend[NPEND][512];	/* (pd-mapper replies are ~150 bytes) */
 	uint32_t pend_len[NPEND];
 	int npend;
@@ -2527,10 +2528,13 @@ static int pump_one(void)
 			flush_pend(c);
 		break;
 	case GLINK_CMD_RX_INTENT_REQ:
-		printf("adsp: %s asks for an intent of %u bytes\n", c ? c->name : "?", p2);
+		if (!c || c->nireq++ < 8)
+			printf("adsp: %s asks for an intent of %u bytes\n", c ? c->name : "?", p2);
 		if (c) {
 			glink_send(GLINK_CMD_RX_INTENT_REQ_ACK, c->lcid, 1, NULL, 0);
-			give_intents(c, 1, 4096);
+			/* the size it asked for: with a 4096 B intent an 8880 B message never came and the ADSP kept asking,
+			 * stalling everything behind it on IPCRTR (cam39: "accel: no response to request 513") */
+			give_intents(c, 1, p2 > 4096 && p2 <= sizeof(rxbuf) ? p2 : 4096);
 		}
 		break;
 	case GLINK_CMD_RX_INTENT_REQ_ACK:
