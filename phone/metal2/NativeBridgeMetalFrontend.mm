@@ -68,7 +68,42 @@ static void noteProblem(NSString *what) {
  strlcpy(gLastProblems[0],what.UTF8String?:"?",sizeof gLastProblems[0]);
 }
 extern "C" void sm2_logs(const char *);
-#define NBLOG(...) do{NSString *nbText=[NSString stringWithFormat:__VA_ARGS__];sm2_logs(nbText.UTF8String);noteProblem(nbText);}while(0)
+// 0111 (device lost): the first report, once, with the counters (Turnip's own first line, phone/turnip/patches/0108, has the reason). backboardd then exits
+// after 0.5 s so launchd restarts it and the UI comes back, instead of cycling old frames; off: file /var/local/mtl2-no-devlost-exit. Other clients stay and
+// get refusals. Log lines off, flood gate too: M2V_DEVLOST_LOG=0 (/var/local/mtl2-env).
+static std::atomic<bool> gDeviceLostSeen{false};
+static bool deviceLostLogOn() {static const bool on=[]{const char *v=getenv("M2V_DEVLOST_LOG");return !v||strcmp(v,"0");}();return on;}
+static void *deviceLostExit(void *) {
+ usleep(500000);
+ if(deviceLostLogOn())sm2_logs("DEVLOST: backboardd exits (70), launchd restarts it");
+ int fd=open("/var/local/mtl2.log",O_WRONLY);if(fd>=0){fsync(fd);close(fd);}
+ _exit(70);
+}
+static void deviceLostFirst(const char *where) {
+ if(gDeviceLostSeen.exchange(true))return;
+ const bool backboardd=!strcmp(getprogname(),"backboardd"),keep=access("/var/local/mtl2-no-devlost-exit",F_OK)==0;
+ if(deviceLostLogOn()){
+  char t[600];snprintf(t,sizeof t,"DEVLOST first (bridge) %s; commits %llu failed %llu completed %llu problems %llu; %s",where,(unsigned long long)gCommits.load(),(unsigned long long)gCommitFailures.load(),
+   (unsigned long long)gCompleted.load(),(unsigned long long)gProblems.load(),!backboardd?"client: no exit, its calls are refused from now on":keep?"mtl2-no-devlost-exit: no exit":"exit in 0.5 s");
+  sm2_logs(t);
+ }
+ if(backboardd&&!keep){pthread_t th;if(pthread_create(&th,NULL,deviceLostExit,NULL)==0)pthread_detach(th);else _exit(70);}
+}
+extern "C" void nbDeviceLostHook(const char *text) {deviceLostFirst(text);}
+// 0111 flood stop: once the device is lost, each kind of line (its text without digits) at most once per 10 s, with how many were dropped. false: drop this one.
+static bool deviceLostGate(NSString *__strong *text) {
+ if(!gDeviceLostSeen.load(std::memory_order_relaxed)&&[*text rangeOfString:@"DeviceLost"].location!=NSNotFound)deviceLostFirst((*text).UTF8String?:"?");
+ if(!gDeviceLostSeen.load(std::memory_order_relaxed)||!deviceLostLogOn())return true;
+ uint32_t kind=2166136261u;for(const char *c=(*text).UTF8String?:"";*c;c++)if(*c<'0'||*c>'9')kind=(kind^(uint8_t)*c)*16777619u;
+ static struct {uint32_t kind;uint64_t lastUs,dropped;} kinds[32];static std::mutex lock;
+ const uint64_t now=nowUs();std::lock_guard<std::mutex> hold(lock);
+ unsigned at=kind%32;for(unsigned i=0;i<32;i++){const unsigned j=(kind+i)%32;if(kinds[j].kind==kind||!kinds[j].kind){at=j;break;}}
+ auto &k=kinds[at];
+ if(k.kind==kind&&now-k.lastUs<10000000){k.dropped++;gProblems++;return false;}
+ if(k.kind==kind&&k.dropped)*text=[*text stringByAppendingFormat:@" (+%llu in 10 s)",(unsigned long long)k.dropped];
+ k.kind=kind;k.lastUs=now;k.dropped=0;return true;
+}
+#define NBLOG(...) do{NSString *nbText=[NSString stringWithFormat:__VA_ARGS__];if(deviceLostGate(&nbText)){sm2_logs(nbText.UTF8String);noteProblem(nbText);}}while(0)
 // 0106 (B29, diagnostic): 1-byte texel textures' row pitch, logged without counting as a problem. Off: M2V_B29_LOG=0.
 #define B29LOG(...) do{const char *nbOff=getenv("M2V_B29_LOG");if(!nbOff||strcmp(nbOff,"0"))sm2_logs([NSString stringWithFormat:__VA_ARGS__].UTF8String);}while(0)
 // 0110 (B44, diagnostic): one line per distinct (path, format, width, height, row bytes) of every texture creation, view and upload
@@ -2191,6 +2226,7 @@ static void installAnswers(Class cls) {
 extern "C" id native_bridge_metal_open(const char *loader,const char *cache,uint64_t registryID,void (*missing)(const char *,const char *)) {
  if(gDeviceObject)return gDeviceObject;
  gMissing=missing;gInFlight=[NSMutableSet set];
+ nmb_set_device_lost_hook(nbDeviceLostHook); // 0111
  gDevice=nmb_device_open(loader,cache);
  if(!gDevice){NBLOG(@"native-metal: device refused: %s",nmb_last_error());return nil;}
  if(cache){gJournalPath=std::string(cache)+"/pipelines.log";gJournalBegan=nowUs();}

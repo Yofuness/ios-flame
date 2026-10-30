@@ -162,6 +162,15 @@ static bool listed(void)
 			sm2_log("not listed (/var/local/mtl2-clients): no Metal device");
 			return;
 		}
+		/* 0108: backboardd always keeps Turnip's log (a device-lost reason lands there); the census and
+		 * mtl2-tu-debug below, or MESA_LOG_FILE in /var/local/mtl2-env, take over the path */
+		if (!strcmp(getprogname(), "backboardd")) {
+			char log[128];
+			mkdir("/var/local/turnip", 0777);
+			chmod("/var/local/turnip", 0777);
+			snprintf(log, sizeof(log), "/var/local/turnip/backboardd-%d.log", getpid());
+			setenv("MESA_LOG_FILE", log, 1);
+		}
 		/* Turnip's per-name BO census (TU_DEBUG=bos, every 300 submits: phone/turnip/patches/0101) into
 		 * /var/local/tubos/NAME-PID.log while /var/local/tubos exists (mode 777) */
 		if (access("/var/local/tubos", W_OK) == 0) {

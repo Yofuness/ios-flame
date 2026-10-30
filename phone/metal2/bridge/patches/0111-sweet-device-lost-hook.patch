@@ -1,0 +1,98 @@
+diff --git a/crates/metal2vulkan-runtime/src/device/mod.rs b/crates/metal2vulkan-runtime/src/device/mod.rs
+--- a/crates/metal2vulkan-runtime/src/device/mod.rs
++++ b/crates/metal2vulkan-runtime/src/device/mod.rs
+@@ -649,9 +649,13 @@
+         self.0.lost.load(Ordering::Acquire)
+     }
+ 
+-    /// Record that the device was lost.
++    /// Record that the device was lost. 0111: the first time, tell the hook where from.
++    #[track_caller]
+     pub(super) fn mark_lost(&self) {
+-        self.0.lost.store(true, Ordering::Release);
++        if !self.0.lost.swap(true, Ordering::AcqRel) {
++            let at = std::panic::Location::caller();
++            note_device_lost(&format!("VK_ERROR_DEVICE_LOST at {}:{}", at.file(), at.line()));
++        }
+     }
+ 
+     /// Wait for the work submitted to each of the device's queues to end, each queue under its
+@@ -1342,3 +1346,19 @@
+         other => Error::Compile(other),
+     }
+ }
++
++/// 0111: called when a device of this process is first marked lost, with where and why
++/// (`Device::mark_lost`, the relay). Set once, before devices are opened.
++static DEVICE_LOST_HOOK: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
++
++/// 0111: set the hook of a lost device; a second call does nothing.
++pub fn set_device_lost_hook(hook: fn(&str)) {
++    let _ = DEVICE_LOST_HOOK.set(hook);
++}
++
++/// 0111: run the hook.
++pub(crate) fn note_device_lost(text: &str) {
++    if let Some(hook) = DEVICE_LOST_HOOK.get() {
++        hook(text);
++    }
++}
+diff --git a/crates/metal2vulkan-runtime/src/device/submit.rs b/crates/metal2vulkan-runtime/src/device/submit.rs
+--- a/crates/metal2vulkan-runtime/src/device/submit.rs
++++ b/crates/metal2vulkan-runtime/src/device/submit.rs
+@@ -308,6 +308,7 @@
+     }
+ 
+     /// The error of a failed submission or wait, recording a lost device.
++    #[track_caller]
+     pub(crate) fn failed(&self, error: vk::Result) -> Error {
+         if error == vk::Result::ERROR_DEVICE_LOST {
+             self.mark_lost();
+diff --git a/crates/metal2vulkan-runtime/src/device/relay.rs b/crates/metal2vulkan-runtime/src/device/relay.rs
+--- a/crates/metal2vulkan-runtime/src/device/relay.rs
++++ b/crates/metal2vulkan-runtime/src/device/relay.rs
+@@ -163,7 +163,10 @@
+             Some(By::Batch(failed)) => failed.fail(code, Some(description)),
+             Some(By::Program) => {}
+             Some(By::Runtime) | None => {
+-                flights.lost.store(true, Ordering::Release);
++                if !flights.lost.swap(true, Ordering::AcqRel) {
++                    // 0111
++                    super::note_device_lost(&format!("relay: code {code}: {description}"));
++                }
+                 for each in queues
+                     .iter()
+                     .filter(|f| Arc::ptr_eq(&f.lost, &flights.lost))
+diff --git a/crates/metal2vulkan-runtime/src/command_buffer/completion.rs b/crates/metal2vulkan-runtime/src/command_buffer/completion.rs
+--- a/crates/metal2vulkan-runtime/src/command_buffer/completion.rs
++++ b/crates/metal2vulkan-runtime/src/command_buffer/completion.rs
+@@ -605,6 +605,7 @@
+ }
+ 
+ /// The command-buffer error of a failed wait, recording a lost device.
++#[track_caller]
+ fn failure(device: &Device, error: vk::Result) -> CommandBufferError {
+     match error {
+         vk::Result::ERROR_DEVICE_LOST => {
+diff --git a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+--- a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
++++ b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+@@ -2894,6 +2894,7 @@
+ }
+ 
+ /// The command-buffer error of a failed submission, recording a lost device.
++#[track_caller]
+ fn submission_error(device: &Device, error: vk::Result) -> CommandBufferError {
+     match device.failed(error) {
+         Error::DeviceLost => CommandBufferError::DeviceLost,
+diff --git a/crates/metal2vulkan-runtime/src/lib.rs b/crates/metal2vulkan-runtime/src/lib.rs
+--- a/crates/metal2vulkan-runtime/src/lib.rs
++++ b/crates/metal2vulkan-runtime/src/lib.rs
+@@ -218,6 +218,7 @@
+ pub use degradation::{Degradation, DegradationCategory, DegradeNotice};
+ pub use degradation::{MisplacedNotice, NoticePlace};
+ pub use depth_stencil::DepthStencilState;
++pub use device::set_device_lost_hook; // 0111
+ pub use device::{
+     DebugMessage, Device, DeviceHandles, DeviceKind, DeviceOptions, LayerSetting,
+     LayerSettingValue, MessageKind, MessageSeverity, MessageSink, RawDevice,

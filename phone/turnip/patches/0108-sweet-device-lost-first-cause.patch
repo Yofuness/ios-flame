@@ -1,0 +1,130 @@
+diff --git a/src/vulkan/runtime/vk_device.c b/src/vulkan/runtime/vk_device.c
+--- a/src/vulkan/runtime/vk_device.c
++++ b/src/vulkan/runtime/vk_device.c
+@@ -23,6 +23,12 @@
+ 
+ #include "vk_device.h"
+ 
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
+ #include "vk_alloc.h"
+ #include "vk_common_entrypoints.h"
+ #include "vk_fence.h"
+@@ -420,6 +426,38 @@
+ 
+    vk_logd(VK_LOG_OBJS(device), "Timeline mode is %s.",
+            timeline_mode_str(device));
++   fflush(NULL); /* 0108 */
++}
++
++/* SweetMetal2 0108: the first loss of this process, once, into /dev/console and /var/local/mtl2.log, with the
++ * backend's counters. No locks: the caller may hold any of them. Off: M2V_DEVLOST_LOG=0. */
++void (*vk_sweet_lost_stats)(struct vk_device *device, char *text, size_t size);
++
++void
++vk_sweet_lost_note(struct vk_device *device, const char *file, int line, const char *msg)
++{
++#if DETECT_OS_APPLE
++   static int said;
++   const char *off = getenv("M2V_DEVLOST_LOG");
++   if ((off && !strcmp(off, "0")) || p_atomic_cmpxchg(&said, 0, 1) != 0)
++      return;
++   char stats[256] = "";
++   if (vk_sweet_lost_stats)
++      vk_sweet_lost_stats(device, stats, sizeof(stats));
++   char text[700];
++   int n = snprintf(text, sizeof(text), "MTL2[%d %s]: DEVLOST first (turnip) VK_ERROR_DEVICE_LOST %s:%d: %s; %s\n",
++                    getpid(), getprogname(), file, line, msg, stats);
++   if (n > (int)sizeof(text) - 1)
++      n = sizeof(text) - 1;
++   const char *paths[] = { "/dev/console", "/var/local/mtl2.log" };
++   for (unsigned i = 0; i < 2; i++) {
++      int fd = open(paths[i], O_WRONLY | O_APPEND | O_NOCTTY);
++      if (fd >= 0) {
++         (void)!write(fd, text, n);
++         close(fd);
++      }
++   }
++#endif
+ }
+ 
+ VkResult
+@@ -435,12 +473,19 @@
+    device->_lost.reported = true;
+ 
+    va_list ap;
++   char sweet_text[256]; /* 0108 */
++   va_start(ap, msg);
++   vsnprintf(sweet_text, sizeof(sweet_text), msg, ap);
++   va_end(ap);
++   vk_sweet_lost_note(device, file, line, sweet_text);
++
+    va_start(ap, msg);
+    __vk_errorv(device, VK_ERROR_DEVICE_LOST, file, line, msg, ap);
+    va_end(ap);
+ 
+    vk_logd(VK_LOG_OBJS(device), "Timeline mode is %s.",
+            timeline_mode_str(device));
++   fflush(NULL); /* 0108: mesa's log file is a stdio stream, and backboardd exits soon */
+ 
+    if (debug_get_bool_option("MESA_VK_ABORT_ON_DEVICE_LOSS", false))
+       abort();
+diff --git a/src/vulkan/runtime/vk_device.h b/src/vulkan/runtime/vk_device.h
+--- a/src/vulkan/runtime/vk_device.h
++++ b/src/vulkan/runtime/vk_device.h
+@@ -396,6 +396,10 @@
+ 
+ void _vk_device_report_lost(struct vk_device *device);
+ 
++/* SweetMetal2 0108: vk_device.c */
++extern void (*vk_sweet_lost_stats)(struct vk_device *device, char *text, size_t size);
++void vk_sweet_lost_note(struct vk_device *device, const char *file, int line, const char *msg);
++
+ static inline bool
+ vk_device_is_lost_no_report(struct vk_device *device)
+ {
+diff --git a/src/vulkan/runtime/vk_queue.c b/src/vulkan/runtime/vk_queue.c
+--- a/src/vulkan/runtime/vk_queue.c
++++ b/src/vulkan/runtime/vk_queue.c
+@@ -128,6 +128,7 @@
+    vsnprintf(queue->_lost.error_msg, sizeof(queue->_lost.error_msg), msg, ap);
+    va_end(ap);
+ 
++   vk_sweet_lost_note(queue->base.device, file, line, queue->_lost.error_msg); /* 0108 */
+    p_atomic_inc(&queue->base.device->_lost.lost);
+ 
+    if (debug_get_bool_option("MESA_VK_ABORT_ON_DEVICE_LOSS", false)) {
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -991,10 +991,26 @@
+ 
+ /* ---- device ---- */
+ 
++/* SweetMetal2 0108: counters for the first-loss line; read without locks (the caller may hold retire->lock or dw.lock). */
++static void
++darwin_lost_stats(struct vk_device *vk, char *text, size_t size)
++{
++   struct tu_device *dev = container_of(vk, struct tu_device, vk);
++   struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
++   snprintf(text, size, "submits %u faults %llu heap_used %llu KB last_fence %u inflight %u oldest %u "
++            "retire %u/%u enq %llu reaped %llu pressure %llu failed %d",
++            (unsigned)dev->submit_count, (unsigned long long)dev->fault_count,
++            (unsigned long long)(dev->physical_device->heap.used >> 10), dw.last_fence, dw.inflight_count,
++            dw.inflight_count ? dw.inflight[0] : 0, retire ? retire->count : 0, (unsigned)DARWIN_RETIRED_BOS,
++            retire ? (unsigned long long)retire->enqueued : 0, retire ? (unsigned long long)retire->reaped : 0,
++            retire ? (unsigned long long)retire->pressure_waits : 0, retire ? retire->failure != VK_SUCCESS : 0);
++}
++
+ static VkResult
+ darwin_device_init(struct tu_device *dev)
+ {
+    dev->fd = -1;
++   vk_sweet_lost_stats = darwin_lost_stats; /* 0108 */
+    /* The enumeration probe closed its connection; take the single slot for this device. */
+    if (!dw.open) {
+       VkResult result = dw_open_connection(dev->physical_device->instance);

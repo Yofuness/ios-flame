@@ -56,6 +56,8 @@ const char *nmb_device_answer_selector(size_t index, uint32_t *kind /* NMB_ANSWE
 bool nmb_device_answer(const NmbDevice *, const char *selector, uint64_t arg, uint64_t *out); /* false: no answer, nmb_last_error says why */
 size_t nmb_device_vendor_name(const NmbDevice *, char *out, size_t size);
 size_t nmb_device_family_waivers(const NmbDevice *, char *out, size_t size); /* the target families' rows not met, one family per line */
+/* 0111: called once, on any thread, when a device of this process is first marked lost; text: where and why. */
+void nmb_set_device_lost_hook(void (*callback)(const char *text));
 uint64_t nmb_device_linear_bytes_per_row(const NmbDevice *, uint64_t format, uint64_t width); /* 0: refused */
 
 typedef struct NmbBinaryArchive NmbBinaryArchive;

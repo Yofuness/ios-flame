@@ -105,6 +105,19 @@ fn options(value: u64) -> Result<ResourceOptions, String> {
     ResourceOptions::from_raw(value).map_err(e("resource options"))
 }
 
+// 0111: the frontend's callback for the first lost device (metal2vulkan_runtime::set_device_lost_hook).
+static DEVICE_LOST_CALLBACK: std::sync::OnceLock<extern "C" fn(*const c_char)> = std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_set_device_lost_hook(callback: extern "C" fn(*const c_char)) {
+    let _ = DEVICE_LOST_CALLBACK.set(callback);
+    metal2vulkan_runtime::set_device_lost_hook(|text| {
+        if let (Some(callback), Ok(text)) = (DEVICE_LOST_CALLBACK.get(), std::ffi::CString::new(text)) {
+            callback(text.as_ptr());
+        }
+    });
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_last_error() -> *const c_char {
     LAST.with(|last| {
