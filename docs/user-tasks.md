@@ -15,3 +15,4 @@ reads the answers here or in chat. Moved out of docs/plan.md on 2026-10-30 (the 
 - U16 Haptics: toggle a switch in Settings (Sounds & Haptics): do you feel a tap? Is it too strong or weak? ~1 min (after Claude starts hapticd).
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U17 Proximity: Claude starts `proxon 3 60` (detection on); cover the top of the phone (earpiece area) with your hand: does the screen go off, and on again when you take it away? ~1 min.
+- U18 Power key: with the screen off (wait for auto-lock), press the power button once: does the screen wake right away? (kernel123 polls keys every 40 ms while dark.) ~30 s.

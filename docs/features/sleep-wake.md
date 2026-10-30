@@ -13,6 +13,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 15:45 dk1: kernel123 = xnu 0242 display-dark idle (after iOSPlus10 0382, MIT): works, now the everyday kernel
+- While the display is off: USB poll 1 ms -> 20 ms after 2 s without USB traffic (1 ms again on any traffic), USB log thread 250 ms, touch polling stopped (no finger), keys 40 ms, FB vsync 500 ms after 5 s dark; all kicked back on display on. sysctl kern.sweet_display_dark; boot-arg sweetdark=0 = off.
+- "SWEET DARK: on: usb 20 ms (no traffic 2 s), usblog 250 ms, touch stopped, keys 40 ms, fb 500 ms after 5000 ms" / "SWEET DARK: off: usb 1 ms, usblog 100 ms, touch 8 ms, keys 20 ms, fb 16.7 ms".
+- 4 K/H cycles: dark 1/0 each time, SSH over USB 0.061-0.081 s per command while dark (0.062 s after 30 s idle), touch status reads rising after each wake (errors 0), no stall, no reset (4455 mV). Not yet tested: waking with the real power key (U18).
+
 ### 2026-10-28 14:50 k81 (xnu 0205): panel sleep 10/10
 - 10 cycles (`flame-cmd.py 'key 0'`, 3 s off / 3 s on): every cycle req off -> `blank alpha (saved 1a0000)` -> dcs 28, 10 (done 1, ack 0, t 0-1 ms) -> req on -> dcs 11, 29 -> `unblank alpha 1a0000`. Off frames black (mean 6-7), wake frames the picture at the same 10% brightness (23-25 vs 23 before). One dcs 29 line missing in cycle 1 (screen fine: a lost log line). 0 failed lines. Next: make sweetpanelsleep=1 a default boot arg after a longer test.
 
