@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 14:00 B44 round 2: UBWC off (TU_DEBUG=noubwc) doesn't fix it either; parked
+- research/notes/garbled-textures.md "round 2": every garbled widget's texture takes the bridge's "-> shadow" path (row pitch not a multiple of 64 or offset 32: 600x600 RGBA8 offset 32 row 2400, A8 566x79 / 543x358 / 480x65 / 224x192, BGRA8 194x237 row 784, ...); no 16-bit/compressed formats; colours right (no channel swap); rows slope gently and break into dashes.
+- /var/local/mtl2-tu-debug = noubwc + backboardd restart: Voice Memos' waveform icon still sheared dashes (work/shots/ub-VoiceMemos.png). Removed again.
+- Ruled out so far: stale shadows (0108), the 0109 repack (fired only for 8 other backboardd textures: the garbled ones may use another path, e.g. offset-32 or IOSurface-backed textures it skips), UBWC. Next lead when resumed: why 0109 didn't touch e.g. the 600x600 offset-32 texture, and Turnip's per-line 2D copy for unaligned pitches on A6xx (tu_clear_blit.cc ~2811-2876). Parked (~45 min today).
+
 ### 2026-10-30 13:00 rp1: bridge 0109 (M2V_SHADOW_REPACK=1, acfbc93) does not fix the garbled images
 - A/B with flame-shot (work/shots/rp1-A-*/rp1-B-*): Voice Memos header stripes, Compass needle, Mail banner, Control Center tiles identical; Tips hero banner as torn (B a bit worse). The repack fired 8 times, all in backboardd (180x180 4B row 720->768, 142x62 / 156x62 1B row 160->192), none in the apps. So unaligned shadow copies are not (or not the only) cause; the garbled images are app-side. Knob left off (mtl2-env empty); 0109 stays in the build, default off. B44 stays open (next idea: which format/path the apps' images take: compressed/ASTC, CGImage decode into IOSurface, 16-bit formats).
 
