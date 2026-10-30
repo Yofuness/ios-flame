@@ -34,6 +34,9 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:20 sp15: LPI pin input bits don't follow function-mode pins (inconclusive)
+- phone/tools/pinsample (fast read-only /dev/pmem sampler, 100k reads in 0.2-1 s). Baseline (idle, GPIO mode): gpio8/9/10 in/out = 1, 0 transitions. During the 0x41 tone (first ~1 s): all three read 0, 0 transitions, BCLK included. The amp locks its PLL on BCLK, so BCLK does toggle: the LPI in/out bit does not reflect a pin in function mode. The pin probe cannot answer the SD0 question; next probe is the amp side (CS35L41 ASP/DSP status) or an AFE internal loopback.
+
 ### 2026-10-30 20:15 No iOS audio output device; VirtualAudio re-enable crashed the UI (reverted)
 - The user's AirPods connect, but no audio plays anywhere (Safari showed no player for an MP3; Filza "Import to Music" + Music: no playback). /Library/Audio/Plug-Ins/HAL is empty: VirtualAudio.plugin sits in HAL.disabled since sweet-root-tweaks (mediaserverd crash loop on a phone without audio hardware). So CoreAudio has no output device at all, Bluetooth included.
 - Experiment: moved VirtualAudio.plugin back into HAL and let mediaserverd restart; the user saw backboardd crash and come back without GPU acceleration, still no playback. Reverted (plugin back in HAL.disabled) and rebooted (n1). On-device state unchanged.
