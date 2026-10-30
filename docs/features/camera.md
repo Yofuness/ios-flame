@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:00 Camera port plan from ios-redfin; camcc read-only dump (cam1, kernel108)
+- Plan: research/notes/camera-port.md (redfin MIT: sweet_cam.c via patches 0919/0921-0934, software ISP camera_isp.c, FigCaptureDevice camera_device.c; same sensors/CSID-lite/IFE-lite/CSIPHY 1.2 addresses as ours; different camcc (sdmmagpie) and SMMU SIDs). Six stages, ~2-3 weeks.
+- cam1 (read-only): camcc base 0x0ad00000 (+0x10000); GCC_CAMERA_AHB_CBCR 0x10b008 = 0x1 (on). PLL0-4 (0x0..0x4000): MODE/L/ALPHA 0 (off, no lock); PLL0/1/3/4 identical reset-looking CONFIG (USER_CTL 0x4805, CONFIG_CTL 0x20485699), PLL2 different (USER_CTL 0x20000954, CONFIG_CTL 0x3d6). MCLK0-3 RCGs (0x5004+0x20n) off (CMD 0x80000000, CFG/M/N/D 0), CBCRs 0x80000000 (off). Linux camcc-sm7150.c: all Fabia; 24 MHz MCLK = pll2 OUT_AUX, M/N 1/20. Next: a camclk tool to configure/enable PLL2 + MCLK RCG at 24 MHz, then camid at 24 MHz.
+
 ### 2026-10-28 22:10 M2 prep (read-only): the IMX363 init/mode tables are in the camx module file
 - vendor.img /lib64/camera/: com.qti.sensormodule.metric_imx363.bin (1,044,640 B; sensor + actuator + OIS + EEPROM), com.qti.sensor.imx363.so, com.qti.sensormodule.primax_imx355.bin + .so, Google tuning bins. Google's files: decoded only in the session scratchpad (camx/dec.py), not in git.
 - Format: a symbol table (0x48-byte records: index, name, data offset, size) then a data area at 0xacd50; register lists are 80-byte items with a 16-bit address, an 8-bit value and a delay.
