@@ -100,6 +100,8 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   its minimum (DCS 32; iOS keeps it across reboots), no brightness raises or tests. Never `tools/sunfish-dim.sh`: it
   stacks on the iOS brightness and the webcam can't see the screen (`sunfish-dim.sh 100` clears a leftover dim).
   Remove the flag when the user is up.
+- **Quiet hours** (the user, 2026-10-30): no speaker tests (sound from the phone) between 9:30 pm and 5:00 am EST;
+  the USB measurement mic (EM-01) is fine to use outside those hours.
 - **Other optimization:** make systems usable, not fast. Once something works and could be faster, add it to the
   "Optimize (last)" list (`docs/backlog.md`) and move on.
 

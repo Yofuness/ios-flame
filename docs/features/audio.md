@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:15 No iOS audio output device; VirtualAudio re-enable crashed the UI (reverted)
+- The user's AirPods connect, but no audio plays anywhere (Safari showed no player for an MP3; Filza "Import to Music" + Music: no playback). /Library/Audio/Plug-Ins/HAL is empty: VirtualAudio.plugin sits in HAL.disabled since sweet-root-tweaks (mediaserverd crash loop on a phone without audio hardware). So CoreAudio has no output device at all, Bluetooth included.
+- Experiment: moved VirtualAudio.plugin back into HAL and let mediaserverd restart; the user saw backboardd crash and come back without GPU acceleration, still no playback. Reverted (plugin back in HAL.disabled) and rebooted (n1). On-device state unchanged.
+- Next (iOS sound path, plan item 3): a HAL plug-in that provides a real output device (ios-redfin's RedwoodAudio.driver approach, MIT) so mediaserverd/audio sessions work and Bluetooth A2DP can route; the speaker itself stays parked.
+
 ### 2026-10-30 16:30 sp14: 32-bit slots / 24-bit ADM still silent; speaker PARKED
 - research/notes/apr-diff.md: our ASM/ADM/matrix/AFE payloads equal ios-redfin's working sequence except ADM bit width (16 vs 24) and the port type (I2S 16-bit vs their TDM 32-bit slots); every APR reply status 0; 388 periods in 3854 ms = real time, so the matrix pulls our data.
 - sp14a `--i2s-32` (3.072 MHz, amp PLL/SP_RATE 0x21 verified vs Linux cs35l41.c cs35l41_pll_sysclk, SP_FORMAT 32-bit, ADM 24), sp14b `--adm-bits 24`, sp14c `--i2s-32 --amp-boost`: amp 0x41 PUP_DONE + PLL_LOCK, on ~3.03 s, pcm ok, 0 underflows; mic beside the bottom speaker: 0 TONE windows each (1 kHz bin at the noise floor).
