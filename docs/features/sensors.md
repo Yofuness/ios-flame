@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:55 Auto-brightness on kernel113: CoreBrightness ramps, but only "virtually" (als1/als2)
+- als1 (kernel113 CAMERA=1 sweetse9=2 sweetcampmic=2, 4456 mV): backboardd "Begin ramp ... Lmax=500.000000 Lmin=2.000000" (0237's range is seen); boot brightness now 105 nits ("SWEET BL: nits 105 (raw 698edf)", slider 0x5f58). ("nits range 2..500 published" is not in the live log: printed before the log link was up.)
+- als2 (`m fake als 20000 5000` for 60 s, then 1 lux 60 s): "_Esensor_trusted: 20000.00 L: 399.4088", "L_newtarget=399.408783 _L_current=392.568665", but no SWEET BL write and no visible change; 1 lux -> L 2.0.
+- CoreBrightness RE (research/notes/ambient-light.md "ramp output path"): the AAB step goes to _DisplaySetVirtualBrightnessWithFade, which checks the display object's runtime auto flag (+0x28); 0 -> "begin virtual ramp" (only Lvirtual moves). With it set, the fade callback writes "brightness-nits" on our backlight service (SweetBacklight.cpp:207 setNits already handles it). Guess: the flag is set only when DisplayBrightnessAuto is (re)applied through DisplaySetProperty (Settings switch / BrightnessSystemClient setProperty). Next: `autobright 0` + `autobright 1`, then the fake lux again (after df1 frees the phone).
+
 ### 2026-10-30 07:30 xnu 0237 (kernel113): SweetBacklight publishes a nits range 2..500 for CoreBrightness
 - research/notes/ambient-light.md "systemShallUpdateBacklight": with no range CoreBrightness falls back to logical 0..1 (the 20000 lux target 1.0 = _L_current 1.0, no delta, no update). 0237 (from ios-redfin 0973, MIT): MinNits 2, MaxNits/MaxNitsPanel 500, HardwareAccessibleMin/MaxNits, DisplayPanel/ProductLuminanceMin/Mid/Max 2/155/500, backlight-calibration-parameters (16.16; the current values are guesses), user-accessible-max-nits / digital-dimming-min-nits as 4-byte 16.16 OSData; setNits maps < 2 nits to DCS 32. `sweetnits=0` turns it off. Built (37 s), test als1 in progress.
 
