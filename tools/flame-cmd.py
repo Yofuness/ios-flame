@@ -5,6 +5,7 @@ and show the results from the live log (udp 5140).
   tools/flame-cmd.py 'r 0x15000020 3'            one poke line (see bsd/dev/sweet_poke.c)
   tools/flame-cmd.py -f tools/poke/X.txt         a poke script file
   tools/flame-cmd.py reboot                      PSCI reset into fastboot
+  tools/flame-cmd.py 'reboot!'                    PSCI reset at once, no sync (hung kernel)
   tools/flame-cmd.py --wait 5 ...                listen longer for the results
 
 Results are the POKE:/SWEET CMD: lines the phone prints; all received log
