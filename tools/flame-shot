@@ -3,7 +3,8 @@
 
   tools/flame-shot OUT.png [--pa PA] [--w W] [--h H] [--stride BYTES] [--fmt bgra|rgba] [--raw OUT.bin]
 
-Default: the panel framebuffer ABL scans out (0x9c400000, 1080x2280, 4320-byte rows, a8r8g8b8
+Default: the panel framebuffer ABL scans out (sunfish 0x9c000000, 1080x2340, 4352-byte rows once the GPU presents (2026-10-30;
+4320 before), a8r8g8b8
 = bytes B G R A). Reads /dev/pmem through the file server (kernel 0094+, FlameBridge 2223), so the
 pixels are exact: compare them, don't eyeball them. Prints the time and the centre pixel.
 """
@@ -33,7 +34,7 @@ def main():
     ap.add_argument('--pa', type=lambda x: int(x, 0), default=0x9c000000)  # sunfish splash (flame 0x9c400000)
     ap.add_argument('--w', type=int, default=1080)
     ap.add_argument('--h', type=int, default=2340)
-    ap.add_argument('--stride', type=int, default=0)
+    ap.add_argument('--stride', type=int, default=4352)  # SWEET_FB_GPU_ROWBYTES once the GPU presents ("SWEET GPU: panel stride 4352"); 4320 before
     ap.add_argument('--fmt', choices=['bgra', 'rgba'], default='bgra')
     ap.add_argument('--raw', help='also save the raw bytes')
     a = ap.parse_args()

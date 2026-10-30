@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:40 B40 pre-checks (read-only)
+- c26ce1c StartRecorderServer: have (sunfish-install-camera.sh:63, same plists/key; sweet-root-tweaks.py:120 undoes it on a root rebuild).
+- 51f6f0b ADT nodes: have, superset (mkadt.py:86-91 adds camera-front + flash; iOSPlus10 only camera-rear + empty /product/camera).
+- 3b0eca8 sandbox ext ops 5/6: have (xnu 0219); no TCC.db/entitlement change needed by their fix.
+- 86a5df1 plane bpr +0x10: have (xnu 0235); our plug-in uses CVPixelBuffer plane APIs, no hard-coded offsets; their bpr<width frame skip optional.
+- hakios 0021 select-before-read: have for front (camera_client.c:194); back sends no SENSOR, the read loop switches (camera_device.c:2090). Notes: research/notes/camera-precheck.md.
+
 ### 2026-10-30 06:55 Plug-in camera opens work again (2ed9d22 on the phone, boot sp16r)
 - After a mediaserverd restart: camdev.log "open: START -> 0 after 11713 ms (camd pid 42, state 2)" and "START -> 0 after 18286 ms"; the earlier "START -> -22 after 30 s" is gone. (The opens are iOS prewarm: "opened after stop: closed at once".) U12 (Camera.app by the user) is unblocked.
 

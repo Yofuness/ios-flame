@@ -20,6 +20,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:45 Screenshots work again: flame-shot at 0x9c000000, stride 4352
+- research/notes/screenshot.md: the scanout is the ABL splash buffer 0x9c000000 (SweetFramebuffer.cpp:229, fPhys = v_baseAddr); after the GPU starts presenting the panel rows are 4352 bytes (SWEET_FB_GPU_ROWBYTES, "SWEET GPU: panel stride 4352"). The old defaults (0x9c400000 from flame, 4320) skewed every row and ran into the camera's slot1 at 0x9cb00000.
+- `tools/flame-shot work/shots/fs-test.png --pa 0x9c000000 --w 1080 --h 2340 --stride 4352`: a clean 1080x2340 home screen (10.2 MB in 8.46 s). Now the defaults. D7 done.
+
 ### 2026-10-29 22:10 Safari rotates full width; re-apply waits for a stable front app (rot11, rot12; kernel98)
 - rot11 (cbb2525): `R 3` sent with Safari already in front -> landscape, full width (rot11-b/c). Settings opened later stayed portrait: no "re-applied" line; Settings is portrait-only on iPhone (mask check skips it), so that is expected.
 - Fix: the 1 s re-apply waits until the front set has stayed the same for 3 ticks (Safari was re-applied on its first front tick, still launching -> left ~45% drawn).

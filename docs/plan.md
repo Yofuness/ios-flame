@@ -6,8 +6,6 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
 1. ▶ **App extensions** (B8): Files "On My iPhone" OPENS (kernel121, xnu 0240 v5: Sandbox op 4 answers the container from the exec's HOME). Next: PhotosFileProvider, survey widgets/share/keyboard extensions. (apps.md)
-2. ▶ **Screenshot tool** (D7/B41, dev speed): flame-shot garbage on CAMERA boots, the shot.m port renders a wrong image; fix one of them. (apps.md)
-3. **Camera.app pre-checks** (B40): iOSPlus10's 4 camera fixes vs ours, read-only, before U12. (camera.md)
 4. **Sensors** (B12): auto-rotate works; open: proximity into iOS, iOS-native motion services. (sensors.md)
 5. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
@@ -24,7 +22,6 @@ Finished items: [completed.md](completed.md) (not auto-loaded).
 In [user-tasks.md](user-tasks.md) (not auto-loaded): 10 open. Claude doesn't wait on them; it moves to the next item.
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
-- D7 tools/flame-shot gives garbage frames on kernel112/CAMERA=1 boots (u13); the webcam works meanwhile. Fix: port iOSPlus10's negroni-shot (B41).
 - D6 [PARTLY 2026-10-30] boot cmdline over 591 bytes (B38): -15 B, fast failure; a third extra arg still needs work/rtc-offset moved aside; kernel-side fix later.
 
 ## Backlog

@@ -21,6 +21,8 @@ Done 2026-10-30: VIBRATION MOTOR BUZZES (hp2), camera opens fixed (2ed9d22), dai
 
 ## Backlog items done
 
+- B41/D7 [DONE 2026-10-30] screenshots: flame-shot defaults fixed (0x9c000000, 1080x2340, stride 4352), display.md.
+- B40 [DONE 2026-10-30] Camera.app pre-checks: all of iOSPlus10's camera fixes are already in our stack (camera.md, research/notes/camera-precheck.md); optional: always send SENSOR (camera_client.c:194).
 - B39 [DONE 2026-10-30: iOS haptics work, haptics.md] Haptics (new from the 2026-10-30 survey, hakios-xnu 9ae5bde/06817c6, MIT): iOS drives haptics as waveforms on the "Actuator" audio device only with an ADT /product/haptics node (closed-loop 1, supports-3rd-party-haptics 1); without it FigVibratorInitialize -16490. Our motor = TI DRV2624 on I2C (research/notes/hackios-survey.md:133). ~1-1.5 d. (research/notes/upstream-2026-10-30-ports.md)
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
 - B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.

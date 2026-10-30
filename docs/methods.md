@@ -22,7 +22,7 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
 - Stop booting below 3600 mV (`fastboot getvar battery-voltage`). Start the live-log listener first (`pgrep -af sunfish-livelog`).
 - Tools (status.md): `flame-cmd.py reboot|swipe|tap` (and `key N [MS]`), `flame-files.py get|put`, `flame-shot OUT.png`,
   `sunfish-install-ssh.sh`, `sunfish-install-wifi.sh`, `sunfish-livelog.sh` (log → logs/usb-live.log).
-- Screen capture: `flame-shot` (framebuffer read) is broken on CAMERA boots; `tools/sunfish-shot.sh [NAME]` (phone/tools/shot, render-server picture -> work/shots/) replaces it once verified on the phone.
+- Screen capture: `tools/flame-shot work/shots/NAME.png` (framebuffer read over /dev/pmem, ~8 s; defaults 0x9c000000 1080x2340 stride 4352 since 2026-10-30: the old 0x9c400000/4320 values ran into the camera buffer and skewed). Exact pixels, no webcam needed; the screen must be on (`H`). phone/tools/shot (render server) still gives a wrong image.
 
 ## SE9 tools (adspboot amp, camid, i2cprobe, sunfish-cam-rx.sh)
 SE9 is shared with haptics: touch /var/local/haptics.off and kill hapticd (launchd restarts it, it sees the flag and stays off) before SE9 tools; the phone has no launchctl.
