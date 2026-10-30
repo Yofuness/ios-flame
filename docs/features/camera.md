@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:30 af2: the lens moves (read-back OK); found + fixed: every camera session leaked 2 SMMU banks
+- `camid --lens-move 560 / 725 / 400` (kernel128, port 6aeb4ee): "0xB3 = 00 after 30.1 / 26.0 / 49.6 ms", read back 0x84 after init 0, at target and after 2 s = the code written, "parked at 0", camvaf 0. No lens errors.
+- Then camd FAULT: "smmu: no dedicated mapping (conflict 0, free SMRs 8 of 4, banks 1 of 2)". Cause: cb_restore's write of CBAR back to 0 doesn't stick (reads 0x0001f000), so the free-bank scan skipped every bank we had used: sessions marched CB54+55, 56+57, 58+59, then none left. So the camera stopped after a number of opens per boot (and may explain earlier FAULTs). Fix: a bank with CBAR == CAM_CBAR, SCTLR.M off and no SMR on it is reusable. Verified: 4 sessions in a row rc 0, all on CB4 + CB14.
+- camd.c still latches FAULT on a setup failure (safe; the reason was this leak).
+
 ### 2026-10-30 21:00 af1: the lens chips answer (kernel128, xnu 0247 kern.sweet_camvaf)
 - `camid --lens-probe` (read-only): "AF 0x72 reg 0xB3: ACK, 00" (raw e5 00 00 00), "OIS 0x3e reg 0xF100: ACK, 00 00 00 00". Kernel: "SWEET CAMVAF: 0xcb00 TYPE 0x10 SUBTYPE 0x10, gpio1 0xc000 TYPE 0x10 SUBTYPE 0x10", before 40 00 41 00 42 04 44 00 45 01 46 80, on, off 18 ms later. So the VAF rail and address are right. Camera preview fine afterwards. 4455 mV. Next: init + one small move.
 

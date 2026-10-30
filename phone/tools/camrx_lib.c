@@ -1170,7 +1170,11 @@ static int cam_smmu_up(int nsmr, int nreq, const uint16_t (*m)[2], const int *tr
 	int nb = (ntrap > 0) + (nbyp > 0);
 	cs.nb = 0;
 	for (uint32_t c = 0; c < sg.ncb && c < 256 && cs.nb < nb; c++)
-		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbpage(c)) & 1) && rd32(gr1() + 4 * c) == 0 &&
+		/* af2: "CBAR restore" to 0 doesn't stick (reads back CAM_CBAR), so without this a bank we used looked taken:
+		 * each session ate two banks (CB54+55, 56+57, 58+59) until none were left. A bank with our own CBAR, disabled
+		 * and with no SMR pointing at it (`used') is ours to reuse. */
+		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbpage(c)) & 1) &&
+		    (rd32(gr1() + 4 * c) == 0 || rd32(gr1() + 4 * c) == CAM_CBAR) &&
 		    (uint64_t)(sg.npage + c + 1) * sg.psize <= SMMU_SIZE)
 			cs.bank[cs.nb++] = (int)c;
 	if (bad || cs.nslot < nreq || cs.nb < nb) {
