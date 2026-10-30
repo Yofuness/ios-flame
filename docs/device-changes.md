@@ -40,6 +40,7 @@ install recreates by itself.
 | 24 | Bluetooth: btup + BT firmware (crbtfw21.tlv, crnv21.bin from the factory vendor.img) | /var/local/bin/btup, /var/local/fw/bt | `tools/sunfish-install-bt.sh` | scripted (feature unfinished) |
 | 25 | Bluetooth for iOS: btbridge + bluetool-stub; launchd: com.apple.BlueTool runs bluetool-stub, bluetoothd env BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 + BT_BAUDRATE=115200 (kernel control of xnu 0226, boot-arg btbridge=1), job org.iosonpixel.btbridge (opens /dev/btbridge; `-p` = old pty); backup launchd.plist.pre-btbridge; at runtime (pty mode only) /dev/cu.bluetooth symlink, /var/local/btbridge.log, /private/var/tmp/btbridge.pid and bluetool-stub.log | /var/local/bin, launchd.plist | `tools/sunfish-install-btbridge.sh` (`--undo` restores the plist) | feature under work |
 | 26 | Auto-rotate: adspboot + /var/local/bin/sensors-start.sh, job org.iosonpixel.sensors (adspboot --sns-motion --sns-rot, no time limit; log /var/local/sensors.log, .prev; off: /var/local/sensors.off); backup launchd.plist.pre-sensors | /var/local/bin, launchd.plist | `tools/sunfish-install-sensors.sh` (`--undo` removes the job) | scripted |
+| 27 | Filza File Manager (TIGI Software 4.0.1-4, the user asked; for its music import): Filza.app, /usr/libexec/filza (setuid launcher, FilzaHelper, WebDAV server), /usr/bin/Filza, launchd job com.tigisoftware.filza.helper | /Applications, /usr/libexec/filza, launchd.plist (backup .pre-filza) | `tools/sunfish-install-filza.sh` (downloads the .deb, checks its sha256; `--undo`) | scripted |
 
 Backups and leftovers on the phone (not needed for a fresh install): /System/Library/xpc/launchd.plist.{orig,pre-*},
 /private/etc/launchd.plist.pre-early, /var/local/launchd.plist.pre-*, /var/local/mtl2-clients.pre-*, mtl2-env.pre-*,
@@ -48,6 +49,8 @@ output in /var/local.
 
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
+
+- 2026-10-30 Filza installed (tools/sunfish-install-filza.sh); a test MP3 copied to /var/mobile/Documents/Pirates.mp3 and Files' File Provider Storage (user content, for the AirPods audio test).
 
 - 2026-10-30 Auto-rotate at boot: adspboot, sensors-start.sh, job org.iosonpixel.sensors (tools/sunfish-install-sensors.sh; not yet installed).
 - 2026-10-30 Bluetooth for iOS (feature under work): btbridge, bluetool-stub, launchd edits for BlueTool/bluetoothd/org.iosonpixel.btbridge (tools/sunfish-install-btbridge.sh; not yet installed).
