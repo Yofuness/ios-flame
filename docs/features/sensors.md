@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:00 dm2: 9-axis (type-2) reports accepted, but the Compass dial ignores them: the heading comes from locationd
+- Port 8db68aa: type-2 88-byte reports (9-axis Madgwick, x = magnetic north, min/max hard-iron box in /var/local/magcal.txt, accuracy 0/1/2 at 40/60/80 uT span, yaw knob /var/local/dm-yaw). Host test: north 0, east 90, west 270, yaw +30 -> 30.
+- dm2 (kernel125, sweetmotion=0xbf): seeded magcal from compass (-44.5,-43.2,-115.7) uT -> status "dm type 2 acc 2 bias -44.5,-64.2,-69.6 span 90,90,93.8"; kernel: type-2 reports flow, 0 rejects (a few type-3 reports interleaved, probably when a mag sample is >1 s old). Compass: dial at N, no heading number; yaw 90 and 200 change nothing (work/shots/dm2-a2/b/c.png).
+- So the dial is driven by locationd's heading (CLHeading), not by in-app device motion (which feeds the level/parallax). locationd opens the compass {0xFF00,10} at 25 ms but waits for {0xFF0C,1} and {0xFF0C,8} ("not ready", "Failed to configure motion coprocessor"). Next: RE locationd's heading path and those two services.
+
 ### 2026-10-30 17:10 dm1: CoreMotion accepts our DeviceMotion reports; Compass draws its dial but has no north yet (kernel124)
 - Boot: kernel124 (xnu 0243), everyday recipe + sweetmotion=0xbf, /var/local/sensors.devmotion (SNS_DEVMOTION=1), adspboot 13:49 (backup adspboot.pre-dm). Battery 4455 mV; SSH 17 s; no resets.
 - Kernel: backboardd opens devmotion at 24.6 s (setProperties DeviceOpenedByEventSystem, MotionEventRestricted=false, PreserveTimestamp=true, ReportInterval=0). Compass sets ReportInterval=16667 at 102 s; type-3 52-byte reports flow from 106 s (#1000 at 124 s), 0 rejects. sensors.log: devmotion 562 -> 1101 -> 1639, accel ~3424, gyro ~3413, compass 1479.
