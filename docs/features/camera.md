@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:55 s1: first camera session after a boot can ignore the shutter (B48)
+- dm12 boot, Live Photo off, 0 kills: shutter in the first session after the boot saved nothing (like af6, af7 A). Same boot, Camera reopened (H, openapp x2, 15 s): IMG_0012.HEIC. Log of that good try still has captureSession_captureStillImageNow "Timed out ... waiting" and "Can't cancel deferred graph setup" (cause unknown; a slow first graph start is a guess).
+
 ### 2026-10-30 23:45 mem1/lp1: LIVE PHOTO was filling mediaserverd; off by default now: 4 of 4 shutter presses save
 - mem1 (kernel128, footprint tool): Camera closed/background/screen off: mediaserverd rss 38-43 MB, flat. Rear preview with Live Photo on: rss 1.7 GB, footprint 33 GB (MALLOC_LARGE, 937 regions, ~35 MB each), killed ~33 s after the stream starts ("low swap ... size 49 GB"). Kills per boot today: 155135: 2, 161539: 2, 164250: 1, 170558: 7, 173029: 2, 173818: 6, 175437: 11, 183748: 7.
 - lp1: tap on the Live Photo button: footprint 14 GB -> 136 MB at once, then flat (MALLOC_LARGE 68-94 MB, 36 s). Shutter x4, 12 s apart: IMG_0008..0011 all saved, 0 new kills. tools/sunfish-camera-prefs.sh writes com.apple.camera.plist: CAMUserPreferenceDesiredIrisMode 0, CAMUserPreferencePreserveLivePhoto true (backup .bak-lp, cfprefsd restarted). After a relaunch: footprint 136-159 MB, button crossed out, preview sharp (work/shots/lp1-s.png).

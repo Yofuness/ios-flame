@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:45 dm12 live (kernel128): sensors, fit guard OK; gyro-aided fit counters read at rest only; Compass parked
+- 4455 mV; magcal.txt seeded from rec1 (fit -34.400 -41.400 -59.700 52.000 2.000 1), unchanged after the reboot. Compass 115 deg SE at the desk (disturbed spot). Status: "cal fit r 52.0 res 2.00, gbias -0.0098,-0.0057,0.0071 still 1, gm pairs 0 solves 0 eig 0,0,0, rej 0/0/141/0/172/7/0/27/0, fitrej 0"; phone lay still, so 0 pairs says nothing yet. 0 "no response" lines. Recorder on (/var/local/motion-dump.on).
+- Parked: backlog "Later". The user's last hand test (before dm12): up to ~20 deg off a Pixel 8 Pro, some jumps. dm12's jump reduction is verified on rec1 only.
+
 ### 2026-10-31 00:30 dm12: sphere guard, gyro-aided counters, fewer heading jumps (replay only, not on the phone yet)
 - Sphere guard (SNS_MAG_GUARD=0: off): a fit needs every axis's spread >= 1.1 r and r >= 35; a saved fit with r < 35 is ignored at load, so the phone's current r 31.4 file goes and the Compass has no bias until one tumble. Synthetic flat session: fit rejected, c and r unchanged, bias xy -33.99,-41.00 (true -34,-41), z -60.00 held by the prior, acc 1.
 - Why "fit" live: NOT reproduced offline; rec1 with the live bad fit as --cal still reaches "gyro" at T 143 (jump rejects 7). Fixed candidates (SNS_GM_LIVE=0: off): mag samples more than 0.1 s from the newest gyro were dropped (rec1 re-batched into 1 s blocks: 17947 lag rejects, 65 pairs; with the gyro ring and waiting queue 0 lag rejects, 550 pairs); past a jump streak only 1 pair in 51 was taken; the normal equations were not saved until gm_ok. Other guess: slow hand turns under 25 deg per 2 s. The status line now says: "gm pairs P solves S eig a,b,c rej off/nots/nogb/lag/soon/old/fast/angle/jump fitrej F".
