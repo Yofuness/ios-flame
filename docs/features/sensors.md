@@ -16,6 +16,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:45 dm7: sphere-fit calibration works (r 42 uT, residual 1.8); Compass 97 deg vs the user's Pixel 8 Pro 52 deg, still occasional jumps
+- kernel127, port 3528464 + 81d4e82 + e73eeac (4462 mV). sensors.log 66 KB/min (was ~0.5 MB/min). Fusion off until Compass opens ("dm on (devmotion+devmotion8)").
+- After the user's calibration turn: "cal fit r 42.0 res 1.78 n 300 bias -32.5,-43.4,-68.4", acc 1; magcal.txt "fit -32.542 -43.397 -68.388 41.976 1.781 1".
+- Phone back under the webcam: Pixel 4a 97 deg, the user's Pixel 8 Pro 52 deg. Raw check (kernel samples): mag (-41.6, -43.2, -114.5) uT - bias = (-9.1, 0.2, -46.1): |m| 47, horizontal only ~9 uT (dip ~79 deg), pointing to device -x, so the top faces ~90 deg (east): the fusion agrees with the raw data and with the user's own "it faces east". With 9 uT horizontal, 2-3 uT of local disturbance (circuit board at the camera, laptop, the other phone side by side) moves the heading 15-20 deg; the 8 Pro may show true north (~-10 deg declination here, guess). Not separated yet: needs a comparison away from electronics, one phone at a time in the same spot.
+- Jumps: status shows occasional "dm type 3" (no mag sample for 1 s -> 6-axis fallback, no heading to locationd). Fix in progress (keep type 2 through short mag gaps, gate disturbed mag samples, measure gaps).
+
 ### 2026-10-30 16:15 the user's Compass test vs a Pixel 8 Pro: backwards / jumpy; the phone faced EAST, not west
 - Correction to 19:25/cw1: the phone lay facing east, so the "west" seed made the heading ~180 deg off ("sometimes completely backwards"); "other times it jumps around".
 - sensors.log after the session: SEE mag_cal/gyro_cal sent only 2 events each, all zero (bias 0,0,0, field 4 = 0): the DSP calibration never produced a bias, even while the phone was turned. The min/max box grew from the bad seed: min -110.5 -115.0 -187.3 max 24.5 1.8 -11.2 (spans 135/117/176 uT; a clean span is ~2 x 50 uT), bias -43.0,-56.6,-99.2: polluted, cannot shrink. Status: accel 123169, gyro 122925, compass 46957, devmotion 54415, acc 2.
