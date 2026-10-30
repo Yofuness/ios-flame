@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:15 ub2: xnu 0238 v2 (UI threads on the A76s) works but gains ~0.5 swaps/s
+- kernel115 sweetblnew=0 (HAPTICS=1 CAMERA=1), fpsbench BENCH_TIGHT=1 30 s, H before each run, live `sysq kern.sweet_ui_bigcore N`:
+  off 22.5 / 22.4 / 23.3 (mean 22.73 swaps/s, 21.37 panel/s, GPU 32.1 %); display only (1) 22.9 / 23.3 / 23.2 (23.13, 22.13, 34.7 %); display + render-server (3) 23.1 / 22.9 / 23.9 (23.30, 22.23, 33.9 %). Placements per run: mode 1 ~2100 idle + ~400 preempt, mode 3 ~5700 + ~1050. No reset.
+- So the A55 render thread was not the limit (redfin's gain does not carry over, like DEADFILL). Left at 1 (default, harmless). The cost is the GPU blur/backdrop passes and the one-frame-in-flight serial CPU+GPU frame (research/notes/fps-limit.md): next target.
+
 ### 2026-10-30 08:30 k115: kernel115 (xnu 0238 v2, no printf under the sched lock) runs without a reset; placements happen
 - Two boots (sweetuibig=0, then default), 3+ min each, no reset (kernel114 = v1 reset at 28 s). sysq: kern.sweet_ui_bigcore 1, kern.sweet_ui_idle 1342, kern.sweet_ui_preempt 2880, kern.sweet_ui_first "tid 1024 cpu 7 preempt".
 - fps A/B void: the panel was off (auto-lock), 0 swaps in the bench windows. Redo with H before each run.

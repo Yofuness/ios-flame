@@ -5,7 +5,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md) and iOSPlus10 (MIT).
-0. ▶ **GPU smoothness from ios-redfin** (the user's ask; research/notes/redfin-survey-2026-10-30.md): theirs 55-64 fps / 5.4 ms GPU, ours ~21 fps / 25-30 ms. DEADFILL ported, no gain here (df1: 22.2 -> 22.7 swaps/s, few fills to drop); our cost is blur passes + an A55 render thread. Next: xnu 1041 UI threads on the A76s (porting), then the blur passes.
+0. ▶ **GPU smoothness from ios-redfin** (the user's ask; research/notes/redfin-survey-2026-10-30.md): theirs 55-64 fps / 5.4 ms GPU, ours ~21 fps / 25-30 ms. DEADFILL ported, no gain here (df1: 22.2 -> 22.7 swaps/s, few fills to drop); our cost is blur passes + an A55 render thread. xnu 0238 (UI threads on the A76s, redfin 1041) works but +0.5 swaps/s (ub2). Next: the blur/backdrop passes.
 1. **Speaker** (B16): PARKED 2026-10-30 after ~15 runs (all silent; amp, DSP, routing, memory proven); next: prove
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
 2. **Bluetooth follow-ups** (B15): Xbox controller + AirPods pair and connect (auto RFR flow control), 3 Mbaud
