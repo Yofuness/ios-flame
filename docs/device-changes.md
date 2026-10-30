@@ -22,7 +22,7 @@ install recreates by itself.
 | 6 | Wi-Fi network and password | /var/local/wlan.conf (mode 600) | setup.md step 7 (by hand; never in git) | written steps |
 | 7 | Network service for en0 (DHCP) | /var/preferences/SystemConfiguration/preferences.plist | `tools/sunfish-netprefs.py` | scripted |
 | 8 | Metal bridge bundle + client list | /System/Library/Extensions/SweetMetal2.bundle, /var/local/mtl2-clients | `tools/sunfish-metal2-install.sh` | scripted |
-| 9 | launchd jobs removed: ReportCrash, axassetsd, assetsd.nebulad, corespotlightservice, driverkitd, fairplayd.H2, lskdd, searchd, spotlight.IndexAgent, voicemail.vmd, wifip2pd | launchd.plist | `tools/sunfish-setup-phone.sh` (calls sunfish-launchd-drop.sh) | scripted |
+| 9 | launchd jobs removed: ReportCrash, axassetsd, assetsd.nebulad, corespotlightservice, driverkitd, fairplayd.H2, lskdd, searchd, spotlight.IndexAgent, voicemail.vmd, wifip2pd, mobile.softwareupdated | launchd.plist | `tools/sunfish-setup-phone.sh` (calls sunfish-launchd-drop.sh) | scripted |
 | 10 | backboardd `CA_FORCE_TIMER=1` (vsync timer) | launchd.plist | `tools/sunfish-setup-phone.sh` | scripted |
 | 11 | assetsd `StandardErrorPath /var/local/assetsd.err` (debug leftover, harmless) | launchd.plist | not reproduced on purpose | debug only |
 | 12 | Phone tools (openapp, sctl, pmem, psx, oslog, prefs, lsreg, netsvc, vcopy, fcopy, pstack, i2cprobe, camid, ...) | /var/local/bin | `tools/sunfish-setup-phone.sh` (build-userland-linux.sh output) | scripted |
@@ -54,6 +54,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-30 launchd: com.apple.mobile.softwareupdated dropped (tools/sunfish-launchd-drop.sh; added to row 9 in tools/sunfish-setup-phone.sh): every 2-5 min it wrote an OTAUpdate restore report ("Cleaning up unused prepared updates", waits for an EmbeddedDeviceTypeRoot IOKit service we lack, restore_error 60; 796 reports so far). Takes effect at the next boot.
 - 2026-10-30 hp4: tools/sunfish-install-camera.sh re-run (tools with the SE9 lock), tools/sunfish-install-haptics.sh (launchd job org.iosonpixel.hapticd, wrapper /var/local/bin/hapticd-start.sh, backup launchd.plist.pre-haptics), tools/sunfish-install-fpfix.sh (/var/local/lib/fpfix.dylib; com.apple.FileProvider started via a /bin/sh exec wrapper with DYLD_INSERT_LIBRARIES; backup launchd.plist.pre-fpfix). Undo: each script's --undo.
 - 2026-10-30 Haptics (feature under work): /var/local/bin/hapticd + drvbuzz (phone/wifi, tools/build-userland-linux.sh + flame-files put); SunfishAudio.driver with the Actuator FIFO (f84a058, tools/sunfish-install-audio.sh); MobileGestalt cache moved aside again (backup .../com.apple.MobileGestalt.plist.pre-haptics) so iOS rebuilds it with the ADT /product/haptics node (boot HAPTICS=1); /var/local/bin/fpdump, /var/local/bin/sysq, /var/local/bin/shot (tools). hapticd runs by hand only.
 - 2026-10-30 /var/local/bin/mgq and /var/local/bin/autobright (phone tools, phone/tools/build.sh via tools/build-userland-linux.sh + flame-files put); read-only use so far (autobright without an argument).

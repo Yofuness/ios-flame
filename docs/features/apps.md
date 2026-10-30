@@ -48,6 +48,10 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:15 ext1: extension survey on kernel121: no extension dies any more; softwareupdated dropped
+- 150 s `oslog -l -g sandbox` while using the widgets page, Photos, Files and Notes: "Terminating app due to uncaught exception" 0, "failed to get my own sandbox container" 0. Works: Today view widgets (Notes, Battery; a third large widget shows grey placeholder bars), the Notes keyboard, Files On My iPhone. Home-screen Photos widget "No content available" = empty library (chronod schedules it, no errors). Notification Center swipe showed the lock screen instead (gesture, not checked further). Share sheet not tested (no photos).
+- New find: 796 OTAUpdate-*.ips restore reports, one every 2-5 min, from softwareupdated ("Cleaning up unused prepared updates", waiting for an IOKit service with EmbeddedDeviceTypeRoot, restore_error 60): job com.apple.mobile.softwareupdated dropped (next boot). Software Update can't work here anyway.
+
 ### 2026-10-30 11:00 sb5: "ON MY IPHONE" OPENS (kernel121 = xnu 0240 v5 + fpfix): "Folder is Empty", no error
 - 0240 history: v1 (container from the spawn blob: xpcproxy passes none), v2 (HOME=...Containers/Data/... recorded at exec), v3 (lookup by pid only), v4 (exit notify kept), v5 (the later exec hook had wiped the entry the HOME scan had just stored: the clear moved to the start of the scan).
 - sb5 (kernel121 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2, no reset): `sbcont 269` (Calculator) -> /private/var/mobile/Containers/Data/Application/91283062-E420-4FBF-8D0B-1CC8C6A50C30; kernel "op4 by sbcont for pid 269 (Calculator) -> 0"; 53 op4 lines, all Calculator/Files ones -> 0.

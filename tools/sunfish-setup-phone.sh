@@ -25,7 +25,7 @@ if [ $do_launchd = 1 ]; then
 	# row 9: jobs that crash-loop or need hardware/servers we don't have (B19, apps.md, ssh.md)
 	tools/sunfish-launchd-drop.sh com.apple.ReportCrash com.apple.accessibility.axassetsd com.apple.assetsd.nebulad \
 		com.apple.corespotlightservice com.apple.driverkitd com.apple.fairplayd.H2 com.apple.lskdd com.apple.searchd \
-		com.apple.spotlight.IndexAgent com.apple.voicemail.vmd com.apple.wifip2pd
+		com.apple.spotlight.IndexAgent com.apple.voicemail.vmd com.apple.wifip2pd com.apple.mobile.softwareupdated
 	# row 10: backboardd paces CA with a timer instead of the missing VBL (smoothness.md)
 	F get /System/Library/xpc/launchd.plist $U/launchd.plist.cur >/dev/null
 	if python3 -I - "$U/launchd.plist.cur" "$U/launchd.plist.new" <<'PY'
