@@ -643,5 +643,5 @@ int main(int argc, char **argv)
 		pthread_join(sess_th, NULL);
 	printf("camd: exit (signal)\n");
 	unlink(SUNFISH_CAMERA_SOCK);
-	return 0;
+	return 1;	/* not "successful": the launchd job (KeepAlive SuccessfulExit false) starts camd again after a kill */
 }
