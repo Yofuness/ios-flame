@@ -76,6 +76,7 @@ tools/sunfish-install-adsp.sh          # audio (unfinished feature)
 tools/sunfish-install-bt.sh            # Bluetooth firmware (crbtfw21.tlv, crnv21.bin from the factory vendor image) + btup
 tools/sunfish-install-sensors.sh       # auto-rotate: adspboot sensor feed at boot, job org.iosonpixel.sensors (kernel107+, sweetmotion=0x37 default; after step 8's config push)
 tools/sunfish-install-btbridge.sh      # Bluetooth for iOS: btbridge + BlueTool stand-in + bluetoothd transport (kernel105+, boot-arg btbridge=1, default)
+tools/sunfish-install-camera.sh        # camera for iOS (unfinished): camd job, camdev.on, StartRecorderServer, MobileGestalt rebuild; after sunfish-install-audio.sh; boot with CAMERA=1 (kernel111+)
 ```
 Reboot after these (launchd reads its job list at boot).
 
