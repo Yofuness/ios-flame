@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 Stage d DONE: one capture gives a complete raw IMX363 frame (2016x1512 RAW10) in RAM and a file (`tools/sunfish-cam-rx.sh --capture`: SMMU SMRs 0x8c0 + 0xcc0 exact -> bypass), no reset; front IMX355 answers; no ISP / iOS camera yet. **Updated:** 2026-10-31.
+**State:** 🟡 The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; front IMX355 answers. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 03:20 cam22 (kernel109, cam20r boot): e1 DONE, continuous streaming 60.1 fps; e2 exposure/gain written (2e94b32)
+- `sunfish-cam-rx.sh --stream 10`: SOF 602 / done 601, **60.10 fps** (per second 60-61), late address 0, 0 trap/bank faults, GFSR 0, VIOLATION 0, COMP_ERROR 0, CSID 3810240/3810240; slots 3647329 / 3648057 nonzero, past the ring 0; last frame saved; late writes N; restored. 2 min stable.
+- `--stream 30`: SOF 1805 / done 1804, **60.13 fps**, no second below 60, 0 faults, past the ring 0, saved, restored; 3 min stable.
+- Exposure/gain (single captures, `--stream-cmd '... --exposure E --gain G'`): frame_length 0x0340 = 1608 lines, exposure clamp 4..1568, gain code max 448 (8x); all written values read back. Mean byte: E200 G0 31.17; E1000 G0 31.14; E1500 G256 (2x) 31.29; E1500 G448 (8x) 37.56 (histogram spreads out). Exposure barely moves the mean at night: guess, a dark room shows only the black level + noise (8x gain spreads the noise). Needs a daytime test.
+- Next: e3 phone-side ISP (redfin camera_isp.c + camera_test as a phone tool on stream.raw), then f (Camera.app via SunfishAudio.driver).
 
 ### 2026-10-31 03:05 Stage e plan (read-only, research/notes/camera-stage-e.md)
 - redfin's path: kernel /dev/redwood-camera (0923+: 3 slots, 1 ms SOF/WM0_DONE poll, IMAGE_ADDR swap per SOF, exposure in group hold) -> camera_device.c (FigCaptureDevice via a BWFigCaptureDeviceVendor swizzle, inject_media.c) + camera_isp.c (CPU ISP: AE/AWB/shading/CCM/gamma) linked into their audio HAL plug-in inside mediaserverd. Our SunfishAudio.driver is that plug-in's port, so the camera files can go in the same way.
