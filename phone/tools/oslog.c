@@ -13,6 +13,7 @@
  */
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/ucontext.h>
 
 enum {
 	OS_ACTIVITY_STREAM_PROCESS_ONLY = 0x001,
@@ -31,7 +33,10 @@ enum {
 	OS_ACTIVITY_STREAM_TYPE_LOG_MESSAGE = 0x0400,
 	OS_ACTIVITY_STREAM_TYPE_LEGACY_LOG_MESSAGE = 0x0480,
 };
-enum { OS_ACTIVITY_STREAM_EVENT_STARTED = 1, OS_ACTIVITY_STREAM_EVENT_STOPPED, OS_ACTIVITY_STREAM_EVENT_FAILED };
+enum {
+	OS_ACTIVITY_STREAM_EVENT_STARTED = 1, OS_ACTIVITY_STREAM_EVENT_STOPPED, OS_ACTIVITY_STREAM_EVENT_FAILED,
+	OS_ACTIVITY_STREAM_EVENT_CHUNK_STARTED, OS_ACTIVITY_STREAM_EVENT_CHUNK_FINISHED,
+};
 typedef uint32_t os_activity_stream_flag_t;
 typedef uint32_t os_activity_stream_type_t;
 typedef uint32_t os_activity_stream_event_t;
@@ -101,10 +106,106 @@ static void *need(void *h, const char *sym)
 	return p;
 }
 
+/* B31: print where a crash happened (async-signal-safe: snprintf on a stack buffer + write) */
+static void on_segv(int sig, siginfo_t *si, void *uc)
+{
+	char b[96];
+	unsigned long pc = 0;
+#if defined(__arm64__)
+	pc = (unsigned long)((ucontext_t *)uc)->uc_mcontext->__ss.__pc;
+#else
+	(void)uc;
+#endif
+	int n = snprintf(b, sizeof(b), "oslog: SIG%s at %p pc 0x%lx\n", sig == SIGBUS ? "BUS" : "SEGV", si->si_addr, pc);
+	if (n > 0)
+		write(2, b, (size_t)n);
+	_exit(139);
+}
+
+static pid_t want_pid = -1;
+static const char *want_name, *grep;
+static os_activity_stream_flag_t flags;
+static os_activity_stream_t cur;	/* touched on the main queue only */
+static unsigned restarts;
+
+static bool on_entry(os_activity_stream_entry_t e, int err)
+{
+	if (err) {
+		printf("oslog: entry error %d\n", err);
+		return true;
+	}
+	if (!e)
+		return true;
+	if (e->type != OS_ACTIVITY_STREAM_TYPE_LOG_MESSAGE && e->type != OS_ACTIVITY_STREAM_TYPE_LEGACY_LOG_MESSAGE)
+		return true;
+	if (want_pid > 0 && e->pid != want_pid)
+		return true;
+	/* -n matches the name on every entry, so a restarted process is followed */
+	const char *path = e->proc_imagepath ? e->proc_imagepath : "?";
+	const char *proc = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+	if (want_name && !strstr(proc, want_name))
+		return true;
+	os_log_message_t m = &e->log_message;
+	char *text = copy_formatted_message(m);
+	const char *t = text ? text : (m->format ? m->format : "");
+	if (grep && !strstr(t, grep)) {
+		free(text);
+		return true;
+	}
+	struct tm tm;
+	time_t sec = m->tv_gmt.tv_sec;
+	localtime_r(&sec, &tm);
+	printf("%02d:%02d:%02d.%03d %s[%d] <%s:%s> %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec,
+	       (int)(m->tv_gmt.tv_usec / 1000), proc, e->pid, m->subsystem ? m->subsystem : "",
+	       m->category ? m->category : "", t);
+	free(text);
+	return true;
+}
+
+static void start_stream(void);
+
+/* B31: a stopped/failed stream (logd/diagnosticd connection dropped, e.g. while processes are killed
+ * and relaunched) used to _exit; now it is reconnected until -t expires */
+static void restart_later(const char *why)
+{
+	printf("oslog: stream ended (%s), reconnecting\n", why);
+	if (cur) {
+		stream_cancel(cur);
+		cur = NULL;
+	}
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(restarts < 5 ? 100 : 1000) * NSEC_PER_MSEC),
+		       dispatch_get_main_queue(), ^{ start_stream(); });
+}
+
+static void start_stream(void)
+{
+	os_activity_stream_t s = stream_for_pid(want_pid, flags, ^bool(os_activity_stream_entry_t e, int err) {
+		return on_entry(e, err);
+	});
+	restarts++;
+	if (!s) {
+		/* early after boot diagnosticd may not be up yet: retry instead of giving up */
+		if (restarts == 1)
+			fprintf(stderr, "oslog: os_activity_stream_for_pid failed (entitlements? diagnosticd not up?), retrying\n");
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), dispatch_get_main_queue(),
+			       ^{ start_stream(); });
+		return;
+	}
+	cur = s;
+	stream_set_event_handler(s, ^(os_activity_stream_t st, os_activity_stream_event_t ev) {
+		if (ev != OS_ACTIVITY_STREAM_EVENT_FAILED && ev != OS_ACTIVITY_STREAM_EVENT_STOPPED)
+			return;
+		const char *why = ev == OS_ACTIVITY_STREAM_EVENT_FAILED ? "failed" : "stopped";
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (st == cur)	/* ignore late events from an already replaced stream */
+				restart_later(why);
+		});
+	});
+	stream_resume(s);
+}
+
 int main(int argc, char **argv)
 {
-	pid_t want_pid = -1;
-	const char *want_name = NULL, *grep = NULL;
 	int secs = 10, levels = 0, c;
 
 	while ((c = getopt(argc, argv, "p:n:t:g:l")) != -1) {
@@ -119,7 +220,14 @@ int main(int argc, char **argv)
 	}
 	if (optind != argc || (want_pid > 0 && want_name))
 		usage();
-	setvbuf(stdout, NULL, _IOLBF, 0);
+	setvbuf(stdout, NULL, _IOLBF, 0);	/* line-buffered: a crash loses at most the current line */
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = on_segv;
+	sa.sa_flags = SA_SIGINFO;
+	sigaction(SIGSEGV, &sa, NULL);
+	sigaction(SIGBUS, &sa, NULL);
+	signal(SIGPIPE, SIG_IGN);	/* a closed reader shows up as write errors, not a silent kill */
 
 	void *h = dlopen("/System/Library/PrivateFrameworks/LoggingSupport.framework/LoggingSupport", RTLD_NOW);
 	if (!h) {
@@ -132,54 +240,18 @@ int main(int argc, char **argv)
 	stream_set_event_handler = need(h, "os_activity_stream_set_event_handler");
 	copy_formatted_message = need(h, "os_log_copy_formatted_message");
 
-	os_activity_stream_flag_t flags = levels ? OS_ACTIVITY_STREAM_INFO | OS_ACTIVITY_STREAM_DEBUG : 0;
+	flags = levels ? OS_ACTIVITY_STREAM_INFO | OS_ACTIVITY_STREAM_DEBUG : 0;
 	if (want_pid > 0)
 		flags |= OS_ACTIVITY_STREAM_PROCESS_ONLY;
-
-	os_activity_stream_t s = stream_for_pid(want_pid, flags, ^bool(os_activity_stream_entry_t e, int err) {
-		if (err || !e)
-			return true;
-		if (e->type != OS_ACTIVITY_STREAM_TYPE_LOG_MESSAGE && e->type != OS_ACTIVITY_STREAM_TYPE_LEGACY_LOG_MESSAGE)
-			return true;
-		if (want_pid > 0 && e->pid != want_pid)
-			return true;
-		const char *path = e->proc_imagepath ? e->proc_imagepath : "?";
-		const char *proc = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
-		if (want_name && !strstr(proc, want_name))
-			return true;
-		os_log_message_t m = &e->log_message;
-		char *text = copy_formatted_message(m);
-		const char *t = text ? text : (m->format ? m->format : "");
-		if (grep && !strstr(t, grep)) {
-			free(text);
-			return true;
-		}
-		struct tm tm;
-		time_t sec = m->tv_gmt.tv_sec;
-		localtime_r(&sec, &tm);
-		printf("%02d:%02d:%02d.%03d %s[%d] <%s:%s> %s\n", tm.tm_hour, tm.tm_min, tm.tm_sec,
-		       (int)(m->tv_gmt.tv_usec / 1000), proc, e->pid, m->subsystem ? m->subsystem : "",
-		       m->category ? m->category : "", t);
-		free(text);
-		return true;
-	});
-	if (!s) {
-		fprintf(stderr, "oslog: os_activity_stream_for_pid failed (entitlements?)\n");
-		return 1;
-	}
-	stream_set_event_handler(s, ^(os_activity_stream_t st, os_activity_stream_event_t ev) {
-		if (ev == OS_ACTIVITY_STREAM_EVENT_FAILED || ev == OS_ACTIVITY_STREAM_EVENT_STOPPED) {
-			fprintf(stderr, "oslog: stream %s\n", ev == OS_ACTIVITY_STREAM_EVENT_FAILED ? "failed" : "stopped");
-			fflush(stdout);
-			_exit(ev == OS_ACTIVITY_STREAM_EVENT_FAILED);
-		}
-	});
-	stream_resume(s);
+	dispatch_async(dispatch_get_main_queue(), ^{ start_stream(); });
 	if (secs > 0)
 		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)secs * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
 			/* B31: exit() ran atexit/teardown while LoggingSupport threads still delivered entries
 			 * (SIGSEGV far 0x10/0x20 at the timeout); flush and leave without teardown */
-			stream_cancel(s);
+			if (cur)
+				stream_cancel(cur);
+			if (restarts > 1)
+				fprintf(stderr, "oslog: %u stream starts\n", restarts);
 			fflush(stdout);
 			_exit(0);
 		});
