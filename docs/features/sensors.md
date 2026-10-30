@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 13:15 px2: kernel122 (xnu 0241 prox Placement = 1): NO MORE backboardd crash loop; detection not active yet
+- kernel122 sweetmotion=0x3f: "exec backboardd" 1 in 2.5 min, 0 applyUIMode/NSInvalidArgumentException (px1: 11 restarts); kernel "SWEET MOTION: prox property read Placement: present (pid 60 backboardd)". So the prox HID service is accepted.
+- But `proxon 1 40` ("requested proximity mode 1") read "active no, far" every second; `m fake prox 1` ("fake prox 3f800000 ... repeating for 40 s") and flame-shots: screen stayed on, no "SWEET FB: display off". Kernel prox lines show "far (mask 0x0)" (the fake may be parsed as 1.0 -> no mask?). backboardd: "_proxState=kProxNone".
+- Open: why the detection request is not active (entitlement for BKSHIDServicesRequestProximityDetectionMode? mode number?) and whether the fake near reaches the event (mask). Normal recipe stays sweetmotion=0x37 for now.
+
 ### 2026-10-30 12:45 px1: proximity service on (sweetmotion=0x3f) still crash-loops backboardd
 - kernel121 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetmotion=0x3f: "exec backboardd" x11 in ~130 s (every ~11 s from 23.5 s); "-[NSNull applyUIMode:]: unrecognized selector", NSInvalidArgumentException (69 lines), liblog_aop lines; black screen + spinner. backboardd opened SweetHIDProx (1 client), read IOCFPlugInTypes / IOClassNameOverride / QueueSize (absent). The 2026-10-26 fixes (DisplayIntegrated, ProtectedAccess, SensorPropertySupported, initial far event) don't help. Back on 0x37: backboardd stable.
 - New tool phone/tools/proxon.m (479fc5f: BKSHIDServicesRequestProximityDetectionMode on/off + active/near getters) for the test once prox loads. Next: backboardd disassembly for the NSNull source (investigator).
