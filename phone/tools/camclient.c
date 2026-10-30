@@ -108,6 +108,9 @@ int main(int argc, char **argv)
 		return 1;
 	if (el >= 0)
 		printf("camclient: EXPOSURE %d lines gain %d -> %d\n", el, eg, cmd(s, REDWOOD_CAMERA_EXPOSURE, (uint32_t)el, (uint32_t)eg, 5));
+	/* af3: again now: the end of the session before this one clears a FOCUS sent while it was stopping */
+	if (focus >= 0)
+		printf("camclient: FOCUS %d (started) -> %d\n", focus, cmd(s, REDWOOD_CAMERA_FOCUS, (uint32_t)focus, 0, 5));
 	uint8_t *buf = malloc(sh->data_bytes);
 	struct redwood_camera_frame f;
 	uint64_t last = 0, first = 0, gaps = 0, torn = 0, timeouts = 0;
