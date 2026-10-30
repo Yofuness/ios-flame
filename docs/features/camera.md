@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 02:40 cam20 (kernel109, cam18r boot): sf_axi on + one SMR 0x8c0/0x400: frame ALL ZERO, RESET a few min later
+- camid: camera_sf_axi 0x80000000 -> 0x1 after the GDSC (hf_axi 0x1, xo 0x1). SMRs: 0x8c0/0x400 -> CB18 bypass, 6 others -> CB19 trap. buf done ~200 ms; 0 faults sampled; **frame 0 of 3810240 nonzero, guard 0**: not even the 0x8c0 half landed. Late writes N, restored. Then SSH timed out a few minutes after "powered down"; fastboot, 4439 mV; rescued cam20r (23:13). Per-boot log 20261029-230036.log ends at ~1425 s, no panic.
+- New reading: every run with the one masked SMR (0x8c0 mask 0x400: cam17, cam18B, cam20) lost all data and reset; cam15 (exact SMR 0x8c0 only, 0xcc0 unmatched) landed the 0x8c0 half and reset; cam16/18A/19 (exact 0x8c0 + 0xcc0 on an exact trap SMR) landed it and did not reset. So the masked SMR may itself be the problem (unverified). sf_axi stays on (redfin does it; harmless).
+- Next (cam21): two exact SMRs, 0x8c0 and 0xcc0 (`--sid 0x8c0 --sid2 0xcc0`), both into the bypass bank.
+
 ### 2026-10-31 02:25 cam20 prep (read-only, kernel109 cam18r boot, camera powered down): TBUs are on; camera_sf_axi is off
 - pinsample reads: TBU vote GDSCs 0x17d040 (hf0) / 0x17d044 (sf) / 0x17d048 (hf1) all 0x80000001 (bit31 PWR_ON = 1, our SW_COLLAPSE vote off: someone else keeps all three TBUs on); TBU status 0x15182210/18/20 = 1, 1, 1. So the hf1 TBU behind SID 0xcc0 is powered: the research's first guess is out.
 - GCC camera_hf_axi 0x10b020 0x80000001 (camera off now); **camera_sf_axi 0x10b06c = 0x80000000 (disabled)** (Linux v6.15 gcc-sm7150.c: halt/enable 0xb06c; research/re/gcc-sm7150.c). redfin 0921 enables sf_axi; we never did.

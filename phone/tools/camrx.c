@@ -1605,6 +1605,7 @@ static uint16_t sid_mask;
 /* cam18: SID 0xcc0 carries the odd 1 KB blocks and passing it resets the phone; --addr-offset 0x400 moves the frame
  * 1 KB up, so a second capture gets the other half through SID 0x8c0 (tools/sunfish-cam-merge.py joins them) */
 static uint32_t addr_off;
+static int sid2 = -1;	/* --sid2 0xNNN */
 
 static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, int xlate)
 {
@@ -1620,6 +1621,8 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 	if (sid >= 0) {
 		int in = 0;
 		m[nm][0] = (uint16_t)(sid & 0x7fff), m[nm][1] = sid_mask, tk[nm++] = 0;
+		if (sid2 >= 0)	/* cam21: a second exact SMR into the identity bank (the 0x400-mask SMR failed: cam20) */
+			m[nm][0] = (uint16_t)sid2, m[nm][1] = 0, tk[nm++] = 0;
 		for (int k = 0; k < 3; k++)
 			if (smr_overlap(ife_smr[k][0], ife_smr[k][1], m[0][0], 0))	/* the base SID must be a DT one */
 				in = 1;
@@ -1835,7 +1838,9 @@ int main(int argc, char **argv)
 				addr_off = (uint32_t)strtoul(argv[++i], NULL, 0);
 				if (addr_off & 0x3ff || addr_off >= 0x10000)
 					goto usage;
-			} else if (!strcmp(argv[i], "--sid-mask") && i + 1 < argc)
+			} else if (!strcmp(argv[i], "--sid2") && i + 1 < argc)
+				sid2 = (int)(strtoul(argv[++i], NULL, 0) & 0x7fff);
+			else if (!strcmp(argv[i], "--sid-mask") && i + 1 < argc)
 				sid_mask = (uint16_t)(strtoul(argv[++i], NULL, 0) & 0x7fff);
 			else if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
 				cmd = argv[++i];
@@ -1854,7 +1859,7 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid-mask 0xM] [--addr-offset 0x400]|--xlate "
+			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid2 0xNNN] [--sid-mask 0xM] [--addr-offset 0x400]|--xlate "
 			"[--stream-cmd \"CMD\"] [--alloc32]\n");
 	return 2;
 }
