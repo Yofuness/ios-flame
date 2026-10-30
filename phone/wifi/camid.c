@@ -1,7 +1,11 @@
 /*
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
- *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis]
+ *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE]
+ * --stream FILE (camera stage b, rear only): after the ID read, write FILE's registers (`0xADDR 0xVAL DELAY_US` a
+ * line, `#` comments; from tools/sunfish-camtab.py; at most 2000), read back 0x0136/0x0137/0x0112/0x0114, stream
+ * on (0x0100 = 1), sample the frame counter 0x0005 every 100 ms for 1 s, read 0x0100, stream off. Any CCI error
+ * aborts (stream off first if on) with the failing line and address.
  * --mclk-asis: leave the MCLK RCG as it is (e.g. 24 MHz from `camclk mclk 0 24`) instead of setting it to XO.
  * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
  * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
@@ -49,6 +53,7 @@
 #define TLMM_N		0x3900000
 
 static int dry, keep, front, mclk_asis;
+static const char *stream_file;
 static int gdsc_on, cci_clk_on, in_pd;
 
 /* --- MMIO with the hazard rule --- */
@@ -326,6 +331,125 @@ static int read_id(unsigned a)
 	return 0;
 }
 
+/* --- camera stage b: 16-bit address, 8-bit data writes on the same queue --- */
+static int write_reg(unsigned a, unsigned reg, unsigned v)
+{
+	uint32_t w[3] = { 1 | a << 4, 9 | 3 << 4 | (reg >> 8) << 8 | (reg & 0xff) << 16 | (v & 0xff) << 24, 0x108 };
+	if (dry) {
+		printf("[dry] cci wr 0x%02x %#06x = %#04x\n", a, reg, v);
+		return 0;
+	}
+	if (cci_run(w, 3, cci_q_report)) {
+		printf("camid: 0x%02x: write %#06x = %#04x failed\n", a, reg, v);
+		return -1;
+	}
+	return 0;
+}
+
+/* one byte at reg (the byte after the slave echo); -1 on error */
+static int read_u8(unsigned a, unsigned reg)
+{
+	uint32_t w1[3] = { 1 | a << 4, 9 | 2 << 4 | (reg >> 8) << 8 | (reg & 0xff) << 16, 0x108 };
+	uint32_t w2[3] = { 1 | a << 4, 10 | 1 << 4, 0x108 };
+	if (dry) {
+		printf("[dry] cci rd 0x%02x %#06x\n", a, reg);
+		return 0;
+	}
+	if (cci_run(w1, 3, cci_q_report) || cci_run(w2, 3, cci_rd_done)) {
+		printf("camid: 0x%02x: read %#06x failed\n", a, reg);
+		return -1;
+	}
+	uint32_t lvl = mrd(CCI + 0x11c + cci_mo), v = 0, b[8];
+	unsigned nb = 0;
+	for (unsigned i = 0; i < lvl && i < 2; i++) {
+		v = mrd(CCI + 0x118 + cci_mo);
+		for (int k = 0; k < 4; k++)
+			b[nb++] = (v >> (8 * k)) & 0xff;
+	}
+	if (nb < 2) {
+		printf("camid: 0x%02x: read %#06x: level %u\n", a, reg, lvl);
+		return -1;
+	}
+	return b[1];	/* b[0] is the slave echo (cam2: 35 03 63 63) */
+}
+
+#define MAX_WRITES 2000
+static struct sw { unsigned addr, val, us, line; } sws[MAX_WRITES];
+
+static int stream(unsigned a)
+{
+	FILE *f = fopen(stream_file, "r");
+	char buf[256];
+	int n = 0, ln = 0, on = 0;
+	if (!f) {
+		printf("camid: --stream %s: cannot open\n", stream_file);
+		return -1;
+	}
+	while (fgets(buf, sizeof buf, f)) {
+		char *c = strchr(buf, '#'), *e;
+		unsigned long ad, v, us;
+		ln++;
+		if (c)
+			*c = 0;
+		c = buf + strspn(buf, " \t\r\n");
+		if (!*c)
+			continue;
+		ad = strtoul(c, &e, 0);
+		if (e == c || (v = strtoul(c = e, &e, 0), e == c) || (us = strtoul(c = e, &e, 0), e == c) ||
+		    *(e + strspn(e, " \t\r\n")) || ad > 0xffff || v > 0xff || us > 1000000 || n >= MAX_WRITES) {
+			printf("camid: --stream %s line %d: bad or too many (max %d)\n", stream_file, ln, MAX_WRITES);
+			fclose(f);
+			return -1;
+		}
+		sws[n++] = (struct sw){ ad, v, us, ln };
+	}
+	fclose(f);
+	printf("camid: --stream %s: %d writes\n", stream_file, n);
+	for (int i = 0; i < n; i++) {
+		if (write_reg(a, sws[i].addr, sws[i].val)) {
+			printf("camid: --stream: line %u addr %#06x failed\n", sws[i].line, sws[i].addr);
+			return -1;
+		}
+		if (sws[i].us)
+			usleep(sws[i].us);
+	}
+	static const unsigned rb[4] = { 0x0136, 0x0137, 0x0112, 0x0114 };
+	for (int i = 0; i < 4; i++) {
+		int v = read_u8(a, rb[i]);
+		if (v < 0)
+			return -1;
+		printf("camid: readback %#06x = %#04x\n", rb[i], v);
+	}
+	int rc = -1;
+	if (write_reg(a, 0x0100, 1)) {
+		printf("camid: --stream: stream on (0x0100) failed\n");
+		goto off;
+	}
+	on = 1;
+	printf("camid: stream on\n");
+	for (int t = 0; t <= 10; t++) {
+		int v = read_u8(a, 0x0005);
+		if (v < 0)
+			goto off;
+		printf("camid: t=%d ms frame_count 0x0005 = %d\n", t * 100, v);
+		if (t < 10)
+			usleep(100000);
+	}
+	int mode = read_u8(a, 0x0100);
+	if (mode < 0)
+		goto off;
+	printf("camid: mode_select 0x0100 = %#04x\n", mode);
+	rc = 0;
+off:
+	if (on) {
+		if (write_reg(a, 0x0100, 0))
+			rc = -1;
+		else
+			printf("camid: stream off\n");
+	}
+	return rc;
+}
+
 /* CCI reset (all masters) + clear IRQ status; also run after a front NACK so the next address starts clean */
 static void cci_reset(void)
 {
@@ -353,12 +477,18 @@ int main(int argc, char **argv)
 			front = 1;
 		else if (!strcmp(argv[i], "--mclk-asis"))
 			mclk_asis = 1;
+		else if (!strcmp(argv[i], "--stream") && i + 1 < argc)
+			stream_file = argv[++i];
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE]\n");
 			return 2;
 		}
+	}
+	if (stream_file && front) {
+		fprintf(stderr, "camid: --stream is rear only\n");
+		return 2;
 	}
 	if (addr && addr != 0x10 && addr != 0x1a && !(front && (addr == 0x36 || addr == 0x2d)))
 		return 2;
@@ -528,6 +658,8 @@ int main(int argc, char **argv)
 		rc = read_id(addr) ? 1 : 0;
 	else if (read_id(0x10) == 0 || read_id(0x1a) == 0)
 		rc = 0;
+	if (!rc && stream_file && stream(addr ? addr : 0x1a))
+		rc = 1;
 	power_down();
 	return rc;
 }
