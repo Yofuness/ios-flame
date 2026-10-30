@@ -13,10 +13,11 @@
  *   camrx rx report                    read-only: RX/RDI0 counters + IRQ status (not cleared), CSIPHY0 status
  *   camrx [--dry-run] rx stop          RDI0 off, RX off, masks 0
  * Stage d (one frame through IFE-lite RDI0 WM0 into RAM; spec research/notes/camera-stage-d.md):
- *   camrx [--dry-run] capture OUTFILE [--stream-cmd "CMD"]  one process for the whole DMA: 8 MB PMEM buffer (<4 GB),
- *       SMMU identity for SIDs 0x800/0x5e0 (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
+ *   camrx [--dry-run] capture OUTFILE [--stream-cmd "CMD"] [--alloc32]  one process for the whole DMA: buffer =
+ *       display carveout slot1 PA 0x9cb00000 + 0xB00000 (zero-copy slot 1, unused without sweetfb_zerocopy; XNU has
+ *       no RAM below 4 GB, cam10), zeroed through /dev/pmem first; --alloc32: 8 MB PMEM_ALLOC32 instead. SMMU identity for SIDs 0x800/0x5e0 (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
  *       mode, runs CMD (default: camid mode 8 stream), WM0 off at the first buf done, readbacks, guard check,
- *       frame -> OUTFILE, SMMU restore, PMEM_FREE. Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
+ *       frame -> OUTFILE, SMMU restore, PMEM_FREE (--alloc32 only). Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
  * Never enables PLLs/GDSCs/regulators, never writes GCC/RPMh/refgen. Writes only the whitelist in allowed();
  * every write is logged with its read-back. No camcc register is read before the GDSC check passes, no CSID
@@ -27,6 +28,8 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
+#include <time.h>
 #include <unistd.h>
 #include "../wifi/pmem.h"
 #include "../wifi/smmu.h"
@@ -151,7 +154,9 @@
 #define WM0_BURST_LIMIT	0x225c
 
 #define FRAME_BYTES	3810240u	/* 2016 x 1512 RAW10 packed = CSID bytes ping/pong in cam8 */
-#define CAP_BUF		0x800000u	/* frame + guard (must stay zero) */
+#define CAP_BUF		0x800000u	/* --alloc32: frame + guard (must stay zero) */
+#define CAP_CO_PA	0x9cb00000ull	/* display carveout zero-copy slot 1 (SweetSurface SWEET_ZC_SLOT_PA(1)) */
+#define CAP_CO_LEN	0xB00000u	/* frame + guard */
 #define CAM_SID		0x800u		/* redfin: one SMR covers all msm_cam_smmu_ife SIDs (notes section 2) */
 #define CAM_SID_MASK	0x5e0u
 #define STREAM_CMD	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt"
@@ -759,7 +764,9 @@ static int rx_stop(void)
 
 static struct {
 	int armed, ife, smmu;	/* what cap_down must undo */
-	uint64_t pa;		/* PMEM buffer, 0 = none */
+	uint64_t pa;		/* buffer, 0 = none */
+	uint32_t len;		/* frame + guard */
+	int owned;		/* PMEM_ALLOC32'd: PMEM_FREE it */
 } cap;
 
 static void iw(uint32_t off, uint32_t v, const char *why)
@@ -795,7 +802,7 @@ static void cap_down(void)
 		cap.smmu = 0;
 		smmu_release("cam");
 	}
-	if (cap.pa && !dry) {
+	if (cap.pa && cap.owned && !dry) {
 		printf("camrx: PMEM_FREE %#llx -> %d\n", (unsigned long long)cap.pa, pm_free(cap.pa));
 		cap.pa = 0;
 	}
@@ -937,21 +944,84 @@ static int save_frame(uint64_t pa, const char *out)
 	return fclose(f) ? 1 : 0;
 }
 
-static int capture(const char *out, const char *cmd)
+/* the carveout slot1 is ours only while the framebuffer's zero-copy mode is off */
+static int zerocopy_on(void)
+{
+	char ba[1024] = "";
+	size_t n = sizeof ba - 1;
+	if (sysctlbyname("kern.bootargs", ba, &n, NULL, 0)) {
+		perror("camrx: sysctl kern.bootargs");
+		return 1;
+	}
+	ba[n < sizeof ba ? n : sizeof ba - 1] = 0;
+	for (char *p = ba; (p = strstr(p, "sweetfb_zerocopy=")); p++) {
+		if (p != ba && p[-1] != ' ')
+			continue;
+		if (strtoul(p + 17, NULL, 0)) {
+			printf("camrx: boot-arg sweetfb_zerocopy set (\"%s\"): carveout slot1 is the display's, abort "
+			       "(use --alloc32)\n", ba);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static double now_s(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+/* sweet_pmem takes multi-byte pwrite/pread on unmanaged PAs (page by page, 32-bit stores): 64 KB chunks */
+static int cap_zero(uint64_t pa, uint32_t len)
+{
+	static uint8_t z[65536], b[4];
+	double t0 = now_s();
+	for (uint32_t o = 0; o < len; o += sizeof z)
+		if (pm_wr(pa + o, z, len - o < sizeof z ? len - o : sizeof z))
+			return 1;
+	double t1 = now_s();
+	uint32_t bad = 0;
+	for (uint32_t o = 0; o < len; o += 4096) {	/* sample: first word of every 4 KB page */
+		if (pm_rd(pa + o, b, 4))
+			return 1;
+		bad += (b[0] | b[1] | b[2] | b[3]) != 0;
+	}
+	printf("camrx: zeroed %#x B at %#llx in %.3f s; readback of %u pages: %u nonzero\n", len,
+	       (unsigned long long)pa, t1 - t0, len / 4096, bad);
+	return bad != 0;
+}
+
+static int capture(const char *out, const char *cmd, int alloc32)
 {
 	if (!dry && cap_precheck())
 		return 1;
 	printf("camrx: note: SMMU SIDs 0x800/0x5e0 (redfin), WM frame mode values (redfin/Linux) and that one frame = "
 	       "%u B (cam8 CSID bytes) are taken over, not verified here\n", FRAME_BYTES);
-	stage("pmem alloc 8 MB");
 	atexit(cap_down);
-	cap.pa = dry ? 0x80000000ull : pm_alloc32(CAP_BUF, 0x10000);	/* needs kernel109 (xnu 0232) */
-	if (!cap.pa)
-		return 1;
-	printf("camrx: buffer PA %#llx + %#x\n", (unsigned long long)cap.pa, CAP_BUF);
-	if (cap.pa + CAP_BUF > 0x100000000ull) {	/* IMAGE_ADDR is 32 bit */
-		printf("camrx: buffer above 4 GB, WM can't reach it: abort\n");
-		return 1;
+	if (alloc32) {
+		stage("pmem alloc 8 MB");
+		cap.len = CAP_BUF;
+		cap.pa = dry ? 0x80000000ull : pm_alloc32(CAP_BUF, 0x10000);	/* needs kernel109 (xnu 0232) */
+		if (!cap.pa)
+			return 1;
+		cap.owned = 1;
+		printf("camrx: buffer PA %#llx + %#x\n", (unsigned long long)cap.pa, cap.len);
+		if (cap.pa + cap.len > 0x100000000ull) {	/* IMAGE_ADDR is 32 bit */
+			printf("camrx: buffer above 4 GB, WM can't reach it: abort\n");
+			return 1;
+		}
+	} else {
+		/* cam10: no XNU RAM below 4 GB; the splash carveout's zero-copy slot 1 is free without sweetfb_zerocopy */
+		stage("buffer: carveout slot1, zero it");
+		if (!dry && zerocopy_on())
+			return 1;
+		cap.len = CAP_CO_LEN;
+		printf("camrx: buffer PA %#llx + %#x (carveout slot1)\n", CAP_CO_PA, cap.len);
+		if (!dry && cap_zero(CAP_CO_PA, cap.len))
+			return 1;
+		cap.pa = CAP_CO_PA;
 	}
 	stage("smmu identity cam 0x800/0x5e0");
 	smmu_dry = dry;
@@ -1016,9 +1086,9 @@ static int capture(const char *out, const char *cmd)
 		printf("camrx: smmu after: GFSR %#x GFSYNR1 %#x; CB%d FSR %#x (fault bits %#x) FAR %#x%08x FSYNR0 %#x\n",
 		       rd32(0x15000048u), rd32(0x15000054u), smmu_last.cb, fsr, fsr & 0x800001feu,
 		       cbp ? rd32(cbp + 0x64) : 0, cbp ? rd32(cbp + 0x60) : 0, cbp ? rd32(cbp + 0x68) : 0);
-		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, CAP_BUF - FRAME_BYTES);
+		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, cap.len - FRAME_BYTES);
 		printf("camrx: nonzero bytes: frame %llu of %u, guard %llu of %u%s\n", (unsigned long long)nf, FRAME_BYTES,
-		       (unsigned long long)ng, CAP_BUF - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
+		       (unsigned long long)ng, cap.len - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
 		bad = (fsr & 0x800001feu) || ng;
 		if (save_frame(cap.pa, out)) {
 			printf("camrx: writing %s failed\n", out);
@@ -1069,8 +1139,19 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[a + 1], "stop"))
 			return rx_stop();
 	}
-	if (!strcmp(argv[a], "capture") && (a + 2 == argc || (a + 4 == argc && !strcmp(argv[a + 2], "--stream-cmd"))))
-		return capture(argv[a + 1], a + 4 == argc ? argv[a + 3] : STREAM_CMD);
+	if (!strcmp(argv[a], "capture") && a + 2 <= argc) {
+		const char *cmd = STREAM_CMD;
+		int a32 = 0;
+		for (int i = a + 2; i < argc; i++) {
+			if (!strcmp(argv[i], "--alloc32"))
+				a32 = 1;
+			else if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
+				cmd = argv[++i];
+			else
+				goto usage;
+		}
+		return capture(argv[a + 1], cmd, a32);
+	}
 	if (!strcmp(argv[a], "tpg") && a + 2 >= argc) {
 		int s = a + 1 < argc ? atoi(argv[a + 1]) : 1;
 		if (s < 1 || s > 60)
@@ -1079,6 +1160,6 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop | capture OUTFILE [--stream-cmd \"CMD\"]\n");
+			"phy off | rx arm|report|stop | capture OUTFILE [--stream-cmd \"CMD\"] [--alloc32]\n");
 	return 2;
 }
