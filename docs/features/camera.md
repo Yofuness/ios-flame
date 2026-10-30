@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:40 cam4 (kernel108, sweetse9=2 sweetcampmic=2): MCLK0 runs at 24 MHz from PLL2
+- Battery 4455 mV, SSH 18 s. campmic GPIOs set at ~30.6 s of boot (not 146 s as on kernel94): "after ... 40 01 ... 44 80 45 01 46 80".
+- `pll2 on`: lock, MODE 0xc0000007. `camid --keep`: SLG LDOs on (STATUS 0x02), TITAN GDSC 0x22f001 -> 0xf822f000, cpas/core/camnoc/cci_0 on, MCLK0 on XO (CBCR 0x1), reset high; CCI: 0x10 NACK (status 0x8000000), then 0x1a timeout (status 0). Same as 2026-10-28, where 0x1a only answered when probed alone (`--addr 0x1a`).
+- **`camclk mclk 0 24` with the GDSC up: branch on** (CBCR 0x1, CLK_OFF clear), CFG 0x2501 (src 5 = PLL2 out_aux 480 MHz, div 1), M 1, N 0xec, D 0xeb (= 480/20 = 24 MHz). cam2/cam3's "stuck off" was the GDSC being off. `camclk status`: PLL2 lock 1, VCO 1920 MHz. `camclk off` + `camid`: everything powered down (pd lines). No reset.
+- Not measured: the actual MCLK frequency on the pin (no scope); the ID read at 24 MHz.
+- camid gets `--mclk-asis` (keeps camclk's 24 MHz RCG instead of resetting to XO) for cam5.
+
 ### 2026-10-30 21:25 cam3 (kernel108, sweetse9=2; no sweetcampmic): camera PMIC off, sensor not reached
 - Battery 4455 mV; boot 5 s, SSH 16 s; webcam: Apple logo (dim, night mode). No reset.
 - `pll2 on`: locked again (MODE 0xc0000006, 0xc0000007 after OUTCTRL), same register values as cam2.

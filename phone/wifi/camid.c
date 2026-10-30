@@ -1,7 +1,8 @@
 /*
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
- *   camid [--dry-run] [--addr 0xNN] [--keep] [--front]
+ *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis]
+ * --mclk-asis: leave the MCLK RCG as it is (e.g. 24 MHz from `camclk mclk 0 24`) instead of setting it to XO.
  * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
  * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
  * --dry-run: reads only the SLG51000, GCC, TLMM and the TITAN_TOP GDSC; every write and every other read is
@@ -47,7 +48,7 @@
 #define TLMM_S		0x3d00000
 #define TLMM_N		0x3900000
 
-static int dry, keep, front;
+static int dry, keep, front, mclk_asis;
 static int gdsc_on, cci_clk_on, in_pd;
 
 /* --- MMIO with the hazard rule --- */
@@ -350,10 +351,12 @@ int main(int argc, char **argv)
 			keep = 1;
 		else if (!strcmp(argv[i], "--front"))
 			front = 1;
+		else if (!strcmp(argv[i], "--mclk-asis"))
+			mclk_asis = 1;
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis]\n");
 			return 2;
 		}
 	}
@@ -485,7 +488,11 @@ int main(int argc, char **argv)
 	st_pins = 1;
 	st_reset = !dry;
 
-	rcg_xo(front ? "mclk2" : "mclk0", mclk_rcg, 1);
+	if (mclk_asis)
+		printf("camid: %s rcg left as is: cfg %#x m %#x n %#x\n", front ? "mclk2" : "mclk0", mrd(mclk_rcg + 4),
+		       mrd(mclk_rcg + 8), mrd(mclk_rcg + 12));
+	else
+		rcg_xo(front ? "mclk2" : "mclk0", mclk_rcg, 1);
 	branch_on(front ? "mclk2" : "mclk0", mclk_cbcr, 0, &st_mclk);
 
 	/* E. reset */
