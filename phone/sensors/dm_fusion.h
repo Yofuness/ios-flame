@@ -31,14 +31,15 @@ _Static_assert(offsetof(struct dm_report3, user_accel) == 0x28, "dm_report3 user
 struct __attribute__((packed)) dm_report2 {
 	uint8_t type;		/* 2 */
 	uint8_t mag_accuracy;	/* @0x01: CMMagneticFieldCalibrationAccuracy 0/1/2, 0xff uncalibrated */
-	uint16_t status;	/* @0x02, 0 */
+	uint16_t status;	/* @0x02: bit 8 (0x100) = heading valid; CLCompass7 publishes only with it (dm3 RE) */
 	uint64_t seq_or_ts;	/* @0x04: mach time */
 	uint32_t unk;		/* @0x0c, 0 */
 	float mag_raw[3];	/* @0x10: uT */
 	float q[4];		/* @0x1c: x y z w, device -> (x magnetic north, z up) */
 	float rot_rate[3];	/* @0x2c */
 	float user_accel[3];	/* @0x38 */
-	float f44, f48;		/* @0x44, @0x48: 0 */
+	float heading;		/* @0x44: magnetic heading, degrees clockwise from north (CLCompass7 uses it as is) */
+	float heading_acc;	/* @0x48: heading accuracy in degrees, -1 invalid (locationd clamps to 10..180) */
 	float mag_bias[3];	/* @0x4c: uT */
 };
 _Static_assert(sizeof(struct dm_report2) == 88, "dm_report2 size");
@@ -46,8 +47,8 @@ _Static_assert(offsetof(struct dm_report2, mag_raw) == 0x10, "dm_report2 mag_raw
 _Static_assert(offsetof(struct dm_report2, q) == 0x1c, "dm_report2 q");
 _Static_assert(offsetof(struct dm_report2, rot_rate) == 0x2c, "dm_report2 rot_rate");
 _Static_assert(offsetof(struct dm_report2, user_accel) == 0x38, "dm_report2 user_accel");
-_Static_assert(offsetof(struct dm_report2, f44) == 0x44, "dm_report2 f44");
-_Static_assert(offsetof(struct dm_report2, f48) == 0x48, "dm_report2 f48");
+_Static_assert(offsetof(struct dm_report2, heading) == 0x44, "dm_report2 heading");
+_Static_assert(offsetof(struct dm_report2, heading_acc) == 0x48, "dm_report2 heading_acc");
 _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bias");
 
 /* dm2: hard-iron calibration accuracy from the per-axis span of the min/max box (every axis must reach it) */
@@ -81,6 +82,8 @@ int dm_mag_accuracy(const struct dm_fusion *f);	/* -1 uncalibrated, 0..2 */
 void dm_mag_bias(const struct dm_fusion *f, float b[3], float span[3]);
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
+float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */
+#define DM_STATUS_HEADING 0x0100
 void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r);
 
 #endif

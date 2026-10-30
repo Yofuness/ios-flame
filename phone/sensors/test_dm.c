@@ -11,11 +11,9 @@ static int fails;
 
 static float heading(const struct dm_report2 *r)
 {
-	float x = r->q[0], y = r->q[1], z = r->q[2], w = r->q[3];
-	/* R * (0, 1, 0): device top in the reference frame */
-	float tx = 2 * (x * y - w * z), ty = 1 - 2 * (x * x + z * z);
-	float h = atan2f(-ty, tx) * 180.0f / (float)M_PI;	/* east = -y */
-	return h < 0 ? h + 360 : h;
+	float q[4];
+	memcpy(q, r->q, sizeof(q));	/* packed struct: no direct member pointer */
+	return dm_heading_deg(q);
 }
 
 static void check(const char *what, float got, float want, float tol)
@@ -58,6 +56,9 @@ int main(void)
 	const float west[3] = { 20, 0, -40 };
 	check("top west: heading", run(west, 0, &r), 270, 1);
 	check("top north, yaw 30: heading", run(north, 30, &r), 30, 1);
+	check("report heading field", r.heading, 30, 1);
+	check("report status 0x100", r.status == DM_STATUS_HEADING, 1, 0);
+	check("report heading accuracy", r.heading_acc, 10, 0);
 	/* no calibration: accuracy 0xff */
 	struct dm_fusion f;
 	dm_init(&f, 0.04f);

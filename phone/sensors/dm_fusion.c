@@ -290,6 +290,15 @@ void dm_report3(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm
 	memcpy(r->user_accel, ua, sizeof(ua));
 }
 
+float dm_heading_deg(const float qv[4])
+{
+	float x = qv[0], y = qv[1], z = qv[2], w = qv[3];
+	/* R * (0, 1, 0): device top in the reference frame (x = north, y = west, z = up) */
+	float tx = 2 * (x * y - w * z), ty = 1 - 2 * (x * x + z * z);
+	float h = atan2f(-ty, tx) * 180.0f / (float)M_PI;	/* east = -y */
+	return h < 0 ? h + 360 : h;
+}
+
 void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r)
 {
 	float span[3], q[4], ua[3], b[3];
@@ -306,4 +315,8 @@ void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm
 	memcpy(r->rot_rate, f->gyro, sizeof(r->rot_rate));
 	memcpy(r->user_accel, ua, sizeof(ua));
 	memcpy(r->mag_bias, b, sizeof(b));
+	/* dm3: locationd takes the heading ready-made from @0x44/@0x48 and needs status bit 8 */
+	r->heading = dm_heading_deg(q);
+	r->heading_acc = acc >= 2 ? 10.0f : acc == 1 ? 20.0f : acc == 0 ? 35.0f : -1.0f;
+	r->status = acc >= 0 ? DM_STATUS_HEADING : 0;
 }
