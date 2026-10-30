@@ -514,6 +514,7 @@ struct stream {
 	pthread_mutex_t lock;
 	volatile bool   running;
 	volatile bool   graph_running;  /* the capture graph has started this stream: frames may be given out */
+	volatile bool   given_back;     /* sunfish (f3): relinquished, not asked for again: no more reopening (worker()) */
 	/*
 	 * redfin (B8): the worker threads. Each has the generation it was started for and goes when that is not the
 	 * stream's any more; a stop waits for them a while (workers, worker_gone), not for ever: a worker can be
@@ -1989,13 +1990,32 @@ worker_wanted(const struct stream *s, unsigned generation)
 	return s->running && s->generation == generation;
 }
 
+static bool worker_unwanted_open(const struct stream *s);
+
 /* a pause of `ms', cut short when the worker is not wanted any more */
 static void
 worker_pause(const struct stream *s, unsigned generation, unsigned ms)
 {
-	for (unsigned waited = 0; waited < ms && worker_wanted(s, generation); waited += 50) {
+	for (unsigned waited = 0; waited < ms && worker_wanted(s, generation) && !worker_unwanted_open(s); waited += 50) {
 		usleep(50000);
 	}
+}
+
+/*
+ * sunfish (f3): camd's socket may not be there yet at boot, so the open fails and the worker retries; if the
+ * streams were given back meanwhile (and the graph never started), a late open streamed for nobody (cam26: 7034
+ * frames). So a given-back stream is not opened again, and an open that lands after the give-back is closed at
+ * once. Off: /var/local/camdev.reopen exists (the old way: reopen until stopped).
+ */
+static bool
+worker_unwanted_open(const struct stream *s)
+{
+	static int off = -1;
+
+	if (off < 0) {
+		off = access("/var/local/camdev.reopen", F_OK) == 0;
+	}
+	return !off && s->given_back && !s->graph_running;
 }
 
 /* one worker has the kernel's camera open at a time: the next waits for the last to close it */
@@ -2374,10 +2394,20 @@ worker(void *context)
 	pthread_setname_np("redwood-camera");
 	pthread_mutex_lock(&device_owner);
 	while (worker_wanted(s, start.generation)) {
-		int device = camera_client_open();      /* sunfish (f2): camd, not /dev/redwood-camera */
+		int device;
 		const char *why;
 		unsigned pause;
 
+		if (again > 0 && worker_unwanted_open(s)) {     /* sunfish (f3) */
+			say("reopen skipped: stream given back (%u)", again);
+			break;
+		}
+		device = camera_client_open();          /* sunfish (f2): camd, not /dev/redwood-camera */
+		if (device >= 0 && (!worker_wanted(s, start.generation) || worker_unwanted_open(s))) {
+			say("opened after stop: closed at once");       /* sunfish (f3) */
+			camera_client_close(device);
+			break;
+		}
 		if (device < 0) {
 			why = strerror(errno);
 		} else {
@@ -2395,6 +2425,12 @@ worker(void *context)
 	}
 	pthread_mutex_unlock(&device_owner);
 	say("the frames stopped (%llu)", (unsigned long long)s->frames);
+	/* sunfish (f3): gone on its own (given back): not running, so the next request starts a worker again */
+	pthread_mutex_lock(&s->lock);
+	if (s->generation == start.generation) {
+		s->running = false;
+	}
+	pthread_mutex_unlock(&s->lock);
 	pthread_mutex_lock(&s->worker_lock);
 	s->workers--;
 	pthread_cond_broadcast(&s->worker_gone);
@@ -2732,6 +2768,7 @@ device_request_streams(CMBaseObjectRef o, CFArrayRef streams, CFDictionaryRef op
 			CMBaseObjectRef st = (CMBaseObjectRef)CFArrayGetValueAtIndex(streams, i);
 
 			if (st != NULL) {
+				stream_of(st)->given_back = false;      /* sunfish (f3) */
 				(void)stream_begin(st, false);
 			}
 		}
@@ -2744,6 +2781,14 @@ device_relinquish_streams(CMBaseObjectRef o, CFArrayRef streams, CFDictionaryRef
 {
 	(void)o;
 	(void)options;
+	/* sunfish (f3): a worker still trying to open camd gives up (a streaming one goes on: the request thrash) */
+	for (CFIndex i = 0; streams != NULL && i < CFArrayGetCount(streams); i++) {
+		CMBaseObjectRef st = (CMBaseObjectRef)CFArrayGetValueAtIndex(streams, i);
+
+		if (st != NULL) {
+			stream_of(st)->given_back = true;
+		}
+	}
 	if (relinquishes++ < 3) {
 		say("device: streams given back (%ld)", streams ? (long)CFArrayGetCount(streams) : 0L);
 	} else if (relinquishes % 1000 == 0) {
