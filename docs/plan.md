@@ -6,7 +6,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
 1. **Compass calibration** (B46 follow-up): DSP mag_cal/gyro_cal stream (dm6, e226cad) but report bias 0 until the phone is turned: waits on U19. (sensors.md)
-2. ▶ **Camera** (B17): Camera.app rear preview + saved photos work (cam35, cam36); front works too (16 s switch, cam37); next: auto-exposure, switch time, autofocus. (camera.md)
+2. ▶ **Camera** (B17): Camera.app rear preview + saved photos work (cam35, cam36); front + auto-exposure work (cam37, cam40); next: autofocus (LC898 lens motor), switch time, front colour. (camera.md)
 3. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)

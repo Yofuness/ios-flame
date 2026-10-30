@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); open: auto-exposure (rear dark, front blown out), 16 s camera switch, autofocus. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure works (cam40); open: autofocus (lens-motor driver), slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 20:15 cam38-cam40: AUTO-EXPOSURE WORKS; camera switch 16 s -> 6-8 s (kernel127)
+- cam38 (port ace0d24): headers change 3 frames after the write (read-back pairing ran AE away), AE meters the shaded picture, frame length extends down to 15 fps (0x0340 in camid's group hold), one E in flight and no repeats, SIGTERM 2 s after the loop. Host test test_ae settles rear/front dark/bright within 13-23 frames. The 3-frame latency and front line time are not measured.
+- cam39: target read 767 (should be 144): Camera.app sends ExposureBias as integer 256; camera_device read it as +256 stops, clamped to +8. Pictures overexposed. START: rear 3897 ms, to front 6265 ms, back to rear 8490 ms.
+- cam40 (port 96b6ecb, integer bias = 8.8 linear, 256 = no change): rear AE mean 37 -> 98 -> 127 of target 144, 33.3 ms, gain 6.5-7.1x; rear preview and IMG_0003.HEIC normally exposed, colours right, out of focus (no autofocus). Front: START 7879 ms, then ~10 s more until the picture shows; AE mean 118-134 of 144, 33.3 ms, gain 1.8-2.1x; pale blue/lavender cast (front white balance untuned). Back to rear START 6873 ms. DEVLOST 0.
 
 ### 2026-10-30 19:30 cam37: THE FRONT CAMERA WORKS IN CAMERA.APP; it takes ~16 s to switch, exposure is off
 - kernel127. Rear first (START 0 after 3936 ms), tap on the switch button: "the Back Camera's frames stop for the Front Camera's", "START -> 0 after 16068 ms", "frames of 1640x924 (the Front Camera, 30.0 fps mode)", imx355 tuning loaded, "PrimaryScaler: the first picture given". camd.log: rear "session end: ok, 97 frames published, 1 dropped"; front "+4.231 s first frame published (exposure 2604 lines)". Preview (work/shots/cam37-front.png): ceiling and the iPhone 11 at the bottom, bright, blown out. Earlier "black" = the tests and the user gave up before 16 s. Back to rear works. DEVLOST 0.

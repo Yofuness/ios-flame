@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:15 cam39/cam40: a sensor stall fixed: the ADSP's big message needs a big intent (port 96b6ecb)
+- cam39 (kernel127, dm11): with Compass open "accel: no response to request 513 (txn N)" repeated, gyro and compass stayed off, thousands of "IPCRTR asks for an intent of 8880 bytes": our answer always offered a 4096 B intent (give_intents(c, 1, 4096)), so the message never came and everything behind it on IPCRTR stalled. Not known why this message appeared in this boot and not before (dm11 itself didn't touch the link).
+- Fix: grant the size asked for (up to rxbuf, 16384 B); log the first 8 asks per channel. cam40: no-response 0, asks 8, none >= 1000 B; accel 2998, gyro 2972, compass ~1000, devmotion rising; Compass 120 deg SE on the desk. Compass heading itself on dm11: not re-tested by hand.
+
 ### 2026-10-30 19:45 dm11: gyro-aided calibration + gyro-stabilised tilt (port 1af814a; replay only, not on the phone yet)
 - Bias order SEE > gyro-aided > sphere; off: SNS_MAG_GYROFIT=0. Heading gravity default q (SNS_HEADING_GRAVITY=lp restores). Gate kept at 25%. magcal.txt keeps `fit`, adds an optional `gm` state line.
 - Replay of rec1, no starting cal: bias source gyro -34.40 -41.35 -59.70 (sphere -34.06 -39.89 -59.43), acc 2, 555 pairs, eig 531/676/805, res 3.55; calibrates from CSV T ~301. Gravity q vs lp: flat RMS 15.61 vs 15.80, settled (first 5 s of each flat stretch dropped) 5.88 vs 6.11; with --cal: 10.32 vs 10.52, settled 4.10 vs 4.38; T 259-297 RMS 2.83 vs 3.44. Gyro-aided off, q: flat 17.14, settled 7.51.
