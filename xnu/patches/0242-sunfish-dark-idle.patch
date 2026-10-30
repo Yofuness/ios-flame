@@ -7,6 +7,8 @@ Subject: [PATCH] 0242 sunfish: display-dark idle: slower USB/keys/FB pollers,
 Boot-arg sweetdark=0 disables; kern.sweet_display_dark read-only.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+v1.1: build fix (AppleCLCD befriends its user client for the fVsync kick).
 ---
  bsd/conf/files                        |  1 +
  bsd/dev/sweet_dark.c                  | 81 +++++++++++++++++++++++++++
@@ -277,7 +279,7 @@ index 574fc63..ef04b62 100644
  			continue;
  		}
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index f9960bd..475d514 100644
+index f9960bd..c50dea6 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
 @@ -38,6 +38,10 @@
@@ -291,7 +293,15 @@ index f9960bd..475d514 100644
  
  /* bsd/dev/sweet_gpu.c: the Adreno 640's 2D engine scales each frame onto the panel (boot-arg sweetgpu=1). */
  extern "C" {
-@@ -163,6 +167,8 @@ public:
+@@ -125,6 +129,7 @@ class IOMobileFramebufferUserClient;
+ 
+ class AppleCLCD : public IOMobileFramebuffer {
+ 	OSDeclareDefaultStructors(AppleCLCD);
++	friend class IOMobileFramebufferUserClient;     /* 0242: the power-change path kicks fVsync */
+ 
+ 	IOWorkLoop         *fWorkLoop;
+ 	IOTimerEventSource *fVsync;
+@@ -163,6 +168,8 @@ public:
  	bool          fDirty;
  	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
  	bool          fPowerOff;      /* RequestPowerChange(0) */
@@ -300,7 +310,7 @@ index f9960bd..475d514 100644
  	bool          fGPU;           /* panel switched to the GPU's stride; frames scaled to fit */
  	uint32_t      fFadeStep;      /* fade-out steps done while off */
  	bool          fPresentReq;    /* 0149: vsync asked the present thread for the latest frame */
-@@ -428,8 +434,17 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+@@ -428,8 +435,17 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
  		fb->fNextVsync = now;
  	}
  	fb->fNextVsync += fb->fVsyncAbs;
@@ -320,7 +330,7 @@ index f9960bd..475d514 100644
  	}
  	sender->wakeAtTime(fb->fNextVsync);
  	if ((count % 300) == 0) {
-@@ -1377,6 +1392,9 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+@@ -1377,6 +1393,9 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
  			uint32_t fade = fFB->fFadeStep;
  			if (change) {
  				fFB->fPowerOff = off;
@@ -330,7 +340,7 @@ index f9960bd..475d514 100644
  				fFB->fFadeStep = (off && fFB->fPanelSleep && sweet_panel_ok) ? 7 : 0;	/* 0205: MDP blank, no CPU fade */
  				fFB->fDirty = true;     /* on: redraw the latest frame */
  				fFB->fPanelFailed = false;      /* 0201 */
-@@ -1386,6 +1404,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+@@ -1386,6 +1405,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
  				}
  			}
  			IOLockUnlock(fFB->fLock);
@@ -343,6 +353,3 @@ index f9960bd..475d514 100644
  			if (change) {
  				printf("SWEET PANEL: req %s (asleep %d, fade %u)\n", off ? "off" : "on", asleep, fade);	/* 0203 */
  			}
--- 
-2.56.0
-
