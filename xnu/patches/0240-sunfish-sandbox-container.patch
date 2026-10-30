@@ -9,12 +9,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 v1.1 (2026-10-30): NULL instead of PROC_NULL (build fix).
 v2 (2026-10-30): bounded blob logging (strings >= 8 chars with offsets + hex 0x00-0x7f, 4 launchd + 32 others), op4 result logging, HOME=/var/mobile/Containers/Data/... fallback from the exec environment (kern_exec.c, after exec_extract_strings). Needs the base commit tracking kern_exec.c (unchanged file).
 v3 (2026-10-30): lookup by pid only (the exec-time uniqueid did not match, sb2), op-4 calls after 60 s logged.
+v4: entries kept across the exit notification an exec sends for the retired proc (sb3); op4 log aimed at Providers.
 ---
  bsd/kern/sweet_amfi.c | 314 +++++++++++++++++++++++++++++++++++++++++++++++++-
  1 file changed, 313 insertions(+), 1 deletion(-)
 
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 8d4012f..26036a4 100644
+index 8d4012f..e0edb05 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
 @@ -26,6 +26,7 @@
@@ -25,7 +26,7 @@ index 8d4012f..26036a4 100644
  #include <IOKit/IOBSD.h>
  #include <kern/startup.h>
  #include <libkern/amfi/amfi.h>
-@@ -408,6 +409,324 @@ sweet_sbext_consume(struct proc *p, user_addr_t arg)
+@@ -408,6 +409,349 @@ sweet_sbext_consume(struct proc *p, user_addr_t arg)
  	return 0;
  }
  
@@ -73,6 +74,7 @@ index 8d4012f..26036a4 100644
 +}
 +
 +static void sweet_sandbox_proc_exit(struct proc *p);
++static void sweet_sandbox_proc_notify_exit(struct proc *p);
 +
 +/* 0240 v2: is the exec worth logging? not spawned by launchd, or an extension */
 +static bool
@@ -271,6 +273,27 @@ index 8d4012f..26036a4 100644
 +	lck_mtx_unlock(&sweet_sbcont_mtx);
 +}
 +
++/* v4: the exit notification is not used to drop entries: an exec retires the old proc after the new image's
++   HOME was recorded (sb3: every lookup ENOENT); an entry is replaced at the pid's next exec instead */
++static void
++sweet_sandbox_proc_notify_exit(struct proc *p)
++{
++	static int logged;
++	if (logged < 8) {
++		pid_t pid = proc_pid(p);
++		int had = 0;
++		lck_mtx_lock(&sweet_sbcont_mtx);
++		for (unsigned int i = 0; i < SWEET_SBCONT_MAX; i++) {
++			had |= sweet_sbcont[i].pid == pid && sweet_sbcont[i].path[0] != '\0';
++		}
++		lck_mtx_unlock(&sweet_sbcont_mtx);
++		if (had) {
++			logged++;
++			printf("SWEET Sandbox: exit notify pid %d with a container entry (kept)\n", pid);
++		}
++	}
++}
++
 +/* op 4: arg -> { pid (0 = self), 0, buf, len, 0 }; copies the path with its NUL */
 +static int
 +sweet_sbcont_path(struct proc *p, user_addr_t arg)
@@ -336,11 +359,14 @@ index 8d4012f..26036a4 100644
 +	}
 +	static int late_logged;
 +	uint64_t up_s = mach_absolute_time() / 24000000ULL;    /* 24 MHz timebase */
-+	if (sweet_sbcont_op4_logged < 32 || (up_s > 60 && late_logged++ < 32)) {     /* 0240 v2/v3: early burst + later calls */
++	char cname[32];
++	proc_name(proc_pid(p), cname, sizeof(cname));
++	int wanted = err == 0 || strnstr(cname, "Provider", sizeof(cname)) || strnstr(cname, "sbcont", sizeof(cname));
++	if (sweet_sbcont_op4_logged < 16 || (up_s > 60 && wanted && late_logged++ < 48)) {     /* 0240 v2-v4 */
 +		sweet_sbcont_op4_logged++;
 +		char name[32];
 +		proc_name(pid, name, sizeof(name));
-+		printf("SWEET Sandbox: op4 pid %d (%s) -> %d [%.200s]\n", pid, name, err,
++		printf("SWEET Sandbox: op4 by %s for pid %d (%s) -> %d [%.200s]\n", cname, pid, name, err,
 +		    err == 0 ? path : "");
 +	}
 +	kfree_data(path, MAXPATHLEN);
@@ -350,7 +376,7 @@ index 8d4012f..26036a4 100644
  static int
  sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
  {
-@@ -422,7 +741,8 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+@@ -422,7 +766,8 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
  		return sweet_sbext_enabled() ? sweet_sbext_issue(p, arg) : ENOENT;
  	case 6:         /* extension consume (0219) */
  		return sweet_sbext_enabled() ? sweet_sbext_consume(p, arg) : ENOENT;
@@ -360,12 +386,12 @@ index 8d4012f..26036a4 100644
  	case 0x43:      /* container expected */
  		return ENOENT;
  	default:
-@@ -558,6 +878,8 @@ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
+@@ -558,6 +903,8 @@ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
  static const struct mac_policy_ops sweet_sandbox_mac_ops = {
  	.mpo_policy_syscall = sweet_sandbox_syscall,
  	.mpo_priv_grant = sweet_sandbox_priv_grant,
 +	.mpo_cred_check_label_update_execve = sweet_sandbox_check_execve,      /* 0240 */
-+	.mpo_proc_notify_exit = sweet_sandbox_proc_exit,                       /* 0240 */
++	.mpo_proc_notify_exit = sweet_sandbox_proc_notify_exit,                /* 0240 v4: logs only */
  };
  
  static struct mac_policy_conf sweet_sandbox_mac_conf = {
