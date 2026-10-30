@@ -48,6 +48,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 03:35 files5b: hand-made data container for LocalStorage (not yet picked up)
+- Copied PhotosFileProvider's container layout to PluginKitPlugin/718EBA02-812E-42A0-B1C1-CCEE1BC84BB9 with a metadata plist naming com.apple.FileProvider.LocalStorage (content class 4, uid/gid 501, no ParentBundleID). `lsreg -p`, then `lsreg -r` (rebuild -> 0): `lsreg -i` still dataContainerURL (none); pkd still "no sandbox data container". containermanagerd (process name "containermanager", pid 69) ignored SIGTERM (CPU rose 25.7 -> 32.2 s, then idle) and an lsreg call waited on it for ~1 min. Next: reboot so containermanagerd indexes the container at start (files6).
+
 ### 2026-10-30 03:20 files5: the data container can't be made from our tools: containermanagerd gets no code-sign identifier (lsreg 0bfc13d)
 - `lsreg -i com.apple.FileProvider.LocalStorage`: dataContainerURL (none), containingBundle (none); PhotosFileProvider for comparison: /private/var/mobile/Containers/Data/PluginKitPlugin/A9E8417C-..., containing com.apple.mobileslideshow.
 - `lsreg -c com.apple.FileProvider.LocalStorage <appex>` (MCMPluginKitPluginDataContainer +containerWithIdentifier:createIfNecessary:existed:error:), as uid 501 and as root: MCMErrorDomain 98. containermanagerd: "Could not get code sign identifier from audit token to initialize a client object for pid [681]", "Error creating client identity ... (98|2|0)". Our tools are ldid -S ad-hoc signed (identifier = file name), so the kernel likely doesn't hand out an identity for them (csops CS_OPS_IDENTITY / audit-token signing id).
