@@ -16,6 +16,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:40 dm3: locationd now takes Compass's heading request and finds {0xFF0C,8}, but no heading comes out (kernel126)
+- kernel126 = kernel125 + xnu 0245: service "devmotion8" {0xFF0C,8} (class SweetHIDDeviceMotion8, sweetmotion bit 0x400; bits 0x100/0x200 are Transport-SPU / initial-events flags) gets a copy of every type-2 report with payload bytes 4..11 zeroed (sweetdm8raw=1 keeps them). Boot: everyday recipe + sweetmotion=0x4bf; battery 4454 mV, SSH 17 s.
+- Kernel: devmotion8 opened through the event system (backboardd pid 60, as for every HID service), ReportInterval=20000 at 105.6 s; type-2 reports #1000 at 124 s, #3000 at 163 s; 0 rejects.
+- locationd (cl3 oslog): "Incoming message kCLConnectionMessageHeading" from Compass; "{65292, 8} not ready" is gone; "{65292, 1} not ready", "Could not set all properties ... Giving up" and "Failed to configure motion coprocessor" remain. Compass: dial at N, no heading number; yaw 90/200 changes nothing (work/shots/dm3-a/b/c.png). Status "dm type 2 acc 2 ...".
+- Next: RE of CLCompass7's handler checks (what marks the heading invalid or keeps it from being published).
+
 ### 2026-10-30 18:00 dm2: 9-axis (type-2) reports accepted, but the Compass dial ignores them: the heading comes from locationd
 - Port 8db68aa: type-2 88-byte reports (9-axis Madgwick, x = magnetic north, min/max hard-iron box in /var/local/magcal.txt, accuracy 0/1/2 at 40/60/80 uT span, yaw knob /var/local/dm-yaw). Host test: north 0, east 90, west 270, yaw +30 -> 30.
 - dm2 (kernel125, sweetmotion=0xbf): seeded magcal from compass (-44.5,-43.2,-115.7) uT -> status "dm type 2 acc 2 bias -44.5,-64.2,-69.6 span 90,90,93.8"; kernel: type-2 reports flow, 0 rejects (a few type-3 reports interleaved, probably when a mag sample is >1 s old). Compass: dial at N, no heading number; yaw 90 and 200 change nothing (work/shots/dm2-a2/b/c.png).
