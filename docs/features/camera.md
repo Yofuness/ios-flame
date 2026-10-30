@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 Stage d works: a complete raw IMX363 frame (2016x1512 RAW10) from two half captures through SID 0x8c0 (`--addr-offset 0x400`) joined by tools/sunfish-cam-merge.py, no reset; SID 0xcc0 (TBU hf1) passing still resets; no iOS camera yet. **Updated:** 2026-10-31.
+**State:** 🟡 Stage d DONE: one capture gives a complete raw IMX363 frame (2016x1512 RAW10) in RAM and a file (`tools/sunfish-cam-rx.sh --capture`: SMMU SMRs 0x8c0 + 0xcc0 exact -> bypass), no reset; front IMX355 answers; no ISP / iOS camera yet. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 02:55 cam21 (kernel109, cam20r boot): STAGE d DONE, one capture = full frame, no reset
+- `CAPMODE="--bypass --sid 0x8c0 --sid2 0xcc0"` (b5e38a9): SMR15 0x8c0 + SMR16 0xcc0 (both mask 0) -> CB14 bypass; trap CB15: SMR17-22. buf done ~220 ms; 0 faults on either bank, GFSR 0; **frame 3777917 of 3810240 nonzero, 0 of 3720 1 KB blocks zero**; guard 11997 nonzero (+0..+12095: the frame is ~4.8 lines of 2520 B longer than 2016x1512, both halves now); late writes N; restored; "saved, fsync ok". **No reset: 8 of 8 SSH checks over 4 min.** Screen fine (webcam).
+- **Cause of cam17/cam18B/cam20's resets: the single masked SMR 0x8c0/0x400**, not SID 0xcc0 itself (guess why: the hypervisor's SMMU emulation or the SMR mask width; not investigated). Rule: exact SMRs only. sunfish-cam-rx.sh's default CAPMODE is now this config.
+- Frame (numbers only, not viewed): work/cam/cam21.raw (+ PNGs).
+- Next: the extra ~5 lines (embedded data? set FRAME_BYTES / WM height from the CSID), exposure/gain so frames aren't dark (IMX363 registers 0x0202/0x0204), then stage e (ISP + iOS camera device, redfin camera_isp.c / camera_device.c).
 
 ### 2026-10-31 02:40 cam20 (kernel109, cam18r boot): sf_axi on + one SMR 0x8c0/0x400: frame ALL ZERO, RESET a few min later
 - camid: camera_sf_axi 0x80000000 -> 0x1 after the GDSC (hf_axi 0x1, xo 0x1). SMRs: 0x8c0/0x400 -> CB18 bypass, 6 others -> CB19 trap. buf done ~200 ms; 0 faults sampled; **frame 0 of 3810240 nonzero, guard 0**: not even the 0x8c0 half landed. Late writes N, restored. Then SSH timed out a few minutes after "powered down"; fastboot, 4439 mV; rescued cam20r (23:13). Per-boot log 20261029-230036.log ends at ~1425 s, no panic.

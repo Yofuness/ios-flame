@@ -47,7 +47,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine (Maps, Music, Photos, App Store fixed; 0 crashes per boot on kernel95); Camera black (no camera) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
-| [Camera](docs/features/camera.md) | 🟡 | complete raw frames from the rear camera (2016x1512, two half captures merged on the PC); front sensor answers; no Camera app yet |
+| [Camera](docs/features/camera.md) | 🟡 | rear camera takes complete raw photos (2016x1512, one command: tools/sunfish-cam-rx.sh --capture); front sensor answers; no Camera app yet |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); audio playback being tested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ✅ | auto-rotate works (accelerometer -> rotation); all 6 sensors answer on the audio DSP |
