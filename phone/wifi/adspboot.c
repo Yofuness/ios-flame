@@ -27,6 +27,8 @@
  *                     every swr/vote line also goes to /var/local/swr-probe.log (fsync per line)
  *                     hj2: --swr-clk-first (clock votes before any read), --swr-newlog
  *                     hj3: + rx clocks 0x30e/0x30f; --swr-clk-first reads each group only if its own clocks are on
+ *                     hj4: --swr-init a|b|c|d: S2 staged TX SoundWire bring-up (macro+pins, codec reset, master init,
+ *                     DevID), teardown after; implies --swr-clk-first, refused unless 0x30c/0x30d acked
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -1086,6 +1088,191 @@ static void swr_read(const char *when)
 			swr_rd(i ? "tx-swr" : "tx-swr version", 0x62ed0000ull + 4 * i);
 }
 
+/* hj4: --swr-init a|b|c|d (headphone jack S2, research/notes/headphone-jack.md "S2 plan"): staged TX SoundWire
+ * bring-up after the tx clocks 0x30c/0x30d are acked, then teardown in reverse. Only the whitelisted registers. */
+#define SWR_TXM		0x62ec0000ull	/* tx-macro */
+#define SWR_TXS		0x62ed0000ull	/* tx swrm, v1.5.0 */
+static int swr_stage;	/* hj4: 0 off, 'a'..'d' */
+
+static int swr_allowed(uint64_t pa)
+{
+	static const uint32_t m[] = { 0x00, 0x04, 0x08, 0x88, 0x90 };
+	static const uint32_t s[] = { 0x04, 0x14, 0x100, 0x200, 0x204, 0x208, 0x304, 0x30c, 0x314, 0x318, 0x500, 0x530,
+				      0x534, 0x101c, 0x1044, 0x1048, 0x1090 };
+	for (unsigned i = 0; i < sizeof(m) / sizeof(m[0]); i++)
+		if (pa == SWR_TXM + m[i])
+			return 1;
+	for (unsigned i = 0; i < sizeof(s) / sizeof(s[0]); i++)
+		if (pa == SWR_TXS + s[i])
+			return 1;
+	for (unsigned g = 18; g <= 24; g++)
+		if ((g <= 20 || g == 24) && (pa == LPI_PA + 0x1000u * g || pa == LPI_PA + 0x1000u * g + 4))
+			return 1;
+	return 0;
+}
+
+static int swr_refused;
+static uint32_t swr_r(const char *what, uint64_t pa)	/* logged read, whitelist only */
+{
+	if (!swr_allowed(pa)) {
+		swr_log("swr: REFUSED read %#llx (not whitelisted)\n", (unsigned long long)pa);
+		swr_refused = 1;
+		return 0;
+	}
+	return swr_rd(what, pa);
+}
+
+static uint32_t swr_q(uint64_t pa)	/* quiet read for polls (caller logs changes) */
+{
+	if (!swr_allowed(pa)) {
+		swr_log("swr: REFUSED read %#llx (not whitelisted)\n", (unsigned long long)pa);
+		swr_refused = 1;
+		return 0;
+	}
+	return rd32(pa);
+}
+
+static void swr_w(const char *what, uint64_t pa, uint32_t v)
+{
+	if (!swr_allowed(pa)) {
+		swr_log("swr: REFUSED wr %#llx = %#x (not whitelisted)\n", (unsigned long long)pa, v);
+		swr_refused = 1;
+		return;
+	}
+	uint32_t old = rd32(pa);
+	swr_log("swr: stage wr %s %#llx %#x -> %#x\n", what, (unsigned long long)pa, old, v);
+	wr32(pa, v);
+	swr_log("swr: wr %#llx %#x -> %#x, reads %#x\n", (unsigned long long)pa, old, v, rd32(pa));
+}
+
+static void swr_poll(const char *what, uint64_t pa, int n, unsigned us, uint32_t mask)	/* log every change */
+{
+	uint32_t last = swr_q(pa);
+	swr_log("swr: poll %s %#llx start %#010x\n", what, (unsigned long long)pa, last);
+	for (int i = 1; i <= n; i++) {
+		usleep(us);
+		uint32_t v = swr_q(pa);
+		if (v != last)
+			swr_log("swr: poll %s at %d x %u us: %#010x -> %#010x\n", what, i, us, last, v);
+		last = v;
+		if (mask && (v & mask)) {
+			swr_log("swr: poll %s: mask %#x set after %d\n", what, mask, i);
+			return;
+		}
+	}
+	swr_log("swr: poll %s end %#010x%s\n", what, last, mask ? " (mask never set)" : "");
+}
+
+static void swr_init(void)
+{
+	static const uint32_t pin_want[3] = { 0x0ca, 0x0ce, 0x0ca };	/* gpio18 clk func2, 19 data1 func3, 20 data2 func2 */
+	uint32_t pin_saved[3] = { 0 }, g24_cfg = 0, g24_val = 0;
+	int pin_set[3] = { 0 }, g24_set = 0, mst_set = 0;
+	uint64_t g24 = LPI_PA + 0x1000u * 24;
+	if ((swr_clk_ok & (3u << 1)) != (3u << 1)) {
+		swr_log("swr: --swr-init %c REFUSED: tx clocks 0x30c/0x30d not both acked (mask %#x)\n", swr_stage,
+			swr_clk_ok);
+		return;
+	}
+	swr_log("swr: --- init stage %c ---\n", swr_stage);
+	swr_log("swr: supplies: not read (no PMIC/SPMI read path in adspboot)\n");
+	/* a: macro, pins */
+	for (unsigned o = 0; o <= 0x90; o += (o < 8 ? 4 : o == 8 ? 0x80 : 8))
+		swr_r("tx-macro", SWR_TXM + o);
+	uint32_t pin_old[3];
+	for (int i = 0; i < 3; i++)
+		pin_old[i] = swr_r("lpi swr pin cfg", LPI_PA + 0x1000u * (18 + i));
+	swr_w("tx-macro MCLK_EN", SWR_TXM + 0x00, swr_q(SWR_TXM + 0x00) | 1);
+	swr_w("tx-macro FS_CNT_EN", SWR_TXM + 0x04, swr_q(SWR_TXM + 0x04) | 1);
+	swr_w("tx-macro SWR_RESET", SWR_TXM + 0x08, swr_q(SWR_TXM + 0x08) | 2);
+	swr_w("tx-macro SWR_CLK_EN", SWR_TXM + 0x08, swr_q(SWR_TXM + 0x08) | 1);
+	swr_w("tx-macro SWR_RESET off", SWR_TXM + 0x08, swr_q(SWR_TXM + 0x08) & ~2u);
+	for (int i = 0; i < 3; i++) {
+		if (((pin_old[i] >> 2) & 0xf) == ((pin_want[i] >> 2) & 0xf)) {
+			swr_log("swr: gpio%d cfg %#x already func %u: left\n", 18 + i, pin_old[i], (pin_old[i] >> 2) & 0xf);
+			continue;
+		}
+		pin_saved[i] = pin_old[i];
+		pin_set[i] = 1;
+		swr_w("lpi swr pin cfg", LPI_PA + 0x1000u * (18 + i), pin_want[i]);
+	}
+	swr_r("tx-swr COMP_STATUS", SWR_TXS + 0x14);
+	swr_r("tx-swr COMP_PARAMS", SWR_TXS + 0x100);
+	if (swr_stage >= 'b' && !swr_refused) {	/* b: codec reset release */
+		g24_cfg = swr_r("lpi gpio24 cfg", g24);
+		g24_val = swr_r("lpi gpio24 value", g24 + 4);
+		g24_set = 1;
+		swr_w("lpi gpio24 value low", g24 + 4, 0);
+		swr_w("lpi gpio24 cfg out", g24, 0x3c8 | (g24_cfg & 0x400));
+		usleep(50);
+		swr_w("lpi gpio24 value high", g24 + 4, 0x2);
+		usleep(50);
+	}
+	if (swr_stage >= 'c' && !swr_refused) {	/* c: master init, Linux qcom_swrm_init order */
+		mst_set = 1;
+		swr_w("FRAME_CTRL_BANK0", SWR_TXS + 0x101c, 0x0f);
+		swr_w("ENUMERATOR_CFG", SWR_TXS + 0x500, 1);
+		swr_w("INT_MASK", SWR_TXS + 0x204, 0x1ffff);
+		swr_w("MCP_CFG no-pings", SWR_TXS + 0x1048, (swr_q(SWR_TXS + 0x1048) & ~(0x1fu << 17)) | (0x1fu << 17));
+		swr_w("MCP_BUS_CTRL CLK_START", SWR_TXS + 0x1044, 0x2);
+		swr_w("CMD_FIFO_CFG", SWR_TXS + 0x314, 0x7);
+		swr_w("COMP_CFG", SWR_TXS + 0x04, 1);
+		swr_w("COMP_CFG", SWR_TXS + 0x04, 2);
+		swr_w("INT_CLEAR", SWR_TXS + 0x208, 0xffffffffu);
+		swr_w("COMP_CFG", SWR_TXS + 0x04, 3);
+		swr_poll("COMP_STATUS", SWR_TXS + 0x14, 100, 500, 1);
+		swr_r("tx-swr COMP_PARAMS", SWR_TXS + 0x100);
+		swr_poll("MCP_SLV_STATUS", SWR_TXS + 0x1090, 100, 1000, 0);
+		uint32_t is = swr_r("INT_STATUS", SWR_TXS + 0x200);
+		swr_log("swr: int status %#x: attached %u, status change %u, cmd error %u, auto-enum failed %u\n", is,
+			(is >> 1) & 1, (is >> 2) & 1, (is >> 7) & 1, (is >> 11) & 1);
+		swr_w("INT_CLEAR", SWR_TXS + 0x208, is);
+	}
+	if (swr_stage >= 'd' && !swr_refused) {	/* d: DevID of device 1 */
+		uint32_t b1 = swr_r("ENUM DEV_ID_1(1)", SWR_TXS + 0x530), b2 = swr_r("ENUM DEV_ID_2(1)", SWR_TXS + 0x534);
+		uint64_t a = (uint64_t)((b2 >> 8) & 0xff) | (uint64_t)(b2 & 0xff) << 8 | (uint64_t)((b1 >> 24) & 0xff) << 16 |
+			     (uint64_t)((b1 >> 16) & 0xff) << 24 | (uint64_t)((b1 >> 8) & 0xff) << 32 |
+			     (uint64_t)(b1 & 0xff) << 40;
+		swr_log("swr: dev1 enum addr %#014llx (want mfr 0x0217 part 0x010a)\n", (unsigned long long)a);
+		for (uint32_t reg = 0x50, id = 1; reg <= 0x55; reg++, id++) {
+			swr_w("RD_CMD", SWR_TXS + 0x304, reg | id << 16 | 1u << 20 | 1u << 24);
+			usleep(250);
+			uint32_t st = 0;
+			for (int i = 0; i < 20 && !((st >> 16) & 0x1f); i++) {
+				st = swr_r("CMD_FIFO_STATUS", SWR_TXS + 0x30c);
+				if (!((st >> 16) & 0x1f))
+					usleep(250);
+			}
+			if (!((st >> 16) & 0x1f)) {
+				swr_log("swr: devid reg %#x: no read data\n", reg);
+				continue;
+			}
+			uint32_t r = swr_r("RD_FIFO", SWR_TXS + 0x318);
+			swr_log("swr: devid reg %#x = %#04x (cmd id %u, want %u%s)\n", reg, r & 0xff, (r >> 8) & 0xf, id,
+				((r >> 8) & 0xf) == id ? "" : " MISMATCH");
+		}
+	}
+	/* teardown in reverse */
+	swr_log("swr: --- teardown ---\n");
+	if (mst_set) {
+		swr_w("COMP_CFG off", SWR_TXS + 0x04, 0);
+		swr_w("MCP_BUS_CTRL off", SWR_TXS + 0x1044, 0);
+		swr_w("ENUMERATOR_CFG off", SWR_TXS + 0x500, 0);
+	}
+	if (g24_set) {
+		swr_w("lpi gpio24 value low", g24 + 4, 0);
+		swr_w("lpi gpio24 cfg restore", g24, g24_cfg);
+		swr_log("swr: gpio24 value before init was %#x\n", g24_val);
+	}
+	for (int i = 2; i >= 0; i--)
+		if (pin_set[i])
+			swr_w("lpi swr pin cfg restore", LPI_PA + 0x1000u * (18 + i), pin_saved[i]);
+	swr_w("tx-macro SWR_CONTROL off", SWR_TXM + 0x08, 0);
+	swr_w("tx-macro FS_CNT off", SWR_TXM + 0x04, swr_q(SWR_TXM + 0x04) & ~1u);
+	swr_w("tx-macro MCLK off", SWR_TXM + 0x00, swr_q(SWR_TXM + 0x00) & ~1u);
+	swr_log("swr: --- init stage %c done%s ---\n", swr_stage, swr_refused ? " (a refused access stopped it)" : "");
+}
+
 static void pcm_start(void);
 
 /* SET_PARAM_V2 body with the I2S config of PORT (48 kHz, 16 bit, stereo, ws internal) on lane LANE (1 SD0, 2 SD1) */
@@ -1248,6 +1435,8 @@ static void afe_next(int ok, uint32_t status)
 			swr_gate = swr_clk_first;	/* hj3: each group only with its own clocks */
 			swr_read("hw vote + codec clocks");
 			swr_gate = 0;
+			if (swr_stage)	/* hj4 */
+				swr_init();
 			afe_step = AFE_SWR_UNCLK;
 		} else
 			afe_step = AFE_DEVOTE;
@@ -2485,6 +2674,8 @@ int main(int argc, char **argv)
 			swr_only = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--swr-clk-first"))	/* hj2: clocks before the first read; implies --swr-clk */
 			swr_clk = swr_clk_first = 1;
+		else if (!strcmp(argv[i], "--swr-init") && i + 1 < argc && argv[i + 1][0] >= 'a' && argv[i + 1][0] <= 'd')
+			swr_stage = argv[++i][0], swr_clk = swr_clk_first = 1;	/* hj4: staged bring-up a-d; implies --swr-clk-first */
 		else if (!strcmp(argv[i], "--swr-newlog"))	/* hj2: truncate /var/local/swr-probe.log at start */
 			swr_newlog = 1;
 		else if (!strcmp(argv[i], "--swr-nohw"))	/* hj1: skip the hw vote; group 1 only */
@@ -2639,7 +2830,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
