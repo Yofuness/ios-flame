@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:30 B43: camera start 11 s -> 0.4 s, exposure starts from the real value (2e4f7cc)
+- research/notes/camera-start.md: 15 stage() sleeps of 300 ms (crash-bisect aid) = 4.5 s; AE started from cur_lines -1 -> 0 -> the 4-line floor (0.04 ms, "exposure 0.0 ms").
+- 2e4f7cc: CAMRX_FAST=1 (set by camd) skips the stage sleeps and zeroes the carveout only once per camd process; camd.log lines carry "+S.mmm s" since START; cur_lines starts at the table's 1592 lines; isp_ae makes no request while the exposure is unknown; START queues 1500 lines at 2x gain.
+- On the phone (kernel121, by hand): two `camclient -n 30` runs: "first frame published" at +0.425 s and +0.379 s after START (was ~11 s); "camd: sensor exposure set: frame_length 1608, exposure 1500 lines, gain code 256" right after; 31 frames each, 0 torn; whole session incl. power-down 4.27 s. The zeroing took 0.003 s (not the cost).
+- camd exited 0 on SIGTERM, so launchd (KeepAlive SuccessfulExit false) never restarted it after a kill: now exits 1 (installed; takes effect for the launchd job from the next boot).
+
 ### 2026-10-30 12:00 Camera.app on kernel121 (sv1): frames flow, but the start takes 11 s and the first frames are unexposed
 - camdev.log: "open: START -> 0 after 11220 ms (camd pid 42, state 2)", "frames of 2016x1512 from the kernel (the Back Camera, 60.1 fps mode)", colour tuning loaded, PrimaryScaler 4032x3024 420f and SecondaryScaler 1504x1128 420f pictures given; "frame 5: exposure 0.0 ms, gain 1.0x, digital 1.00x, green 40 above black ... lux index -494"; stopped after 4 frames / 3 pictures (the survey went home at 5 s, before the preview could show). camd: 15 frames published, 0 dropped.
 - So the "black preview" in the survey was the 11 s bring-up. Open: start time (camd bring-up ~11 s: Optimize), exposure 0.0 ms at the start (AE start values), Magnifier the same.

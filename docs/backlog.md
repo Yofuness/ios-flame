@@ -5,7 +5,6 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs. Finished items move to [completed.md](completed.md).
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B43 Camera start takes ~11 s (camd bring-up) and the first frames report exposure 0.0 ms / gain 1.0x (dark until AE moves?): Camera.app and Magnifier look black for the first seconds (camera.md sv1).
 - B44 Garbled image areas in Maps, TV, Mail, Voice Memos, Compass, Tips (sv1 shots): probably B29's texture-shadow problem in bigger images.
 - B45 Measure (ARKit) and Watch (Bridge) don't stay open; Weather has no data (needs Apple's weather service).
 - B42 Auto-brightness (parked 2026-10-30, sensors.md): lux reaches iOS, AAB ramps, but legacy mode writes only the slider value and new-arch mode needs a CADisplay brightness control we don't have. Option: our own lux -> brightness loop (night flag respected).
