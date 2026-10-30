@@ -1,5 +1,5 @@
 # Sensors
-**State:** ✅ AUTO-ROTATE WORKS (U10, 2026-10-30): the accelerometer drives SweetMetal2 `R N` (adspboot --sns-motion --sns-rot, sweetmotion=0x37); rotates almost at once. All 6 sensors answer. **Updated:** 2026-10-30.
+**State:** ✅ COMPASS WORKS (2026-10-30 dm4: heading number + dial, fake DeviceMotion HID services {0xFF0C,4}/{0xFF0C,8} fed by our 9-axis fusion, kernel126; true direction needs one real calibration turn, U19); AUTO-ROTATE WORKS (U10, 2026-10-30): the accelerometer drives SweetMetal2 `R N` (adspboot --sns-motion --sns-rot, sweetmotion=0x37); rotates almost at once. All 6 sensors answer. **Updated:** 2026-10-30.
 
 ## Facts
 - No motion/light sensor is on an AP bus (../recon/live.dts, every QUP child checked): SE1 has st21nfc@08 (NFC), SE7 the touch controller, SE9 fsa4480 (USB-C audio switch) and slg51000@75 (camera PMIC); no lsm6/bmi/icm/ak09/mmc/tmd/stk/vl53/bmp/lps node anywhere.
@@ -15,6 +15,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 19:10 dm4: COMPASS WORKS (kernel126, heading in the DeviceMotion report)
+- Port e14aaf6: type-2 reports now carry the magnetic heading (@0x44, degrees clockwise from north, from our north-referenced q), its accuracy (@0x48: 10/20/35 deg at calibration level 2/1/0, -1 uncalibrated) and status bit 0x100 (locationd's CLCompass7 publishes only with it; it does not compute heading from q/mag itself). Host test: heading field 30 for yaw 30, status 0x100, accuracy 10.
+- dm4 (kernel126, everyday recipe + sweetmotion=0x4bf, /var/local/sensors.devmotion, seeded /var/local/magcal.txt): Compass shows a heading number and turns its dial. Webcam (yaw 0): "351° N"; yaw knob 90 -> "85° E" (shot mid-turn), yaw 200 -> "192° S" (351+200 = 191: matches), dial turned with N at lower right (work/shots/dm4-b/c.png). Compass logs [CLSensorFusionService] samples ~20/s. Status "dm type 2 acc 2 bias -44.5,-64.2,-69.8 span 90,90,94.1".
+- Not verified: the true direction. The calibration box is a seeded guess (phone never turned), so the absolute heading is likely off until the phone has been turned through all orientations once (magcal.txt then fills from real data): user task U19. True north needs a location (none: B32), so Compass shows magnetic heading.
+- Made default: tools/sunfish-boot.sh passes sweetmotion=0x4bf for kernel126+; tools/sunfish-install-sensors.sh creates /var/local/sensors.devmotion. Cost: accel+gyro+compass stream at >= 100 Hz while the screen is on (Optimize O13).
 
 ### 2026-10-30 18:40 dm3: locationd now takes Compass's heading request and finds {0xFF0C,8}, but no heading comes out (kernel126)
 - kernel126 = kernel125 + xnu 0245: service "devmotion8" {0xFF0C,8} (class SweetHIDDeviceMotion8, sweetmotion bit 0x400; bits 0x100/0x200 are Transport-SPU / initial-events flags) gets a copy of every type-2 report with payload bytes 4..11 zeroed (sweetdm8raw=1 keeps them). Boot: everyday recipe + sweetmotion=0x4bf; battery 4454 mV, SSH 17 s.

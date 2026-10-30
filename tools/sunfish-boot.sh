@@ -33,6 +33,11 @@ knum=$(printf '%s\n' "$kernel" | sed -n 's|.*kernel\([0-9][0-9]*\)/.*|\1|p')
 if [ -z "$knum" ] || [ "$knum" -lt 125 ]; then
 	base="$base $baked"	# not kernelNN/ (unknown) or before 0244: pass them all
 fi
+# on by default since 2026-10-30 19:10: Compass (B46): DeviceMotion services {0xFF0C,4} (0x80) and {0xFF0C,8} (0x400,
+# locationd's heading) on top of 0x3f; needs kernel126+ (xnu 0243 + 0245) and adspboot with SNS_DEVMOTION (sensors.md dm4)
+if [ -n "$knum" ] && [ "$knum" -ge 126 ]; then
+	base="$base sweetmotion=0x4bf"
+fi
 # NOSERIAL=1: no serial console (boot-time A/B, plan D2)
 if [ "${NOSERIAL:-0}" = 1 ]; then
 	base=$(printf '%s\n' $base | grep -v -x -e 'serial=3' -e '-enable_kprintf_spam' | tr '\n' ' ')

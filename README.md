@@ -51,7 +51,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); both cameras stream and take raw photos from tools (rear 60 fps, front 30 fps); Camera app not tried yet |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); audio playback being tested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
-| [Sensors](docs/features/sensors.md) | ✅ | auto-rotate works (accelerometer -> rotation); proximity turns the screen off when near (kernel122); all 6 sensors answer on the audio DSP; auto-brightness parked |
+| [Sensors](docs/features/sensors.md) | ✅ | Compass works (heading + dial, 2026-10-30, kernel126); auto-rotate works (accelerometer -> rotation); proximity turns the screen off when near (kernel122); all 6 sensors answer on the audio DSP; auto-brightness parked |
 
 ## Quick start
 

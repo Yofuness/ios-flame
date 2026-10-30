@@ -5,6 +5,7 @@ Newest first. Details stay in the feature Logs (docs/features/<name>.md).
 
 ## From the plan (2026-10-28 .. 2026-10-30)
 
+- 2026-10-30 COMPASS WORKS (B46): fake DeviceMotion HID services {0xFF0C,4} (CoreMotion) + {0xFF0C,8} (locationd heading), xnu 0243/0245, adspboot 9-axis Madgwick + hard-iron box + heading/accuracy/status 0x100 in the type-2 report; kernel126 default sweetmotion=0x4bf (sensors.md dm1-dm4).
 - 2026-10-30 D6/B38 BOOT CMDLINE LIMIT: kernel125 (xnu 0244) has 23 boot-args built in; everyday command line 574 -> 266 bytes of 591 (boot.md bk1).
 - 2026-10-30 APP EXTENSIONS WORK (B8, ext1): widgets + gallery, share sheet, Files "On My iPhone", emoji keyboard, 0 new crashes; leftovers: skeleton widgets, cover-sheet button glyphs (B44) (apps.md ext1).
 - 2026-10-30 App survey with screenshots (sv1): 25 OK, 5 empty-OK, 4 broken; findings in backlog B44-B46 (apps.md).

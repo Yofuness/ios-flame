@@ -33,6 +33,7 @@ exec /var/local/bin/adspboot boot --rpc --root --sensors --unsafe --sns-motion -
 	>/var/local/sensors.log 2>&1
 SH
 	F put $U/sensors-start.sh /var/local/bin/sensors-start.sh 755 >/dev/null
+	tools/sunfish-ssh "touch /var/local/sensors.devmotion"	# B46 Compass fusion on (kernel126+ boots sweetmotion=0x4bf)
 	tools/sunfish-soc0-files.sh
 	tools/sunfish-sensors-files.sh | sed -n '/^== sensors config/,/^== DSP/p' | grep -v '^== DSP'
 	echo "(push the sensors config above once if /var/local/fw/sensors is empty)"

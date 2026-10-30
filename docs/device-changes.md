@@ -84,3 +84,4 @@ output in /var/local.
 - 2026-10-29 SweetMetal2 reinstalled several times (rotation, touch, L command): sunfish-metal2-install.sh.
 - 2026-10-29 /var/local/sweet-orient created (rotation commands).
 - 2026-10-29 launchd: assetsd re-enabled with StandardErrorPath (Photos), lskdd/fairplayd.H2/wifip2pd dropped (B19), dropbear Interactive (D2).
+- 2026-10-30 B46 Compass: /var/local/sensors.devmotion (tools/sunfish-install-sensors.sh creates it), adspboot with DeviceMotion fusion (same script), /var/local/magcal.txt (seeded by hand in dm2; adspboot rewrites it from real magnetometer data every 30 s; delete it to start calibration fresh), /var/local/dm-yaw test knob (removed after tests). Boot: sweetmotion=0x4bf for kernel126+ (tools/sunfish-boot.sh).
