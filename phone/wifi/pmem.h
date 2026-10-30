@@ -37,6 +37,7 @@ struct pmem_rpmh {
 	uint32_t value[4];
 };
 #define PMEM_RPMH	_IOW('P', 5, struct pmem_rpmh)
+#define PMEM_ALLOC32	_IOWR('P', 6, struct pmem_alloc)	/* below 4 GB (kernel109+, xnu 0232) */
 
 void pm_init(void);			/* exits if /dev/pmem is missing */
 uint32_t rd32(uint64_t pa);
@@ -45,6 +46,7 @@ void wr64(uint64_t pa, uint64_t v);	/* two 32-bit stores, low first */
 int pm_rd(uint64_t pa, void *buf, size_t len);
 int pm_wr(uint64_t pa, const void *buf, size_t len);
 uint64_t pm_alloc(uint64_t size, uint64_t align);	/* 0 on failure */
+uint64_t pm_alloc32(uint64_t size, uint64_t align);	/* the same, below 4 GB (32-bit DMA) */
 int pm_free(uint64_t pa);
 void pm_smc(uint64_t x[8]);		/* x0..x7 in, x0..x3 out */
 int pm_list(struct pmem_list *l);

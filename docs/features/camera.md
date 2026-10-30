@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:05 cam9 (kernel108, same boot): capture aborted safely, PMEM buffer above 4 GB; xnu 0232 PMEM_ALLOC32 -> kernel109
+- `tools/sunfish-cam-rx.sh --install --capture` (e6d65ae): powered up, camnoc_axi RCG set to 150 MHz (PLL0 even /4, CFG 0x207), then PMEM_ALLOC 8 MB returned PA 0x1afde0000: above 4 GB, IFE IMAGE_ADDR is 32 bit -> "abort", PMEM_FREE 0, powered down. No DMA, no SMMU change, no reset. (Privacy: the phone is in the user's bedroom at night; capture results are checked by numbers only, the picture stays unopened in work/cam/ for the user.)
+- Fix: xnu 0232 `PMEM_ALLOC32` (ioctl 'P' 6): kmem_alloc_contig with max_pnum = 4 GB - 1 page; phone/wifi/pmem.c pm_alloc32(); camrx capture uses it. Kernel: kernel109 = kernel108 + 0232.
+
 ### 2026-10-30 22:45 cam8 (kernel108, same boot): stage c DONE, real sensor frames reach CSID-lite (c5e17d7)
 - `camclk pll0 on` (Fabia, Linux v6.15 sequence): L 0x3e, FRAC 0x8000, TEST_CTL 0x40000000, USER_CTL[15:8] 0x31; lock, MODE 0xd0800004 -> 0xd0800005 after OUTCTRL (VCO 1200 MHz). camclk has no --dry-run.
 - `camrx phy on`: settle count 25 (Linux formula: 85 ns + 6 UI at 304 Mb/s/lane, 300 MHz timer; the notes' 36 was wrong); csi0phytimer 300 MHz (src 2 PLL0 even, div 3) + csiphy0 branches on; CSIPHY0 v1.2 redfin 0922 table, lane map 0x3210 (guess, worked). Status 0x8b0..0x8d8 all 0 after phy on.

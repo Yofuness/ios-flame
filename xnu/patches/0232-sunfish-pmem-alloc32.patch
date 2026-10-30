@@ -1,0 +1,57 @@
+From 78a78f8d6d5e8e5e372a2448435cb02a3645e4f8 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Thu, 29 Oct 2026 21:38:46 -0400
+Subject: [PATCH] sunfish: PMEM_ALLOC32, contiguous allocation below 4 GB for
+ 32-bit DMA masters (camera IFE write master) (0232)
+
+---
+ bsd/dev/sweet_pmem.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_pmem.c b/bsd/dev/sweet_pmem.c
+index d405964..3df0da0 100644
+--- a/bsd/dev/sweet_pmem.c
++++ b/bsd/dev/sweet_pmem.c
+@@ -75,6 +75,8 @@ struct pmem_rpmh {
+ 	uint32_t value[4];
+ };
+ #define PMEM_RPMH       _IOW('P', 5, struct pmem_rpmh)
++/* PMEM_ALLOC below 4 GB (32-bit DMA masters, e.g. the camera IFE write master) */
++#define PMEM_ALLOC32    _IOWR('P', 6, struct pmem_alloc)
+ extern int sweet_rpmh_write(const char *res, unsigned n, const uint32_t *offsets, const uint32_t *values);
+ 
+ #define PMEM_MAPS       16              /* 2 MB device windows, round robin */
+@@ -253,7 +255,7 @@ sweet_smc(uint64_t x[8])
+ }
+ 
+ static int
+-pm_do_alloc(struct pmem_alloc *a)
++pm_do_alloc(struct pmem_alloc *a, int below4g)
+ {
+ 	vm_size_t size = round_page(a->size);
+ 	uint64_t align = a->align > PAGE_SIZE ? a->align : PAGE_SIZE;
+@@ -271,7 +273,8 @@ pm_do_alloc(struct pmem_alloc *a)
+ 		return ENOSPC;
+ 	}
+ 	vm_offset_t va = 0;
+-	if (kmem_alloc_contig(kernel_map, &va, size, PAGE_MASK, 0, (ppnum_t)(atop_64(align) - 1),
++	if (kmem_alloc_contig(kernel_map, &va, size, PAGE_MASK, below4g ? (ppnum_t)(atop_64(1ULL << 32) - 1) : 0,
++	    (ppnum_t)(atop_64(align) - 1),
+ 	    KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		return ENOMEM;
+ 	}
+@@ -296,7 +299,10 @@ pm_ioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, __unus
+ 	lck_mtx_lock(&sweet_pmem_lock);
+ 	switch (cmd) {
+ 	case PMEM_ALLOC:
+-		err = pm_do_alloc((struct pmem_alloc *)data);
++		err = pm_do_alloc((struct pmem_alloc *)data, 0);
++		break;
++	case PMEM_ALLOC32:
++		err = pm_do_alloc((struct pmem_alloc *)data, 1);
+ 		break;
+ 	case PMEM_FREE: {
+ 		uint64_t pa = *(uint64_t *)data;
+-- 
+2.56.0
+

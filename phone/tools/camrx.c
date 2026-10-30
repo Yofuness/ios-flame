@@ -945,7 +945,7 @@ static int capture(const char *out, const char *cmd)
 	       "%u B (cam8 CSID bytes) are taken over, not verified here\n", FRAME_BYTES);
 	stage("pmem alloc 8 MB");
 	atexit(cap_down);
-	cap.pa = dry ? 0x80000000ull : pm_alloc(CAP_BUF, 0x10000);
+	cap.pa = dry ? 0x80000000ull : pm_alloc32(CAP_BUF, 0x10000);	/* needs kernel109 (xnu 0232) */
 	if (!cap.pa)
 		return 1;
 	printf("camrx: buffer PA %#llx + %#x\n", (unsigned long long)cap.pa, CAP_BUF);

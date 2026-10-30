@@ -69,6 +69,16 @@ uint64_t pm_alloc(uint64_t size, uint64_t align)
 	return a.pa;
 }
 
+uint64_t pm_alloc32(uint64_t size, uint64_t align)
+{
+	struct pmem_alloc a = { .size = size, .align = align };
+	if (ioctl(pm_fd, PMEM_ALLOC32, &a) < 0) {
+		fprintf(stderr, "pmem: alloc32 %llu: %s\n", (unsigned long long)size, strerror(errno));
+		return 0;
+	}
+	return a.pa;
+}
+
 int pm_free(uint64_t pa)
 {
 	return ioctl(pm_fd, PMEM_FREE, &pa);
