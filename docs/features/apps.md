@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 10:20 sb1 (kernel117 = + xnu 0240): no reset, but no spawn carried a container; extensions still die
+- Boot kernel117 sweetse9=2 sweetcampmic=2 (4454 mV), SSH 17 s, UI up. "SWEET Sandbox: spawn blob" 16 lines, all "(launchd) len 1104 profile yes container no" (pids 222-261: the 16-line cap was used up by launchd's early spawns); "container for pid" 0.
+- LocalStorageFileProvider[309] and PhotosFileProvider[313] still "Bootstrapping; failed to get my own sandbox container" + "invalid sandbox or container: error 2"; Files: "Content Unavailable"; fileproviderd "must have pid" x5.
+- Next (0240 v2): log the blobs of extension spawns (strings + offsets), a fallback from the exec's HOME=/private/var/mobile/Containers/Data/... env string, and log each op-4 call.
+
 ### 2026-10-30 10:05 Cause of the extension deaths: our kernel's Sandbox op 4 (container path) always says ENOENT
 - research/notes/files-on-my-iphone.md "extension sandbox container": PlugInKit -[PKService checkEnvironment:] (0x1aaf39c94, unconditional from _prepareToRun) calls sandbox_container_path_for_pid(getpid()) = __sandbox_ms("Sandbox", 4, {pid,0,buf,len,0}); on failure "Bootstrapping; failed to get my own sandbox container" + NSInternalInconsistencyException. Our permissive policy (sweet_amfi.c:425, patch 0050) returns ENOENT for op 4.
 - On a real phone Sandbox.kext keeps the container from the spawn's sandbox attributes (+0x50). Fix being written: xnu 0240 remembers it at exec (mpo hook with macpolicyattr) and answers op 4; it should fix every PlugInKit extension (LocalStorage, PhotosFileProvider B8, likely widgets/share/keyboards).
