@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:55 fp2/fp3: the LocalStorage extension starts and dies: "failed to get my own sandbox container"
+- Filtered captures (`oslog -l -t 35 -n fileproviderd / -n LocalStorage / -n Files`; the unfiltered oslog dies with SIGSEGV on the PhotosFileProvider crash backtrace) while opening On My iPhone and tapping Try Again: LocalStorageFileProvider[751] "Hello, I'm launching as euid = 501, uid = 501, personaid = 1000", "Bootstrapping; failed to get my own sandbox container", "*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'plugin has invalid sandbox or container: error 2 path ?'". fileproviderd: "Plugin ... must have pid! Extension request will fail", "Failed to aquire assertion for plugin: ... pid: 0", NSCocoaErrorDomain 4097. PhotosFileProvider dies the same way (the long-known B8 crash).
+- So the remaining Files blocker is generic: app extensions can't learn their own sandbox container (probably also B8 and other extensions). Investigator on the container lookup path.
+- The storage dir exists: .../AppGroup/E1DA353E-.../File Provider Storage (mobile:mobile, empty).
+
 ### 2026-10-30 09:45 hp5: "ON MY IPHONE" IS LISTED (fpfix via the sh exec wrapper, kernel116); opening it gives "Content Unavailable"
 - kernel116 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2. fileproviderd starts through the wrapper (kill -> one restart, no crash loop). The oslog capture showed no "fpfix"/"not eligible" lines either way (os_log from the constructor not seen).
 - fpdump: LocalStorage "isEnabled=1 ... supportsEnumeration=1 ... isConnectedToAppExtension=1", storage .../Containers/Shared/AppGroup/E1DA353E.../File Provider Storage (no --enable needed). Files > Browse > Locations: On My iPhone, iCloud Drive, Recently Deleted.
