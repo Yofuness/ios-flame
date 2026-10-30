@@ -13,6 +13,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:45 hg1: the hang is kernel-wide: launchd stuck too, no software reboot works
+- backboardd (pid 60) "Us+" (TIME creeps 0:59.14 -> 0:59.25 in 10 s), launchd (pid 1) "Us"; SpringBoard "Ss". Kernel console keeps going (AKS, ARP, exec lines to 1213 s); SSH works.
+- tools/sunfish-test.sh / tools/flame-cmd.py reboot: no effect; flame-cmd `rtc` gets no reply, so the kernel command thread is stuck (the "reboot" handler calls sync() first, sweet_usb.c:1108, which blocks). `kill -9 1` refused (EPERM). So launchd, backboardd and sync wait on the same kernel lock (likely a filesystem/vnode lock; guess).
+- Needs a forced restart by hand (power key); asked the user. Follow-ups: let the "reboot" command skip sync() when a sync is already pending (or do sync in a separate thread with a timeout); the RAM log of this boot is rescued on the next boot: read it for the blocked threads.
+
 ### 2026-10-30 20:30 UI hang after a lock/wake on kernel126 (sv2 end): backboardd stuck in "U" state
 - kernel126 (everyday recipe, sweetmotion=0x4bf; Compass DeviceMotion services + DSP mag_cal/gyro_cal running). After run sv2 ended with H then K (~14:50), the display stayed frozen at 2:51 (Watch app's notification prompt on screen); later H/T had no effect; openapp failed for every app (FBSOpenApplicationServiceErrorDomain code 5, "XPC error received on message reply handler").
 - Kernel alive (Wi-Fi, AKS lines continue; SSH fine). Last frames: "SWEET FB: backboardd notifications type 5 off" + "sel 72" at 377.9 s, "5s: 30 swaps (6.0 fps)" at 382 s, then no swaps. ps: backboardd (pid 60) "Us+" (uninterruptible wait), SpringBoard and Bridge alive.
