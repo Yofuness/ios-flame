@@ -1,0 +1,248 @@
+From 0178c3ec9d528e9d82749cad0954e1a9bca62267 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 14:05:51 -0400
+Subject: [PATCH] 0245 sunfish: devmotion8 {0xff0c, 8} for locationd CLCompass7
+ (sweetmotion bit 0x400), type-2 records fanned out, u64 at offset 4 zeroed
+ unless sweetdm8raw=1
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_motion.c             | 10 +++---
+ iokit/Kernel/arm/hid/SweetHID.cpp  | 56 ++++++++++++++++++++++++------
+ iokit/Kernel/arm/hid/SweetMotion.h | 12 +++++--
+ iokit/KernelConfigTables.cpp       |  5 +++
+ 4 files changed, 64 insertions(+), 19 deletions(-)
+
+diff --git a/bsd/dev/sweet_motion.c b/bsd/dev/sweet_motion.c
+index 25e8579..fd16eb1 100644
+--- a/bsd/dev/sweet_motion.c
++++ b/bsd/dev/sweet_motion.c
+@@ -53,10 +53,10 @@ static LCK_GRP_DECLARE(sweet_motion_grp, "sweet_motion");
+ static LCK_MTX_DECLARE(sweet_motion_mtx, &sweet_motion_grp);
+ 
+ static const char *const sm_names[SWEET_SENSOR_COUNT] = {
+-	"accel", "gyro", "als", "prox", "compass", "pressure", "orient", "devmotion",
++	"accel", "gyro", "als", "prox", "compass", "pressure", "orient", "devmotion", "devmotion8",
+ };
+-static const uint32_t sm_types[SWEET_SENSOR_COUNT] = { 13, 20, 12, 14, 21, 31, 10, SWEET_MOTION_DEVMOTION_TYPE };
+-static const uint32_t sm_period_ms[SWEET_SENSOR_COUNT] = { 20, 20, 200, 200, 40, 200, 500, 10 };
++static const uint32_t sm_types[SWEET_SENSOR_COUNT] = { 13, 20, 12, 14, 21, 31, 10, SWEET_MOTION_DEVMOTION_TYPE, SWEET_MOTION_DEVMOTION_TYPE };
++static const uint32_t sm_period_ms[SWEET_SENSOR_COUNT] = { 20, 20, 200, 200, 40, 200, 500, 10, 25 };
+ 
+ /* ---- /dev/redwood-motion ---- */
+ 
+@@ -124,7 +124,7 @@ sm_post_devmotion(const struct sweet_motion_devmotion *r)
+ 		sm.samples++;
+ 	} else if (sm.rejected++ < 16) {
+ 		printf("SWEET MOTION: devmotion record len %u report type %u: %s\n", r->len, r->bytes[0],
+-		    e == ENODEV ? "service not registered (sweetmotion bit 0x80)" : e == EINVAL ? "bad len/type" : "failed");
++		    e == ENODEV ? "service not registered (sweetmotion bit 0x80/0x400)" : e == EINVAL ? "bad len/type" : "failed");
+ 	}
+ 	return e;
+ }
+@@ -473,7 +473,7 @@ sweet_motion_cmd(const char *s, const char *end)
+ 		/* defaults: upright portrait, slow yaw, office light, near, sea level, portrait */
+ 		static const int64_t defaults[SWEET_SENSOR_COUNT][4] = {
+ 			{ 0, 9807, 0, 0 }, { 0, 0, 500, 0 }, { 300000, 0, 0, 0 }, { 1000, 1000000, 0, 0 },
+-			{ 20000, 0, -40000, 0 }, { 101325, 0, 0, 0 }, { 1000, 0, 0, 0 }, { 0, 0, 0, 0 },
++			{ 20000, 0, -40000, 0 }, { 101325, 0, 0, 0 }, { 1000, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 },
+ 		};
+ 		uint32_t v[4];
+ 		for (int k = 0; k < 4; k++) {
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 6f96538..9ae9dd4 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -617,7 +617,7 @@ sweet_hid_touch(int finger, int down, int x, int y)
+  * `poke m fake` through sweet_hid_sensor() (SweetMotion.h). Every open, user client, copyEvent type and
+  * setProperties key/value is logged ("SWEET MOTION:"): that is how we learn what backboardd, locationd and
+  * CoreBrightness ask for; user-space property reads of the services are logged too. Boot-arg sweetmotion=MASK
+- * (redfin default 0x77 = all but prox; sunfish 0228: default 0 = none; bit = service index, 0243: 0x80 devmotion; 0x100 = Transport "SPU" instead of "Sweet";
++ * (redfin default 0x77 = all but prox; sunfish 0228: default 0 = none; bit = service index, 0243: 0x80 devmotion; 0245: 0x400 devmotion8; 0x100 = Transport "SPU" instead of "Sweet";
+  * 0x200 = initial copyEvent answers on every service).
+  */
+ #include <libkern/c++/OSSerialize.h>
+@@ -655,6 +655,9 @@ static const SweetSensorInfo gSweetSensorInfo[SWEET_SENSOR_COUNT] = {
+ 	/* sunfish 0243: CoreMotion's SPU fusion service (CLSensorFusionService*SPU, Compass mode 0x22); raw reports
+ 	 * from sensd's own fusion as VendorDefined events (sweet_hid_devmotion), bit 0x80 */
+ 	{ "devmotion",   kHIDPage_AppleVendorMotion, kHIDUsage_AppleVendorMotion_DeviceMotion, SWEET_MOTION_DEVMOTION_TYPE, 0x17, 10000, kIOHIDEventTypeVendorDefined },
++	/* sunfish 0245: locationd's CLCompass7 heading service (motionCaps bit 5): the type-2 reports of devmotion
++	 * (sweet_hid_devmotion), bit 0x400 (SWEET_SENSOR_BIT) */
++	{ "devmotion8",  kHIDPage_AppleVendorMotion, kHIDUsage_AppleVendorMotion_DeviceMotion10, SWEET_MOTION_DEVMOTION_TYPE, 0x18, 25000, kIOHIDEventTypeVendorDefined },
+ };
+ 
+ /* Runtime knobs (`poke m knob NAME VALUE`); the defaults are guesses the phone has to confirm. */
+@@ -804,6 +807,7 @@ SWEET_SENSOR_CLASS(SweetHIDCompass, SWEET_SENSOR_COMPASS);
+ SWEET_SENSOR_CLASS(SweetHIDPressure, SWEET_SENSOR_PRESSURE);
+ SWEET_SENSOR_CLASS(SweetHIDOrientation, SWEET_SENSOR_ORIENT);
+ SWEET_SENSOR_CLASS(SweetHIDDeviceMotion, SWEET_SENSOR_DEVMOTION);
++SWEET_SENSOR_CLASS(SweetHIDDeviceMotion8, SWEET_SENSOR_DEVMOTION_COMPASS);
+ 
+ static SweetHIDSensor *gSweetSensors[SWEET_SENSOR_COUNT];
+ 
+@@ -813,7 +817,7 @@ SweetHIDSensor::start(IOService *provider)
+ 	int i = sensorIndex();
+ 	const SweetSensorInfo *info = &gSweetSensorInfo[i];
+ 
+-	if (!(sweet_motion_mask() & (1u << i))) {
++	if (!(sweet_motion_mask() & SWEET_SENSOR_BIT(i))) {
+ 		IOLog("SWEET MOTION: %s off (sweetmotion=0x%x)\n", info->name, sweet_motion_mask());
+ 		return false;
+ 	}
+@@ -1049,7 +1053,7 @@ SweetHIDSensor::initialEvent()
+ 	static const uint32_t v[SWEET_SENSOR_COUNT][4] = {
+ 		{ 0, 0x411ce80a /* 9.80665 */, 0, 0 }, { 0, 0, 0, 0 }, { 0x42c80000 /* 100 */, 0, 0, 0 }, { 0, 0, 0, 0 },
+ 		{ 0x41a00000 /* 20 */, 0, 0xc2200000 /* -40 */, 0 }, { 0x42caa666 /* 101.325 */, 0, 0, 0 },
+-		{ 0x3f800000 /* 1 */, 0, 0, 0 }, { 0, 0, 0, 0 },
++		{ 0x3f800000 /* 1 */, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 },
+ 	};
+ 	int i = sensorIndex();
+ 	struct sweet_motion_sample s = { gSweetSensorInfo[i].motionType, 0, 0, { v[i][0], v[i][1], v[i][2], v[i][3] } };
+@@ -1320,6 +1324,7 @@ SweetHIDSensor::post(const struct sweet_motion_sample *s, IOHIDEvent **built)
+ 		break;
+ 	}
+ 	case SWEET_SENSOR_DEVMOTION:
++	case SWEET_SENSOR_DEVMOTION_COMPASS:
+ 		return EINVAL;  /* 0243: raw reports only (postRaw) */
+ 	}
+ 	if (!event) {
+@@ -1343,28 +1348,46 @@ SweetHIDSensor::post(const struct sweet_motion_sample *s, IOHIDEvent **built)
+ 	return 0;
+ }
+ 
+-/* sunfish 0243: one raw device-motion report as a VendorDefined {0xff0c, 4} event (CoreMotion populateDeviceMotion). */
++/* sunfish 0243: one raw device-motion report as a VendorDefined {0xff0c, 4} event (CoreMotion populateDeviceMotion).
++ * 0245: also {0xff0c, 8} (devmotion8, type 2 only); its copy has the u64 at payload offset 4 zeroed (CLCompass7
++ * filters on it) unless boot-arg sweetdm8raw=1. */
+ int
+ SweetHIDSensor::postRaw(const struct sweet_motion_devmotion *r)
+ {
+ 	uint64_t now = mach_absolute_time(), ts = r->ts_mach, sec;
+ 	uint8_t kind = r->bytes[0];
++	int i = sensorIndex();
++	uint8_t copy[sizeof(r->bytes)];
++	const uint8_t *payload = r->bytes;
+ 
+-	if (!((r->len == 52 && (kind == 3 || kind == 4)) || (r->len == 88 && kind == 2))) {
++	if (!((r->len == 52 && (kind == 3 || kind == 4) && i == SWEET_SENSOR_DEVMOTION) || (r->len == 88 && kind == 2))) {
+ 		return EINVAL;
+ 	}
++	if (i == SWEET_SENSOR_DEVMOTION_COMPASS) {
++		static int raw = -1;
++		if (raw < 0) {
++			int v = 0;
++			PE_parse_boot_argn("sweetdm8raw", &v, sizeof(v));
++			raw = v ? 1 : 0;
++		}
++		if (!raw) {
++			memcpy(copy, r->bytes, r->len);
++			bzero(copy + 4, 8);
++			payload = copy;
++		}
++	}
+ 	nanoseconds_to_absolutetime(NSEC_PER_SEC, &sec);
+ 	if (ts == 0 || ts > now || now - ts > sec) {
+ 		ts = now;
+ 	}
+-	IOHIDEvent *event = IOHIDEvent::vendorDefinedEvent(ts, gSweetSensorInfo[SWEET_SENSOR_DEVMOTION].page,
+-	    gSweetSensorInfo[SWEET_SENSOR_DEVMOTION].usage, 0, (UInt8 *)r->bytes, r->len);
++	IOHIDEvent *event = IOHIDEvent::vendorDefinedEvent(ts, gSweetSensorInfo[i].page,
++	    gSweetSensorInfo[i].usage, 0, (UInt8 *)payload, r->len);
+ 	if (!event) {
+ 		return ENOMEM;
+ 	}
+ 	uint64_t n = OSIncrementAtomic64((volatile SInt64 *)&fEvents) + 1;
+ 	if (n <= 3 || (gSweetKnobs.every && n % gSweetKnobs.every == 0)) {
+-		IOLog("SWEET MOTION: devmotion #%llu: report type %u, %u bytes (%u clients)\n", n, kind, r->len, fClients);
++		IOLog("SWEET MOTION: %s #%llu: report type %u, %u bytes (%u clients)\n", gSweetSensorInfo[i].name, n, kind, r->len, fClients);
+ 	}
+ 	dispatchEvent(event);
+ 	IOLockLock(fLock);
+@@ -1388,6 +1411,9 @@ void
+ SweetHIDSensor::want(struct sweet_motion_want *w)
+ {
+ 	int i = sensorIndex();
++	if (i >= 8) {
++		return;         /* 0245: devmotion8 has no slot in sweet_motion_want (ABI with sensd) */
++	}
+ 	w->present |= 1u << i;
+ 	w->clients[i] = fClients;
+ 	w->interval_us[i] = fInterval;
+@@ -1410,10 +1436,18 @@ sweet_hid_sensor(const struct sweet_motion_sample *s)
+ extern "C" int
+ sweet_hid_devmotion(const struct sweet_motion_devmotion *r)
+ {
+-	if (!gSweetSensors[SWEET_SENSOR_DEVMOTION]) {
+-		return ENODEV;
++	int e = ENODEV;
++	if (gSweetSensors[SWEET_SENSOR_DEVMOTION]) {
++		e = gSweetSensors[SWEET_SENSOR_DEVMOTION]->postRaw(r);
++	}
++	/* 0245: accepted type-2 reports also go to devmotion8 (CLCompass7) */
++	if (gSweetSensors[SWEET_SENSOR_DEVMOTION_COMPASS] && r->len == 88 && r->bytes[0] == 2 && (e == 0 || e == ENODEV)) {
++		int e8 = gSweetSensors[SWEET_SENSOR_DEVMOTION_COMPASS]->postRaw(r);
++		if (e == ENODEV) {
++			e = e8;
++		}
+ 	}
+-	return gSweetSensors[SWEET_SENSOR_DEVMOTION]->postRaw(r);
++	return e;
+ }
+ 
+ extern "C" int
+diff --git a/iokit/Kernel/arm/hid/SweetMotion.h b/iokit/Kernel/arm/hid/SweetMotion.h
+index ebae9bc..1ea8325 100644
+--- a/iokit/Kernel/arm/hid/SweetMotion.h
++++ b/iokit/Kernel/arm/hid/SweetMotion.h
+@@ -22,7 +22,12 @@ struct sweet_motion_sample {
+ #define SWEET_MOTION_SYNTHETIC	0x80000000u
+ 
+ enum { SWEET_SENSOR_ACCEL, SWEET_SENSOR_GYRO, SWEET_SENSOR_ALS, SWEET_SENSOR_PROX, SWEET_SENSOR_COMPASS,
+-	SWEET_SENSOR_PRESSURE, SWEET_SENSOR_ORIENT, SWEET_SENSOR_DEVMOTION, SWEET_SENSOR_COUNT };
++	SWEET_SENSOR_PRESSURE, SWEET_SENSOR_ORIENT, SWEET_SENSOR_DEVMOTION, SWEET_SENSOR_DEVMOTION_COMPASS, SWEET_SENSOR_COUNT };
++
++/* sunfish 0245: devmotion8 {0xff0c, 8} (locationd CLCompass7) is index 8, but bit 0x100 is Transport "SPU":
++ * it is enabled by sweetmotion bit 0x400 instead (SWEET_SENSOR_BIT). Not in sweet_motion_want (8 slots). */
++#define SWEET_MOTION_DM8_BIT	0x400
++#define SWEET_SENSOR_BIT(i)	((i) == SWEET_SENSOR_DEVMOTION_COMPASS ? SWEET_MOTION_DM8_BIT : 1u << (i))
+ 
+ /*
+  * sunfish 0243: one raw CoreMotion device-motion report for the {0xff0c, 4} service (sweetmotion bit 0x80),
+@@ -47,7 +52,7 @@ struct sweet_motion_want {
+ };
+ 
+ /* Boot-arg sweetmotion: bit i enables sensor service i (default 0x77 = all but prox, which crash-looped
+- * backboardd on 2026-10-26; 0x7f all; 0x80 = devmotion {0xff0c, 4}, sunfish 0243); 0 = no services, no device; 0x100 = Transport "SPU";
++ * backboardd on 2026-10-26; 0x7f all; 0x80 = devmotion {0xff0c, 4}, sunfish 0243; 0x400 = devmotion8 {0xff0c, 8}, 0245); 0 = no services, no device; 0x100 = Transport "SPU";
+  * 0x200 = every service answers copyEvent with a neutral sample until a real one exists. */
+ uint32_t sweet_motion_mask(void);
+ /* Post one sample from its service; 0, or ENODEV (no such service / disabled) / EINVAL (unknown type). */
+@@ -61,7 +66,8 @@ void sweet_hid_sensor_knobs_print(void);
+ void sweet_hid_sensor_relog(void);	/* forget which setProperties keys were logged */
+ /* Service index of a motion type, or -1. */
+ int sweet_motion_index(uint32_t type);
+-/* sunfish 0243: post one device-motion record; 0, ENODEV (service off) or EINVAL (bad len/report type). */
++/* sunfish 0243: post one device-motion record; 0, ENODEV (service off) or EINVAL (bad len/report type).
++ * 0245: type-2 records also go to devmotion8 when it is registered. */
+ int sweet_hid_devmotion(const struct sweet_motion_devmotion *r);
+ 
+ #ifdef __cplusplus
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 27d7fe9..d02a539 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -118,6 +118,11 @@ const char * gIOKernelConfigTables =
+     "     'IOMatchCategory' = SweetHIDDeviceMotion;"
+     "   },"
+     "   {"
++    "     'IOClass'         = SweetHIDDeviceMotion8;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = SweetHIDDeviceMotion8;"
++    "   },"
++    "   {"
+     "     'IOClass'         = SweetBattery;"
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetBattery;"
+-- 
+2.56.0
+
