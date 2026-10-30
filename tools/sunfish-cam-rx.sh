@@ -41,9 +41,10 @@ down() {
 	echo "powered down; log $LOG"
 }
 trap down EXIT
-run "$B/camid --addr 0x1a --keep" &&
-	run "$B/camclk pll2 on" &&
+# PLLs first (they need no GDSC): a camnoc RCG left on PLL0 by an aborted capture then still has its source
+run "$B/camclk pll2 on" &&
 	run "$B/camclk pll0 on" &&
+	run "$B/camid --addr 0x1a --keep" &&
 	run "$B/camclk mclk 0 24" &&
 	run "$B/camrx clocks on" &&
 	run "$B/camrx phy on $SETTLE" || exit 1

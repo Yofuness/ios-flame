@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:40 cam11 (kernel109, same boot): camid ABORT camnoc_axi (leftover camnoc RCG on PLL0)
+- `sunfish-cam-rx.sh --install --capture` (fbaddc1): camid stopped at "ABORT: camnoc_axi" after GDSC on and cpas_ahb 0x1. Cause: cam10's camrx set the camnoc RCG to 150 MHz (PLL0 even), then `camclk off` turned PLL0 off; RCG settings survive, so the camnoc_axi branch has no running source. No capture, no DMA, no reset.
+- Fix: camrx's cleanup puts the camnoc RCG back on XO while PLL0 still runs; sunfish-cam-rx.sh starts PLL2 + PLL0 before camid (PLLs need no GDSC, cam2).
+
 ### 2026-10-30 23:25 cam10 (kernel109, sweetse9=2 sweetcampmic=2): PMEM_ALLOC32 ENOMEM; buffer moves to the display carveout
 - Battery 4455 mV; kernel109 boots (SSH 7 s). `sunfish-cam-rx.sh --install --capture`: power-up, camnoc 150 MHz, CSIPHY ok, then "pmem: alloc32 8388608: Cannot allocate memory"; powered down. No DMA, no reset. (The runner's first boot try passed the kernel directory to sunfish-boot.sh: give it work/kernel109/kernel.development.sweet.)
 - Cause (known since the audio work, audio.md): XNU manages no RAM below 4 GB here (mkadt.py gives XNU 0x1_0000_0000 up); all 680 logged PMEM allocations are at 0x106..-0x12. So 0232 can't succeed; it stays harmless.

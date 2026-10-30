@@ -802,6 +802,14 @@ static void cap_down(void)
 		cap.smmu = 0;
 		smmu_release("cam");
 	}
+	/* cam11: a camnoc RCG left on PLL0 even outlives `camclk off` and then camid can't start camnoc_axi
+	 * (its source is off); put it back on XO while PLL0 still runs (the WM is stopped by now) */
+	if (!dry && (rd32(CAMNOC_RCG + 4) & 0x71f) == CAMNOC_CFG_150) {
+		wr(CAMNOC_RCG + 4, rd32(CAMNOC_RCG + 4) & ~0x371fu, "camnoc_axi CFG back to XO (cleanup)");
+		wr(CAMNOC_RCG, rd32(CAMNOC_RCG) | 1, "CMD UPDATE");
+		if (poll(CAMNOC_RCG, 1, 0, 500, 1000))
+			printf("camrx: camnoc_axi UPDATE to XO stuck (CMD %#x)\n", rd32(CAMNOC_RCG));
+	}
 	if (cap.pa && cap.owned && !dry) {
 		printf("camrx: PMEM_FREE %#llx -> %d\n", (unsigned long long)cap.pa, pm_free(cap.pa));
 		cap.pa = 0;
