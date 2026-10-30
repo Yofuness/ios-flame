@@ -6,12 +6,12 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
 1. ▶ **App extensions** (B8): Files "On My iPhone" OPENS (kernel121, xnu 0240 v5: Sandbox op 4 answers the container from the exec's HOME). Next: PhotosFileProvider, survey widgets/share/keyboard extensions. (apps.md)
-2. **Sensors** (B12): auto-rotate works; open: proximity into iOS, iOS-native motion services. (sensors.md)
+2. **Sensors** (B12): auto-rotate and proximity work (kernel122, sweetmotion=0x3f); open: iOS-native motion services (CoreMotion clients). (sensors.md)
 4. ▶ **App survey with screenshots** ("find the user-visible breakage"; flame-shot works again): open each stock app, screenshot, list what fails into backlog.md.
 3. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
-Camera.app (U12), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
+Camera.app (U12), proximity by hand (U17), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
 Files check (U13), touch while plugged in (U14).
 Parked: smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
 Finished items: [completed.md](completed.md) (not auto-loaded).

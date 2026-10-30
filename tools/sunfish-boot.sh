@@ -23,8 +23,8 @@ base="$base sweetpresentwait=1"
 base="$base sweetbl=2 sweettorch=1"
 # on by default since 2026-10-30: Bluetooth kernel bridge for bluetoothd (xnu 0226, kernel105+; bt7: devices listed)
 base="$base btbridge=1"
-# on by default since 2026-10-30: iOS orientation HID service off, auto-rotate comes from adspboot --sns-rot (sensors.md u10g; kernel107+, older kernels ignore it)
-base="$base sweetmotion=0x37"
+# on by default since 2026-10-30: iOS orientation HID service off, auto-rotate comes from adspboot --sns-rot (sensors.md u10g; kernel107+, older kernels ignore it); 0x3f (+prox) since 2026-10-30 13:30: needs kernel122+ (xnu 0241 Placement), older kernels crash-loop backboardd with prox: pass sweetmotion=0x37 there
+base="$base sweetmotion=0x3f"
 # NOSERIAL=1: no serial console (boot-time A/B, plan D2)
 if [ "${NOSERIAL:-0}" = 1 ]; then
 	base=$(printf '%s\n' $base | grep -v -x -e 'serial=3' -e '-enable_kprintf_spam' | tr '\n' ' ')

@@ -16,6 +16,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 13:30 px3: PROXIMITY WORKS in iOS (kernel122, sweetmotion=0x3f, now the default)
+- Two fixes: xnu 0241 (prox service Placement = 1: backboardd's discrete prox wrapper, no NSNull crash loop) and detection mode 3 or 6 (backboardd treats every other mode as inactive: research/notes/proximity.md, backboardd 0x10002d820).
+- `proxon 3 60` + `m fake prox 1` / `0`: proxon "active yes, near" during the fake, "active yes, far" around it; kernel "prox #1 (fake): near (mask 0x41)" 106.566 -> "SWEET FB: display off" 107.107 (0.5 s); "far" 118.006 -> "display on" 118.020. Mode 6 the same (off 147.380, on 152.951). backboardd exec count 1 throughout, no reset.
+- (flame-shot reads the framebuffer, so it can't show a panel-off state: use the kernel display off/on lines.) The real TCS3701 prox samples flow via the sensors job when iOS asks (SNS follow); a real hand-over-sensor check is with the user (U17).
+- tools/sunfish-boot.sh default sweetmotion=0x3f (needs kernel122+; older kernels: pass sweetmotion=0x37).
+
 ### 2026-10-30 13:15 px2: kernel122 (xnu 0241 prox Placement = 1): NO MORE backboardd crash loop; detection not active yet
 - kernel122 sweetmotion=0x3f: "exec backboardd" 1 in 2.5 min, 0 applyUIMode/NSInvalidArgumentException (px1: 11 restarts); kernel "SWEET MOTION: prox property read Placement: present (pid 60 backboardd)". So the prox HID service is accepted.
 - But `proxon 1 40` ("requested proximity mode 1") read "active no, far" every second; `m fake prox 1` ("fake prox 3f800000 ... repeating for 40 s") and flame-shots: screen stayed on, no "SWEET FB: display off". Kernel prox lines show "far (mask 0x0)" (the fake may be parsed as 1.0 -> no mask?). backboardd: "_proxState=kProxNone".

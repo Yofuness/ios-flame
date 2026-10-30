@@ -46,7 +46,7 @@ tools/sunfish-boot.sh first work/kernelNN/kernel.development.sweet   # RAM-only,
 # the Bluetooth device-tree node comes from tools/mkadt.py (work/boot/sunfish-hi.adt; rebuild it with mkadt.py --highmem)
 ```
 The first boot takes a few minutes; the lock screen appears. Boot args and defaults: [methods.md](methods.md).
-Everyday boot once the features are installed (2026-10-30): `HAPTICS=1 CAMERA=1 tools/sunfish-boot.sh NAME work/kernel121/kernel.development.sweet sweetse9=2 sweetcampmic=2` (kernel121 since 2026-10-30 11:00; HAPTICS/CAMERA add the ADT nodes; sweetse9/sweetcampmic power SE9 and the camera PMIC).
+Everyday boot once the features are installed (2026-10-30): `HAPTICS=1 CAMERA=1 tools/sunfish-boot.sh NAME work/kernel122/kernel.development.sweet sweetse9=2 sweetcampmic=2` (kernel122 since 2026-10-30 13:30 (proximity); kernel121 since 11:00; HAPTICS/CAMERA add the ADT nodes; sweetse9/sweetcampmic power SE9 and the camera PMIC).
 
 ## 5. /private/var on its own volume (by hand)
 The 16 GB root is 94 % full; /var moves to the rest of userdata (/dev/ufsroot1, xnu 0185+, kernel68+):

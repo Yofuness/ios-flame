@@ -14,3 +14,4 @@ reads the answers here or in chat. Moved out of docs/plan.md on 2026-10-30 (the 
 - U15 Headphone jack: READY (jack6 passed): Claude starts a 60-s detect run; plug wired headphones in at ~15 s, out at ~35 s. ~2 min.
 - U16 Haptics: toggle a switch in Settings (Sounds & Haptics): do you feel a tap? Is it too strong or weak? ~1 min (after Claude starts hapticd).
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
+- U17 Proximity: Claude starts `proxon 3 60` (detection on); cover the top of the phone (earpiece area) with your hand: does the screen go off, and on again when you take it away? ~1 min.
