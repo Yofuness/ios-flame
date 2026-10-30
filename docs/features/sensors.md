@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 15:00 O12: sensors idle while the screen is blanked (408bcb5): screen-off CPU 2.80 -> 0.05 s per minute
+- adspboot reads backboardd's "com.apple.springboard.hasBlankedScreen" state (notify_check each tick): blanked -> the orientation-only accel stream stops and the loop sleeps 20 ms (was 2 ms); "sns: screen blanked: sensors idle" / "sns: screen on: sensors back"; SNS_DARK=0 = off.
+- pw2 (kernel122, normal recipe): adspboot screen-off CPU 0:05.73 -> 0:05.78 in 60 s = 0.05 s (old binary: 2.80 s); 3 K/H cycles each logged the blanked/on pair, "sns: orientation 5 posted" after each wake, accel counts rising again. Proximity still fine (fake near -> display off ~1 s, far -> on). Oddity: the first K after boot logged no "blanked" (3.05 s CPU that minute) and the display came back by itself at 96.6 s with a second "lock button: sent": not explained.
+
 ### 2026-10-30 13:45 cs1/cs2: Compass waits for a "DeviceMotion" HID service we don't have (page 0xFF0C usage 4)
 - Compass (pid 334, kernel122) stays alive in the background but shows no heading; its CoreLocation log: "[CLIoHidInterface] Service for device with usage pair {65292, 4} is not ready" + "Could not set all properties after too many retries. Giving up." x22. 65292/4 = kHIDPage_AppleVendorMotion / DeviceMotion (AppleHIDUsageTables.h:105): the fused motion output a real iPhone's motion coprocessor provides. Accelerometer {0xFF00,3} and gyro {0xFF00,9} were accepted and stream; magnetometer samples flow too (kernel "compass #1000: x -43931 y -42412 z -115256 nT"), iOS asked compass at 25 ms.
 - Backlog B46: a DeviceMotion service (host-side fusion of accel+gyro+mag -> quaternion events in Apple's format): RE + new service, days. Not now.
