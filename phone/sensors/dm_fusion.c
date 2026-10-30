@@ -9,15 +9,11 @@
 void dm_init(struct dm_fusion *f, float beta)
 {
 	float mn[3], mx[3];	/* dm2: the hard-iron box survives a restart of the fusion */
-	float smb[3], sgb[3];	/* dm5: and SEE's biases (on-change: they may not come again) */
-	int cal = f->have_cal, init = f->beta != 0, sms = f->see_mag_st, sgs = f->see_gyro_st;
+	int cal = f->have_cal;
 	memcpy(mn, f->mag_min, sizeof(mn)), memcpy(mx, f->mag_max, sizeof(mx));
-	memcpy(smb, f->see_mag_bias, sizeof(smb)), memcpy(sgb, f->see_gyro_bias, sizeof(sgb));
 	memset(f, 0, sizeof(*f));
 	f->have_cal = cal;
 	memcpy(f->mag_min, mn, sizeof(mn)), memcpy(f->mag_max, mx, sizeof(mx));
-	f->see_mag_st = init ? sms : -1, f->see_gyro_st = init ? sgs : -1;
-	memcpy(f->see_mag_bias, smb, sizeof(smb)), memcpy(f->see_gyro_bias, sgb, sizeof(sgb));
 	f->q[0] = 1.0f;
 	f->beta = beta;
 }
@@ -128,29 +124,8 @@ int dm_mag(struct dm_fusion *f, const float m[3])
 	return 0;
 }
 
-void dm_mag_cal_bias(struct dm_fusion *f, const float b[3], int status)
-{
-	memcpy(f->see_mag_bias, b, sizeof(f->see_mag_bias));
-	f->see_mag_st = status;
-	if (dm_mag_cal_dsp(f) && !f->mag_seeded && f->have_acc && f->have_mag)
-		dm_seed_mag(f);
-}
-
-void dm_gyro_cal_bias(struct dm_fusion *f, const float b[3], int status)
-{
-	memcpy(f->see_gyro_bias, b, sizeof(f->see_gyro_bias));
-	f->see_gyro_st = status;
-}
-
-int dm_mag_cal_dsp(const struct dm_fusion *f)
-{
-	return f->see_mag_st >= 1;
-}
-
 int dm_mag_accuracy(const struct dm_fusion *f)
 {
-	if (dm_mag_cal_dsp(f))
-		return f->see_mag_st > 3 ? 2 : f->see_mag_st - 1;	/* dm5: SEE status 1/2/3 -> 0/1/2 */
 	if (!f->have_cal)
 		return -1;
 	float lo = 1e9f;
@@ -163,7 +138,7 @@ int dm_mag_accuracy(const struct dm_fusion *f)
 void dm_mag_bias(const struct dm_fusion *f, float b[3], float span[3])
 {
 	for (int i = 0; i < 3; i++) {
-		b[i] = dm_mag_cal_dsp(f) ? f->see_mag_bias[i] : f->have_cal ? (f->mag_max[i] + f->mag_min[i]) / 2 : 0;
+		b[i] = f->have_cal ? (f->mag_max[i] + f->mag_min[i]) / 2 : 0;
 		span[i] = f->have_cal ? f->mag_max[i] - f->mag_min[i] : 0;
 	}
 }
@@ -203,11 +178,8 @@ int dm_magcal_save(const struct dm_fusion *f, const char *path)
 	return rename(tmp, path);
 }
 
-void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_per_s)
+void dm_gyro(struct dm_fusion *f, const float g[3], uint64_t ts, double ticks_per_s)
 {
-	float g[3];	/* dm5: minus SEE's gyro_cal bias once it has one (status >= 1) */
-	for (int i = 0; i < 3; i++)
-		g[i] = gr[i] - (f->see_gyro_st >= 1 ? f->see_gyro_bias[i] : 0);
 	memcpy(f->gyro, g, sizeof(f->gyro));
 	f->have_gyro = 1;
 	if (!f->mag_seeded && f->have_acc && f->have_mag)

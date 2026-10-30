@@ -132,13 +132,6 @@ int sns_parse_attr_event(const uint8_t *p, size_t n, struct sns_attrs *a);
 int sns_parse_sensor_event(const uint8_t *p, size_t n, float *data, int max, int *status);
 /* sns_proximity_event: returns 0 if p looks like one (field 1 a varint), -1 otherwise. */
 int sns_parse_prox_event(const uint8_t *p, size_t n, int *near, uint32_t *raw, int *status);
-/*
- * sunfish B46 dm5: sns_cal_event (mag_cal/gyro_cal; layout from memory of Qualcomm's sns_cal.proto: 1 repeated
- * float bias, 2 repeated float comp_matrix, 3 status 0-3, 4 uint64 cal_id). Returns the bias count (<= 3) or -1.
- */
-int sns_parse_cal_event(const uint8_t *p, size_t n, float bias[3], int *status);
-/* sunfish B46 dm5: print every field of a message (tag, wire type, value) to check a layout on the phone. */
-void sns_print_fields(const char *tag, uint32_t msg_id, const uint8_t *p, size_t n);
 /* sns_std_error_event */
 int sns_parse_error_event(const uint8_t *p, size_t n);
 

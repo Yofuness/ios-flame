@@ -16,9 +16,6 @@ const struct sensor_kind sensor_kinds[] = {
 	{ "proximity",     "prox",     MOTION_TYPE_PROX,     MOTION_PROX,     1, 0 },
 	{ "mag",           "compass",  MOTION_TYPE_COMPASS,  MOTION_COMPASS,  0, 25 },
 	{ "pressure",      "pressure", MOTION_TYPE_PRESSURE, MOTION_PRESSURE, 0, 5 },
-	/* sunfish B46 dm5: SEE's background calibrations, for the devmotion fusion only (no motion service: -1) */
-	{ "mag_cal",       "magcal",   MOTION_TYPE_MAGCAL,   -1,              1, 0 },
-	{ "gyro_cal",      "gyrocal",  MOTION_TYPE_GYROCAL,  -1,              1, 0 },
 };
 const int sensor_nkinds = sizeof(sensor_kinds) / sizeof(sensor_kinds[0]);
 
@@ -126,21 +123,7 @@ static void sample(struct sensor_env *e, struct sensor *s, uint32_t msg_id, uint
 	float d[16], v[4] = { 0, 0, 0, 0 };
 	int status = 0, nd, nv = 0;
 
-	if (s->k->motion_type == MOTION_TYPE_MAGCAL || s->k->motion_type == MOTION_TYPE_GYROCAL) {
-		/* sunfish B46 dm5: sns_cal_event; the first 3 raw, as its field numbers are from memory */
-		char tag[32];
-		if (s->raw_logged < 3) {
-			s->raw_logged++;
-			snprintf(tag, sizeof(tag), "sensd: %s raw", s->k->alias);
-			sns_print_fields(tag, msg_id, p, n);
-		}
-		if (sns_parse_cal_event(p, n, v, &status) < 3) {
-			printf("sensd: %s: msg %u not understood (%zu bytes)\n", s->k->alias, msg_id, n);
-			return;
-		}
-		v[3] = (float)status;
-		nv = 4;
-	} else if (s->k->motion_type == MOTION_TYPE_PROX) {
+	if (s->k->motion_type == MOTION_TYPE_PROX) {
 		int near;
 		uint32_t raw;
 		if (sns_parse_prox_event(p, n, &near, &raw, &status) == 0) {

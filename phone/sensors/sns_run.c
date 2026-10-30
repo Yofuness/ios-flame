@@ -59,12 +59,6 @@ static int dm_type_last = 3;
 static uint64_t dm_last_mag;
 static long dm_last_save, dm_last_yaw;
 static float dm_yaw;
-/*
- * B46 dm5: SEE's background calibrations (mag_cal, gyro_cal; on-change streams) run while the fusion does; the mag
- * bias replaces the min/max box while its status is >= 1 (the box keeps learning as the fallback). SNS_SEE_CAL=0
- * turns them off (no lookup).
- */
-static int see_cal;
 
 #define ORIENT_HZ 15.0f		/* sensd: accel rate when it runs for orientation only */
 #define MAX_TRIES 5		/* lookups that found nothing: again every 10 s (the sensors PD may still load) */
@@ -75,16 +69,6 @@ static void dm_feed(const struct motion_sample *m)
 	uint64_t ts = m->ts_mach ? m->ts_mach : mach_absolute_time();
 	if (m->type == MOTION_TYPE_ACCEL) {
 		dm_accel(&dm, m->v);
-		return;
-	}
-	if (m->type == MOTION_TYPE_MAGCAL || m->type == MOTION_TYPE_GYROCAL) {	/* dm5 */
-		static int last_st[2] = { -2, -2 };
-		int g = m->type == MOTION_TYPE_GYROCAL, st = (int)m->v[3];
-		if (st != last_st[g])
-			printf("sns: %s status %d bias %.3f,%.3f,%.3f\n", g ? "gyro_cal" : "mag_cal", st, m->v[0], m->v[1],
-			    m->v[2]);
-		last_st[g] = st;
-		(g ? dm_gyro_cal_bias : dm_mag_cal_bias)(&dm, m->v, st);
 		return;
 	}
 	if (m->type == MOTION_TYPE_COMPASS) {	/* dm2: uT, same axes as the kernel's compass events */
@@ -126,11 +110,6 @@ static void out(void *ctx, struct sensor *s, const struct motion_sample *m)
 	(void)ctx;
 	if (mode != M_MOTION || motion_fd < 0)
 		return;
-	if (m->type == MOTION_TYPE_MAGCAL || m->type == MOTION_TYPE_GYROCAL) {	/* dm5: fusion only, never posted */
-		if (dm_want)
-			dm_feed(m);
-		return;
-	}
 	if (dm_want && (m->type == MOTION_TYPE_ACCEL || m->type == MOTION_TYPE_GYRO ||
 	    (m->type == MOTION_TYPE_COMPASS && dm_type_env != 3)))
 		dm_feed(m);
@@ -289,16 +268,14 @@ static int start(void)
 	motion_fd = open(motion_dev, O_RDWR | O_NONBLOCK);
 	if (motion_fd < 0)
 		printf("sns: %s: %s (samples not posted)\n", motion_dev, strerror(errno));
-	const char *e = getenv("SNS_DEVMOTION");
-	dm_env = e && !strcmp(e, "1");
-	e = getenv("SNS_SEE_CAL");
-	see_cal = dm_env && !(e && !strcmp(e, "0"));
 	for (int i = 0; i < sensor_nkinds; i++)
-		if ((sensor_kinds[i].motion_index >= 0 || see_cal) && setup(&ss[nss], &sensor_kinds[i], nss) == 0)
-			nss++;	/* dm5: a cal sensor without a SUID is just left out (box fallback) */
+		if (setup(&ss[nss], &sensor_kinds[i], nss) == 0)
+			nss++;
 	printf("sns: motion: %d sensors\n", nss);
 	env.orient = 1;
 	last_want = 0;
+	const char *e = getenv("SNS_DEVMOTION");
+	dm_env = e && !strcmp(e, "1");
 	dm_init(&dm, 0.04f);
 	e = getenv("SNS_DM_TYPE");
 	dm_type_env = e && (!strcmp(e, "2") || !strcmp(e, "3")) ? atoi(e) : 0;
@@ -336,19 +313,6 @@ static int follow(void)
 	for (int i = 0; i < nss; i++) {
 		struct sensor *s = &ss[i];
 		int idx = s->k->motion_index, on = 1, orient_only = 0;
-		if (idx < 0) {	/* dm5: SEE cal sensors, on while the 9-axis fusion runs */
-			on = dm_want && dm_type_env != 3;
-			if (on && !s->active) {
-				printf("sns: %s: start (on change)\n", s->k->alias);
-				if (sensor_start(&env, s, 0))
-					return -1;
-			} else if (!on && s->active) {
-				printf("sns: %s: stop (devmotion fusion off)\n", s->k->alias);
-				if (sensor_stop(&env, s))
-					return -1;
-			}
-			continue;
-		}
 		float hz = s->k->default_hz;
 		if (have && w.interval_set[idx]) {
 			on = w.interval_us[idx] != 0;
@@ -508,11 +472,9 @@ void sns_tick(const struct sns_link_ops *ops)
 		if (dm_env) {
 			float b[3], sp[3];
 			dm_mag_bias(&dm, b, sp);
-			printf(", devmotion %llu, dm type %d acc %d cal %s st %d bias %.1f,%.1f,%.1f span %.1f,%.1f,%.1f "
-			    "yaw %.1f gcal st %d %.4f,%.4f,%.4f", (unsigned long long)dm_written, dm_type_last,
-			    dm_mag_accuracy(&dm), dm_mag_cal_dsp(&dm) ? "dsp" : "box", dm.see_mag_st, b[0], b[1], b[2],
-			    sp[0], sp[1], sp[2], dm_yaw, dm.see_gyro_st, dm.see_gyro_bias[0], dm.see_gyro_bias[1],
-			    dm.see_gyro_bias[2]);
+			printf(", devmotion %llu, dm type %d acc %d bias %.1f,%.1f,%.1f span %.1f,%.1f,%.1f yaw %.1f",
+			    (unsigned long long)dm_written, dm_type_last, dm_mag_accuracy(&dm), b[0], b[1], b[2],
+			    sp[0], sp[1], sp[2], dm_yaw);
 		}
 		printf("\n");
 		last_print = now;

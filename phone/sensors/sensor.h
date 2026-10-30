@@ -14,7 +14,7 @@ struct sensor_kind {
 	const char *data_type;	/* SEE data type */
 	const char *alias;	/* sensd's short name */
 	uint32_t motion_type;	/* struct motion_sample type */
-	int motion_index;	/* MOTION_* (struct motion_want); -1: fusion-only (sunfish dm5) */
+	int motion_index;	/* MOTION_* (struct motion_want) */
 	int on_change;		/* 514 instead of 513 */
 	float default_hz;
 };
@@ -40,7 +40,6 @@ struct sensor {
 	uint64_t ts, count, count_at_print;
 	long last_data_ms;
 	int last_error;
-	int raw_logged;			/* sunfish B46 dm5: cal events printed raw so far */
 	int orient_only;		/* streamed only for orientation (iOS set ReportInterval 0): samples not posted */
 };
 

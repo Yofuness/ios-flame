@@ -56,10 +56,6 @@ struct motion_devmotion {
 };
 _Static_assert(sizeof(struct motion_devmotion) == 104, "motion_devmotion size");
 
-/* sunfish B46 dm5: SEE mag_cal/gyro_cal biases, sensd-internal (never written): v[0..2] bias, v[3] status 0-3 */
-#define MOTION_TYPE_MAGCAL 41
-#define MOTION_TYPE_GYROCAL 42
-
 struct motion_want {
 	uint32_t version;		/* 1 */
 	uint32_t present;		/* bit i: service i registered */
