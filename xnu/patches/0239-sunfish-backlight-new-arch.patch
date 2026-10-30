@@ -2,23 +2,28 @@ From e521476d9acade69b6ba48ecbfdb89e348b2b8a3 Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Fri, 30 Oct 2026 07:57:28 -0400
 Subject: [PATCH] 0239 sunfish: backlight publishes new-backlight-architecture
- (CoreBrightness nits path), sweetblnew=0 off
+ (CoreBrightness nits path), default off (sweetblnew=1)
+
+default off since 2026-10-30 (sweetblnew=1 opts in): CoreBrightness never starts
+its modules in new-arch mode on sunfish, so the slider wrote nothing.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- iokit/Kernel/arm/SweetBacklight.cpp | 7 +++++++
- 1 file changed, 7 insertions(+)
+ iokit/Kernel/arm/SweetBacklight.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
 
 diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
-index 33f60a3..72ce11e 100644
+index 33f60a3..cea0561 100644
 --- a/iokit/Kernel/arm/SweetBacklight.cpp
 +++ b/iokit/Kernel/arm/SweetBacklight.cpp
-@@ -80,6 +80,13 @@ AppleARMBacklight::start(IOService *provider)
+@@ -80,6 +80,15 @@ AppleARMBacklight::start(IOService *provider)
  	setProperty("name", "backlight");
  	setProperty("compatible", "backlight,sweet");
  	setProperty("backlight-control", kOSBooleanTrue);
-+	/* 0239: CoreBrightness's nits path (fades write brightness-nits, not the legacy brightness thread); sweetblnew=0 off */
-+	uint32_t blnew = 1;
++	/* 0239: CoreBrightness's nits path (fades write brightness-nits, not the legacy brightness thread); default off
++	 * since 2026-10-30: in new-arch mode CoreBrightness takes QuartzCore's CADisplay brightness control and never
++	 * starts its modules here, so no brightness writes happen (dead slider). sweetblnew=1 opts in */
++	uint32_t blnew = 0;
 +	(void)PE_parse_boot_argn("sweetblnew", &blnew, sizeof(blnew));
 +	if (blnew) {
 +		setProperty("new-backlight-architecture", kOSBooleanTrue);
@@ -28,5 +33,4 @@ index 33f60a3..72ce11e 100644
  	OSDictionary *params = OSDictionary::withCapacity(1);
  	OSDictionary *bright = OSDictionary::withCapacity(3);
 -- 
-2.56.0
-
+2.x
