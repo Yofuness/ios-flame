@@ -25,6 +25,11 @@
  *       2 s, late-write check, SMMU restore, PMEM_FREE (--alloc32 only). cam18: faults in our banks are sampled
  *       every 10 ms (FAR + SID, FSR cleared); --xlate = SMR 0x8c0/0x400 -> a translating bank that maps only
  *       0x9ca00000..0x9d600000 identity (6 x 2 MB), anything else a translation fault (terminated, sampled). Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
+ * Camera e1: camrx [--dry-run] stream SECONDS OUTPREFIX [--stream-cmd "CMD"]  capture's preconditions, SMMU (cam21:
+ *       exact SMRs 0x8c0 + 0xcc0 -> bypass, other IFE SIDs -> trap) and cleanup; a 2-slot ring in carveout slot1,
+ *       polled every 1 ms for RDI0 SOF (IFE irq0 bit 27) / WM0 buf done (BUS irq1 bit 0); at each SOF WM0_IMAGE_ADDR
+ *       = the other slot + REG_UPDATE (redfin 0923). SECONDS from the first SOF; per-second fps; WM0 off, the
+ *       command (default camid mode 8 --hold SECONDS+1) waited for, then the last completed frame -> OUTPREFIX.raw.
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
  *   camrx smmu [SID...]   read-only: sCR0, valid SMRs/S2CRs, their banks, faults; which SMRs each SID (default: the
  *                         14 DT IFE SIDs) matches
@@ -1607,17 +1612,12 @@ static uint16_t sid_mask;
 static uint32_t addr_off;
 static int sid2 = -1;	/* --sid2 0xNNN */
 
-static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, int xlate)
+/* --bypass (cam16): the SID (mask 0) -> identity bank; the DT SMRs that don't cover it and (optional, if free
+ * slots) the other DT SIDs under the one that does -> a trap bank. No two of them overlap (SMCFCFG). sid < 0: the 3
+ * DT SMRs -> trap (--trap). 0 = ok */
+static int smr_list(int sid, uint16_t (*m)[2], int *tk, int *nmp, int *nreqp)
 {
-	/* cam13: no IFE DMA without a dedicated SMMU mapping; --trap first, --bypass only for the SID it found */
-	if (trap == (sid >= 0)) {
-		printf("camrx: capture needs --trap, or --bypass --sid 0xNNN (the SID --trap reported)\n");
-		return 2;
-	}
-	/* --bypass (cam16): the SID (mask 0) -> identity bank; the DT SMRs that don't cover it and (optional, if free
-	 * slots) the other DT SIDs under the one that does -> a trap bank. No two of them overlap (SMCFCFG). */
-	uint16_t m[CS_MAXSMR][2];
-	int tk[CS_MAXSMR], nm = 0, nreq = 0;
+	int nm = 0, nreq = 0;
 	if (sid >= 0) {
 		int in = 0;
 		m[nm][0] = (uint16_t)(sid & 0x7fff), m[nm][1] = sid_mask, tk[nm++] = 0;
@@ -1630,7 +1630,7 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 				m[nm][0] = ife_smr[k][0], m[nm][1] = ife_smr[k][1], tk[nm++] = 1;
 		if (!in) {
 			printf("camrx: --sid %#x is not covered by the DT IFE SMRs: refused\n", sid);
-			return 2;
+			return 1;
 		}
 		nreq = nm;
 		for (int i = 0; i < 14 && nm < CS_MAXSMR; i++) {
@@ -1650,8 +1650,23 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 			if (smr_overlap(m[a][0], m[a][1], m[b][0], m[b][1])) {
 				printf("camrx: own SMRs %#x/%#x and %#x/%#x overlap: refused\n", m[a][0], m[a][1], m[b][0],
 				       m[b][1]);
-				return 2;
+				return 1;
 			}
+	*nmp = nm, *nreqp = nreq;
+	return 0;
+}
+
+static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, int xlate)
+{
+	/* cam13: no IFE DMA without a dedicated SMMU mapping; --trap first, --bypass only for the SID it found */
+	if (trap == (sid >= 0)) {
+		printf("camrx: capture needs --trap, or --bypass --sid 0xNNN (the SID --trap reported)\n");
+		return 2;
+	}
+	uint16_t m[CS_MAXSMR][2];
+	int tk[CS_MAXSMR], nm, nreq;
+	if (smr_list(sid, m, tk, &nm, &nreq))
+		return 2;
 	if (!dry && cap_precheck())
 		return 1;
 	printf("camrx: note: SMMU SIDs/masks from the DT msm_cam_smmu_ife (guess: IFE-lite is one of them), WM frame mode values (redfin/Linux) and that one frame = "
@@ -1780,6 +1795,169 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 	return bad || done_at < 0;
 }
 
+/* ---- camera e1: continuous streaming into a 2-slot ring (redfin 0923 capture loop ~580-645) ---- */
+#define FRAME_EXTRA	12096u	/* cam21: ~4.8 lines of 2520 B past 2016x1512 */
+#define RING_N		2
+#define PLACE_BYTES	((FRAME_BYTES + FRAME_EXTRA + 0xffffu) & ~0xffffu)
+#define RDI0_SOF	(1u << 27)	/* IFE_IRQ_STATUS0 (redfin 0923, their r17 read 0x08000220; not in our notes) */
+#define WM0_DONE	1u		/* BUS_IRQ_STATUS1 (redfin 0923; our capture's buf done bit) */
+#define STREAM_MAX_S	600
+_Static_assert(RING_N * PLACE_BYTES <= CAP_CO_LEN, "ring does not fit carveout slot1");
+
+static int stream_run(int secs, const char *prefix, const char *cmd)
+{
+	uint16_t m[CS_MAXSMR][2];
+	int tk[CS_MAXSMR], nm, nreq;
+	sid2 = 0xcc0;	/* cam21 config: exact SMRs 0x8c0 + 0xcc0 -> bypass bank, other IFE SIDs -> trap */
+	sid_mask = 0;
+	if (smr_list(0x8c0, m, tk, &nm, &nreq))
+		return 2;
+	if (!dry && cap_precheck())
+		return 1;
+	char out[512];
+	snprintf(out, sizeof out, "%s.raw", prefix);
+	atexit(cap_down);
+	stage("buffer: carveout slot1 (2-slot ring), zero it");
+	if (!dry && zerocopy_on())
+		return 1;
+	cap.len = CAP_CO_LEN;
+	printf("camrx: ring PA %#llx, %d slots of %#x (frame %u + %u), carveout len %#x\n", CAP_CO_PA, RING_N,
+	       PLACE_BYTES, FRAME_BYTES, FRAME_EXTRA, CAP_CO_LEN);
+	if (!dry && cap_zero(CAP_CO_PA, cap.len))
+		return 1;
+	cap.pa = CAP_CO_PA;
+	stage("smmu: SMRs 0x8c0 + 0xcc0 (mask 0) -> identity bank, other IFE SIDs -> trap bank");
+	uint32_t gfsr0 = dry ? 0 : rd32(SMMU + SM_GFSR);
+	cap.smmu = 1;
+	if (cam_smmu_up(nm, nreq, (const uint16_t (*)[2])m, tk))
+		return 1;
+	uint64_t cbp = cbpage((uint32_t)cs.bank[0]);
+	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, cs.bank[0], dry ? 0 : rd32(cbp + CB_FSR));
+	signal(SIGINT, on_sig);
+	signal(SIGTERM, on_sig);
+	if (rx_arm())
+		return 1;
+	cap.armed = 1;
+	if (ife_config((uint32_t)CAP_CO_PA))	/* slot 0: taken at the first SOF */
+		return 1;
+	stage("sensor stream (ring loop, 1 ms polls)");
+	printf("camrx: stream command: %s\n", cmd);
+	static unsigned sof_s[STREAM_MAX_S + 1], done_s[STREAM_MAX_S + 1];
+	unsigned sofs = 0, dones = 0, late = 0, both = 0;
+	int writing = -1, next = 0, last = -1, status = 0, have_status = 0;
+	double t0 = 0, tend = 0, tstart = now_s();
+	pid_t pid = -1;
+	if (!dry) {
+		if (run_cmd(cmd, &pid)) {
+			printf("camrx: could not start the stream command\n");
+			return 1;
+		}
+		for (unsigned it = 0; !stop; it++) {
+			usleep(1000);
+			double now = now_s();
+			if (!(it % 10))
+				cam_smmu_sample();
+			uint32_t top = ir(IFE_IRQ_STATUS0), bus = ir(BUS_IRQ_STATUS(1));
+			if (top & RDI0_SOF || bus & WM0_DONE) {
+				/* clears as redfin: only the bits seen, then the global clear */
+				wr32(IFE + IFE_IRQ_CLEAR0, top & RDI0_SOF);
+				wr32(IFE + IFE_IRQ_GCLEAR, 1);
+				wr32(IFE + BUS_IRQ_CLEAR1, bus & WM0_DONE);
+				wr32(IFE + BUS_IRQ_GCLEAR, 1);
+				both += (top & RDI0_SOF) && (bus & WM0_DONE);
+				if (!t0 && top & RDI0_SOF)
+					t0 = now, tend = now + secs;
+				unsigned sec = t0 ? (unsigned)(now - t0) : 0;
+				sec = sec > STREAM_MAX_S ? STREAM_MAX_S : sec;
+				if (bus & WM0_DONE) {	/* before the SOF: a done seen with it belongs to the old slot */
+					dones++, done_s[sec]++;
+					last = writing;
+				}
+				if (top & RDI0_SOF) {
+					sofs++, sof_s[sec]++;
+					if (next >= 0)
+						writing = next, next = -1;	/* the address given at the last SOF, taken now */
+					else
+						late++;
+					next = writing < 0 ? 0 : 1 - writing;
+					wr32(IFE + WM0_IMAGE_ADDR, (uint32_t)(CAP_CO_PA + (uint64_t)next * PLACE_BYTES));
+					wr32(IFE + IFE_REG_UPDATE, 0x2);
+				}
+			}
+			if (t0 && now >= tend)
+				break;
+			if (!t0 && now - tstart > 15) {
+				printf("camrx: no SOF within 15 s\n");
+				break;
+			}
+			if (!have_status && waitpid(pid, &status, WNOHANG) == pid) {
+				have_status = 1;
+				printf("camrx: stream command ended early (status %d) after %.1f s\n", WEXITSTATUS(status),
+				       now - tstart);
+				break;
+			}
+		}
+	}
+	stage("stop: wm0 off, wait for the stream command");
+	wm_off("WM0_CFG 0 (end of stream)");
+	cap.ife = 0;
+	if (!dry && !have_status) {
+		for (int t = 0;; t++) {
+			pid_t r = waitpid(pid, &status, WNOHANG);
+			if (r == pid || r < 0)
+				break;
+			if (t == 1000) {	/* 10 s past our end: the command holds 1 s longer than we */
+				printf("camrx: stream command still running 10 s after the loop, SIGTERM\n");
+				kill(pid, SIGTERM);
+			}
+			usleep(10000);
+		}
+		printf("camrx: stream command exit status %d\n", WEXITSTATUS(status));
+	}
+	msleep_(100);
+	paths_down();
+	cap.armed = 0;
+	double run = t0 ? (tend < now_s() ? tend : now_s()) - t0 : 0;
+	printf("camrx: totals: %u SOF, %u buf done (%u polls with both), %u SOF without a new address, over %.2f s: "
+	       "%.2f fps (done)\n", sofs, dones, both, late, run, run > 0 ? dones / run : 0.0);
+	for (int i = 0; t0 && i < secs && i <= STREAM_MAX_S; i++)
+		printf("camrx: second %d: SOF %u, done %u\n", i, sof_s[i], done_s[i]);
+	printf("camrx: readback: CSID bytes ping/pong %u/%u, RDI0_STATUS %#x\n", cr(RDI0_BYTES_PING), cr(RDI0_BYTES_PONG),
+	       cr(RDI0_STATUS));
+	printf("camrx: readback: IFE irq0 %#x irq1 %#x VIOLATION %#x; BUS irq %#x %#x %#x COMP_ERROR %#x; WM0 status "
+	       "%#x %#x IMAGE_ADDR %#x\n", ir(IFE_IRQ_STATUS0), ir(IFE_IRQ_STATUS1), ir(IFE_VIOLATION), ir(BUS_IRQ_STATUS(0)),
+	       ir(BUS_IRQ_STATUS(1)), ir(BUS_IRQ_STATUS(2)), ir(BUS_COMP_ERROR), ir(WM0_STATUS0), ir(WM0_STATUS1),
+	       ir(WM0_IMAGE_ADDR));
+	int bad = 0;
+	if (!dry) {
+		uint32_t fsr = rd32(cbp + CB_FSR);
+		printf("camrx: smmu after: GFSR %#x GFSYNR1 %#x; CB%d FSR %#x (fault bits %#x) FAR %#x%08x FSYNR0 %#x\n",
+		       rd32(SMMU + SM_GFSR), rd32(SMMU + 0x54), cs.bank[0], fsr, fsr & 0x800001feu,
+		       rd32(cbp + CB_FAR + 4), rd32(cbp + CB_FAR), rd32(cbp + CB_FSYNR0));
+		cam_smmu_sample();
+		cam_smmu_samples_report();
+		int tf = cam_smmu_trap_report();
+		tf |= cs.trap >= 0 && fs.b[cs.trap] > 0;
+		for (int k = 0; k < RING_N; k++)
+			printf("camrx: slot %d nonzero %llu of %u\n", k,
+			       (unsigned long long)nonzero(CAP_CO_PA + (uint64_t)k * PLACE_BYTES, FRAME_BYTES), FRAME_BYTES);
+		uint64_t gpa = CAP_CO_PA + (uint64_t)RING_N * PLACE_BYTES, ng = nonzero(gpa, CAP_CO_LEN - RING_N * PLACE_BYTES);
+		printf("camrx: past the ring: %llu nonzero of %u%s\n", (unsigned long long)ng, CAP_CO_LEN - RING_N * PLACE_BYTES,
+		       ng ? "  WRITTEN" : "");
+		bad = (fsr & 0x800001feu) || ng || tf || last < 0;
+		if (last < 0) {
+			printf("camrx: no completed frame, nothing saved\n");
+		} else if (save_frame(CAP_CO_PA + (uint64_t)last * PLACE_BYTES, out)) {
+			printf("camrx: writing %s failed\n", out);
+			bad = 1;
+		} else {
+			printf("camrx: last frame (slot %d, %u B) -> %s, saved, fsync ok\n", last, FRAME_BYTES, out);
+		}
+	}
+	cap_down();
+	return bad;
+}
+
 int main(int argc, char **argv)
 {
 	int a = 1;
@@ -1851,6 +2029,20 @@ int main(int argc, char **argv)
 			goto usage;
 		return capture(argv[a + 1], cmd, a32, trap, sid, xlate);
 	}
+	if (!strcmp(argv[a], "stream") && a + 3 <= argc) {	/* camera e1 */
+		int secs = atoi(argv[a + 1]);
+		static char dcmd[512];
+		const char *cmd = dcmd;
+		if (secs < 1 || secs > STREAM_MAX_S)
+			goto usage;
+		snprintf(dcmd, sizeof dcmd, STREAM_CMD " --hold %d", secs + 1);
+		for (int i = a + 3; i < argc; i++)
+			if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
+				cmd = argv[++i];
+			else
+				goto usage;
+		return stream_run(secs, argv[a + 2], cmd);
+	}
 	if (!strcmp(argv[a], "tpg") && a + 2 >= argc) {
 		int s = a + 1 < argc ? atoi(argv[a + 1]) : 1;
 		if (s < 1 || s > 60)
@@ -1860,6 +2052,6 @@ int main(int argc, char **argv)
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
 			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid2 0xNNN] [--sid-mask 0xM] [--addr-offset 0x400]|--xlate "
-			"[--stream-cmd \"CMD\"] [--alloc32]\n");
+			"[--stream-cmd \"CMD\"] [--alloc32] | stream SECONDS OUTPREFIX [--stream-cmd \"CMD\"]\n");
 	return 2;
 }

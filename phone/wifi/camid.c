@@ -1,11 +1,16 @@
 /*
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
- *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE]
+ *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S] [--exposure L] [--gain C]]
  * --stream FILE (camera stage b, rear only): after the ID read, write FILE's registers (`0xADDR 0xVAL DELAY_US` a
  * line, `#` comments; from tools/sunfish-camtab.py; at most 2000), read back 0x0136/0x0137/0x0112/0x0114, stream
  * on (0x0100 = 1), sample the frame counter 0x0005 every 100 ms for 1 s, read 0x0100, stream off. Any CCI error
  * aborts (stream off first if on) with the failing line and address.
+ * --hold SECONDS (camera e1, with --stream; default 1 = the 100 ms samples above): stream SECONDS (1-900), the
+ * frame counter sampled once a second. --exposure LINES / --gain CODE (camera e2): after the table, before stream
+ * on, in group hold (0x0104 = 1 .. 0): coarse integration 0x0202/0x0203 (clamped to 4 .. frame_length 0x0340/0x0341
+ * - 40, redfin 0923 EXPOSURE_MARGIN), analog gain code 0x0204/0x0205 (clamped to 448 = 8x, Sony 512 - 512/g, redfin
+ * gain max 8x for the IMX363); printed with their read-back.
  * --mclk-asis: leave the MCLK RCG as it is (e.g. 24 MHz from `camclk mclk 0 24`) instead of setting it to XO.
  * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
  * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
@@ -55,6 +60,7 @@
 
 static int dry, keep, front, mclk_asis;
 static const char *stream_file;
+static int hold = 1, exp_lines = -1, gain_code = -1;	/* e1/e2: --hold, --exposure, --gain */
 static int gdsc_on, cci_clk_on, in_pd;
 
 /* --- MMIO with the hazard rule --- */
@@ -374,6 +380,54 @@ static int read_u8(unsigned a, unsigned reg)
 	return b[1];	/* b[0] is the slave echo (cam2: 35 03 63 63) */
 }
 
+/* e2: big-endian 16-bit sensor register (two byte reads); -1 on error */
+static int read_u16(unsigned a, unsigned reg)
+{
+	int h = read_u8(a, reg), l = h < 0 ? -1 : read_u8(a, reg + 1);
+	return l < 0 ? -1 : h << 8 | l;
+}
+
+#define EXP_MARGIN	40	/* redfin 0923 EXPOSURE_MARGIN */
+#define GAIN_CODE_MAX	448	/* IMX363 8x (redfin ios_gain_max), Sony code 512 - 512/8 */
+
+/* e2: exposure and/or analog gain in one group hold; the stream is still off */
+static int exposure(unsigned a)
+{
+	int fl = read_u16(a, 0x0340);
+	if (fl < 0)
+		return -1;
+	if (dry)
+		fl = 0xffff;
+	printf("camid: frame_length 0x0340 = %d lines\n", fl);
+	unsigned lines = 0, code = 0;
+	if (exp_lines >= 0) {
+		int mx = fl - EXP_MARGIN < 4 ? 4 : fl - EXP_MARGIN;
+		lines = exp_lines < 4 ? 4 : exp_lines > mx ? (unsigned)mx : (unsigned)exp_lines;
+		printf("camid: exposure %d lines asked, %u written (clamp 4..%d)\n", exp_lines, lines, mx);
+	}
+	if (gain_code >= 0) {
+		code = gain_code > GAIN_CODE_MAX ? GAIN_CODE_MAX : (unsigned)gain_code;
+		printf("camid: analog gain code %d asked, %u written (max %d = 8x), = %.2fx\n", gain_code, code,
+		       GAIN_CODE_MAX, 512.0 / (512 - code));
+	}
+	int ok = !write_reg(a, 0x0104, 1);
+	if (ok && exp_lines >= 0)
+		ok = !write_reg(a, 0x0202, lines >> 8) && !write_reg(a, 0x0203, lines & 0xff);
+	if (ok && gain_code >= 0)
+		ok = !write_reg(a, 0x0204, code >> 8) && !write_reg(a, 0x0205, code & 0xff);
+	if (write_reg(a, 0x0104, 0))	/* the hold is released also after a failed write */
+		ok = 0;
+	if (!ok) {
+		printf("camid: exposure/gain group hold write failed\n");
+		return -1;
+	}
+	int rl = read_u16(a, 0x0202), rg = read_u16(a, 0x0204);
+	if (rl < 0 || rg < 0)
+		return -1;
+	printf("camid: readback coarse_integration 0x0202 = %d, analog_gain 0x0204 = %d\n", rl, rg);
+	return 0;
+}
+
 #define MAX_WRITES 2000
 static struct sw { unsigned addr, val, us, line; } sws[MAX_WRITES];
 
@@ -421,6 +475,8 @@ static int stream(unsigned a)
 			return -1;
 		printf("camid: readback %#06x = %#04x\n", rb[i], v);
 	}
+	if ((exp_lines >= 0 || gain_code >= 0) && exposure(a))
+		return -1;
 	int rc = -1;
 	if (write_reg(a, 0x0100, 1)) {
 		printf("camid: --stream: stream on (0x0100) failed\n");
@@ -428,7 +484,14 @@ static int stream(unsigned a)
 	}
 	on = 1;
 	printf("camid: stream on\n");
-	for (int t = 0; t <= 10; t++) {
+	for (int t = 1; hold > 1 && t <= hold; t++) {	/* e1 */
+		sleep(1);
+		int v = read_u8(a, 0x0005);
+		if (v < 0)
+			goto off;
+		printf("camid: t=%d s frame_count 0x0005 = %d\n", t, v);
+	}
+	for (int t = 0; hold == 1 && t <= 10; t++) {
 		int v = read_u8(a, 0x0005);
 		if (v < 0)
 			goto off;
@@ -480,12 +543,23 @@ int main(int argc, char **argv)
 			mclk_asis = 1;
 		else if (!strcmp(argv[i], "--stream") && i + 1 < argc)
 			stream_file = argv[++i];
+		else if (!strcmp(argv[i], "--hold") && i + 1 < argc)
+			hold = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--exposure") && i + 1 < argc)
+			exp_lines = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--gain") && i + 1 < argc)
+			gain_code = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S] [--exposure LINES] [--gain CODE]]\n");
 			return 2;
 		}
+	}
+	if (hold < 1 || hold > 900 || exp_lines > 0xffff || gain_code > 0xffff ||
+	    (!stream_file && (hold != 1 || exp_lines >= 0 || gain_code >= 0))) {
+		fprintf(stderr, "camid: --hold 1-900, --exposure, --gain need --stream\n");
+		return 2;
 	}
 	if (stream_file && front) {
 		fprintf(stderr, "camid: --stream is rear only\n");

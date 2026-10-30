@@ -3,13 +3,15 @@
 # then the CSID counters (expect bytes ping/pong 3810240, ECC/CRC 0). Needs a boot with sweetse9=2 sweetcampmic=2,
 # the phone tools camid/camclk/camrx in /var/local/bin (tools/build-userland-linux.sh) and the table
 # /var/local/cam/imx363-mode8.txt (tools/sunfish-camtab.py --out work/cam/imx363-mode8.txt --mode 8).
-#   tools/sunfish-cam-rx.sh [--install] [--capture] [SETTLE]     output also goes to work/cam/rx-<time>.log
+#   tools/sunfish-cam-rx.sh [--install] [--capture | --stream SECONDS] [SETTLE]     output also goes to work/cam/rx-<time>.log
 # --capture (stage d): instead of rx arm + camid --stream + rx report, `camrx capture` (arms the CSID, sets up the
 # IFE-lite WM0 + SMMU, runs the stream itself) writes /var/local/cam/frame.raw; it is fetched to
 # work/cam/frame-<time>.raw and turned into PNGs (tools/sunfish-raw2png.py). CAPMODE picks the SMMU mode
 # (default, cam21: "--bypass --sid 0x8c0 --sid2 0xcc0" = two exact SMRs for the WM's two SIDs (1 KB address
 # interleave) -> bypass bank; NOT one 0x8c0/0x400 SMR, which lost the data and reset the phone (cam17/18/20).
 # "--trap" sends the IFE SIDs to a faulting bank, nothing lands.
+# --stream SECONDS (camera e1): `camrx stream SECONDS /var/local/cam/stream` (2-slot ring, per-second fps, the last
+# frame) instead of capture; /var/local/cam/stream.raw is fetched to work/cam/stream-<time>.raw and turned into PNGs.
 # Everything is powered down at the end, also after a failed step.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -29,6 +31,11 @@ CAPTURE=0
 if [ "${1:-}" = --capture ]; then
 	CAPTURE=1
 	shift
+fi
+STREAM=0
+if [ "${1:-}" = --stream ] && [ -n "${2:-}" ]; then
+	STREAM=$2
+	shift 2
 fi
 SETTLE=${1:-}
 TS=$(date +%Y%m%d-%H%M%S)
@@ -51,6 +58,12 @@ run "$B/camclk pll2 on" &&
 	run "$B/camclk mclk 0 24" &&
 	run "$B/camrx clocks on" &&
 	run "$B/camrx phy on $SETTLE" || exit 1
+if [ "$STREAM" != 0 ]; then
+	run "$B/camrx stream $STREAM /var/local/cam/stream" || exit 1
+	python3 -I tools/flame-files.py get /var/local/cam/stream.raw work/cam/stream-$TS.raw >/dev/null || exit 1
+	python3 -I tools/sunfish-raw2png.py work/cam/stream-$TS.raw | tee -a "$LOG"
+	exit 0
+fi
 if [ $CAPTURE = 1 ]; then
 	run "$B/camrx capture /var/local/cam/frame.raw ${CAPMODE:---bypass --sid 0x8c0 --sid2 0xcc0}" || exit 1
 	python3 -I tools/flame-files.py get /var/local/cam/frame.raw work/cam/frame-$TS.raw >/dev/null || exit 1
