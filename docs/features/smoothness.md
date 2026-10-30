@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:00 df1: ios-redfin's SWEET_DEADFILL (b0491b0) finds almost nothing to drop here; no fps gain
+- tools/sunfish-m2env-bench.sh, 3 rounds each, kernel113: swaps/s base 21.8 / 22.9 / 21.9 (mean 22.2), SWEET_DEADFILL=1 22.1 / 23.6 / 22.4 (22.7), =2 21.7 / 24.2 / 22.2 (22.7); GPU busy % samples overlap (noise). Settings with mode 2 drawn correctly (webcam). No crash, no reset.
+- Telemetry (needs /var/local/mtl2-telemetry, every 10 s into /var/local/mtl2.log): "DF mode2 dropped 12 cleared 16 held 720" after ~720 frames (idle + 2 swipes), i.e. CoreAnimation here rarely paints full-target fills that are later overwritten; redfin's 13.7 -> 7.9 ms win does not carry over. Idle commit-to-complete mean 6.1 ms.
+- Our cost is elsewhere (research/notes/fps-limit.md: blur/backdrop passes 35-58 ms in swipes, render thread 10-15 ms CPU often on an A55, one frame in flight). Next from the redfin line: xnu 1041 UI threads on the A76s (port in progress). DEADFILL stays in the build, default off; /var/local/mtl2-env left empty.
+
 ### 2026-10-30 02:55 auto flip (kernel104): garbled once, clean once; zero-copy parked
 - zc6 (sweetfb_zerocopy=2): "auto flip on" at 32.9 s, 357 flips, 0 skipped, but every frame garbled (vertical stripes on the wallpaper, apps unreadable). No reset.
 - zc7 (same boot args): auto flip at 34.4 s; lock screen clean (only the B29 lock buttons striped). Registers equal the working manual setup: QS OP_MODE 0x20034401, steps 0x215555/0x215015, SSPP SRC_SIZE 0x09840465, OUT 0x09240438, ystride 0x1200, REQ_PIXELS 0x09840465, SRC0 0x9cb00000; re-entering mode 2 only changed SRC0. zc6's garbage not explained (apps were open there; zc7 only looked at the lock screen).
