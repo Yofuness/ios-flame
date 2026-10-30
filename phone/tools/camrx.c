@@ -17,10 +17,12 @@
  *       display carveout slot1 PA 0x9cb00000 + 0xB00000 (zero-copy slot 1, unused without sweetfb_zerocopy; XNU has
  *       no RAM below 4 GB, cam10), zeroed through /dev/pmem first; --alloc32: 8 MB PMEM_ALLOC32 instead. SMMU (cam13): --trap = the 3 DT IFE SMRs
  *       (0x900/0x460 0x880/0x460 0x820/0x440) into one free bank with M=1 + EPD0|EPD1 (every access faults, the
- *       bank reports the SID), --bypass --sid X = one mask-0 SMR into an identity bank; refused if any valid SMR
- *       overlaps (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
- *       mode, runs CMD (default: camid mode 8 stream), WM0 off at the first buf done, readbacks, guard check,
- *       frame -> OUTFILE, SMMU restore, PMEM_FREE (--alloc32 only). Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
+ *       bank reports the SID), --bypass --sid X = one mask-0 SMR into an identity bank + (cam16) the other DT IFE
+ *       SIDs (non-overlapping SMRs) into a trap bank; refused if any valid SMR overlaps (saved + restored on
+ *       every exit), CSID rx arm, IFE reset + WM0 frame
+ *       mode, runs CMD (default: camid mode 8 stream), WM0 off at the first buf done, readbacks, guard check
+ *       (+ where), frame -> OUTFILE (fsync'd), cleanup: WM0 off, CSID down, IFE reset, identity SMR -> trap bank,
+ *       2 s, late-write check, SMMU restore, PMEM_FREE (--alloc32 only). Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
  *   camrx smmu [SID...]   read-only: sCR0, valid SMRs/S2CRs, their banks, faults; which SMRs each SID (default: the
  *                         14 DT IFE SIDs) matches
@@ -33,6 +35,7 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/sysctl.h>
 #include <time.h>
 #include <unistd.h>
@@ -913,14 +916,19 @@ static int smmu_report(int n, char **sids)
 	return 0;
 }
 
-/* what capture installed; cam_smmu_down puts it back */
-static struct {
-	int on, cb, nslot, slot[3];
-	uint32_t smr[3], s2cr[3];
+/* what capture installed; cam_smmu_down puts it back. cam16: up to 2 banks (bank[0] = the SMR's own bank: trap
+ * in --trap mode, identity in --bypass; trap = the faulting bank, == bank[0] in --trap mode) */
+#define CS_MAXSMR	16
+struct cbsave {
 	uint32_t sctlr, cbar, cba2r, tcr, tcr2, ttbr0[2], ttbr1[2], mair[2];
-} cs = { .cb = -1 };
+};
+static struct {
+	int on, nb, bank[2], trap, nslot, slot[CS_MAXSMR], bk[CS_MAXSMR];
+	uint32_t smr[CS_MAXSMR], s2cr[CS_MAXSMR];
+	struct cbsave sv[2];
+} cs = { .bank = { -1, -1 }, .trap = -1 };
 
-/* SMMU whitelist: only the SMR/S2CR slots and the bank capture allocated, plus sTLBGSYNC */
+/* SMMU whitelist: only the SMR/S2CR slots and the banks capture allocated, plus sTLBGSYNC */
 static int smmu_allowed(uint64_t pa)
 {
 	if (pa == SMMU + SM_TLBGSYNC)
@@ -928,12 +936,16 @@ static int smmu_allowed(uint64_t pa)
 	for (int k = 0; k < cs.nslot; k++)
 		if (pa == SMMU + SM_SMR(cs.slot[k]) || pa == SMMU + SM_S2CR(cs.slot[k]))
 			return 1;
-	if (cs.cb < 0)
-		return 0;
-	if (pa == gr1() + 4 * cs.cb || pa == gr1() + 0x800 + 4 * cs.cb)
-		return 1;
-	uint64_t p = cbpage((uint32_t)cs.cb);
-	return pa >= p && pa < p + 0x1000 && !(pa & 3);
+	for (int b = 0; b < 2; b++) {
+		if (cs.bank[b] < 0)
+			continue;
+		if (pa == gr1() + 4 * cs.bank[b] || pa == gr1() + 0x800 + 4 * cs.bank[b])
+			return 1;
+		uint64_t p = cbpage((uint32_t)cs.bank[b]);
+		if (pa >= p && pa < p + 0x1000 && !(pa & 3))
+			return 1;
+	}
+	return 0;
 }
 
 static void sw(uint64_t pa, uint32_t v, const char *why)
@@ -959,15 +971,70 @@ static void smmu_sync(void)
 		usleep(1000);
 }
 
+/* one bank: save, then TRAP (M=1, both walks disabled: every access faults, nothing written) or M=0 identity */
+static void cb_setup(int b, int trap)
+{
+	int cb = cs.bank[b];
+	uint64_t p = cbpage((uint32_t)cb), g = gr1();
+	struct cbsave *s = &cs.sv[b];
+	s->sctlr = rd32(p);
+	s->cbar = rd32(g + 4 * cb);
+	s->cba2r = rd32(g + 0x800 + 4 * cb);
+	s->tcr = rd32(p + CB_TCR);
+	s->tcr2 = rd32(p + CB_TCR2);
+	s->ttbr0[0] = rd32(p + CB_TTBR0), s->ttbr0[1] = rd32(p + CB_TTBR0 + 4);
+	s->ttbr1[0] = rd32(p + CB_TTBR1), s->ttbr1[1] = rd32(p + CB_TTBR1 + 4);
+	s->mair[0] = rd32(p + CB_MAIR0), s->mair[1] = rd32(p + CB_MAIR1);
+	sw(p + CB_SCTLR_, 0, "CB SCTLR 0 while set up");
+	sw(p + CB_FSR, 0xffffffff, "CB FSR clear");
+	sw(p + CB_TTBR0, 0, "TTBR0");
+	sw(p + CB_TTBR0 + 4, 0, "TTBR0 hi");
+	sw(p + CB_TTBR1, 0, "TTBR1");
+	sw(p + CB_TTBR1 + 4, 0, "TTBR1 hi");
+	sw(p + CB_TCR, trap ? TRAP_TCR : 0, trap ? "TCR EPD0|EPD1" : "TCR");
+	sw(p + CB_TCR2, trap ? 0x2 : 0, "TCR2");
+	sw(p + CB_MAIR0, 0, "MAIR0");
+	sw(p + CB_MAIR1, 0, "MAIR1");
+	sw(g + 0x800 + 4 * cb, CAM_CBA2R, "CBA2R AArch64");
+	sw(g + 4 * cb, CAM_CBAR, "CBAR S1, S2 bypass");
+	sw(p + CB_TLBIALL, 0, "TLBIALL");
+	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
+	for (int i = 0; !dry && i < 1000 && (rd32(p + CB_TLBSTATUS) & 1); i++)
+		usleep(1000);
+	sw(p + CB_SCTLR_, trap ? TRAP_SCTLR : BYP_SCTLR, trap ? "SCTLR M|CFRE (trap)" : "SCTLR M=0 (identity)");
+}
+
+static void cb_restore(int b)
+{
+	int cb = cs.bank[b];
+	uint64_t p = cbpage((uint32_t)cb), g = gr1();
+	struct cbsave *s = &cs.sv[b];
+	sw(p + CB_SCTLR_, s->sctlr, "SCTLR restore");
+	sw(p + CB_TCR, s->tcr, "TCR restore");
+	sw(p + CB_TCR2, s->tcr2, "TCR2 restore");
+	sw(p + CB_TTBR0, s->ttbr0[0], "TTBR0 restore");
+	sw(p + CB_TTBR0 + 4, s->ttbr0[1], "TTBR0 hi restore");
+	sw(p + CB_TTBR1, s->ttbr1[0], "TTBR1 restore");
+	sw(p + CB_TTBR1 + 4, s->ttbr1[1], "TTBR1 hi restore");
+	sw(p + CB_MAIR0, s->mair[0], "MAIR0 restore");
+	sw(p + CB_MAIR1, s->mair[1], "MAIR1 restore");
+	sw(g + 4 * cb, s->cbar, "CBAR restore");
+	sw(g + 0x800 + 4 * cb, s->cba2r, "CBA2R restore");
+	sw(p + CB_FSR, 0xffffffff, "FSR clear");
+	sw(p + CB_TLBIALL, 0, "TLBIALL");
+	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
+}
+
 /*
- * NSMR SMRs (ids/masks) through one free bank, only if no valid SMR overlaps any of them. TRAP: stage-1 bank with
- * M=1 and both walks disabled (every access faults, nothing written); else M=0 identity (as smmu_identity).
+ * NSMR SMRs (ids/masks), only if no valid SMR overlaps any of them; the first NREQ are needed, the rest are
+ * dropped when free SMR slots run out. TRAP[k]: SMR k -> the trap bank, else -> the identity bank (cam16:
+ * --bypass puts the other IFE SIDs on a trap bank, so they fault in a bank, not as unmatched streams).
  */
-static int cam_smmu_up(int nsmr, const uint16_t (*m)[2], int trap)
+static int cam_smmu_up(int nsmr, int nreq, const uint16_t (*m)[2], const int *trap)
 {
 	smmu_geom();
 	uint64_t used[4] = { 0 };
-	int bad = 0;
+	int bad = 0, ntrap = 0, nbyp = 0;
 	cs.nslot = 0;
 	for (uint32_t i = 0; i < sg.nsmr; i++) {
 		uint32_t smr = rd32(SMMU + SM_SMR(i)), s2 = rd32(SMMU + SM_S2CR(i));
@@ -985,51 +1052,42 @@ static int cam_smmu_up(int nsmr, const uint16_t (*m)[2], int trap)
 				bad = 1;
 			}
 	}
-	for (uint32_t c = 0; c < sg.ncb && c < 256 && cs.cb < 0; c++)
-		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbpage(c)) & 1) && rd32(gr1() + 4 * c) == 0)
-			cs.cb = (int)c;
-	if (bad || cs.nslot < nsmr || cs.cb < 0 || (uint64_t)(sg.npage + cs.cb + 1) * sg.psize > SMMU_SIZE) {
-		printf("camrx: smmu: no dedicated mapping (conflict %d, free SMRs %d of %d, bank %d): abort before any "
-		       "IFE write\n", bad, cs.nslot, nsmr, cs.cb);
+	if (cs.nslot >= nreq && cs.nslot < nsmr) {
+		printf("camrx: smmu: only %d free SMRs: %d optional trap SMRs dropped\n", cs.nslot, nsmr - cs.nslot);
+		nsmr = cs.nslot;
+	}
+	for (int k = 0; k < nsmr; k++)
+		trap[k] ? ntrap++ : nbyp++;
+	int nb = (ntrap > 0) + (nbyp > 0);
+	cs.nb = 0;
+	for (uint32_t c = 0; c < sg.ncb && c < 256 && cs.nb < nb; c++)
+		if (!(used[c / 64] & (1ull << (c % 64))) && !(rd32(cbpage(c)) & 1) && rd32(gr1() + 4 * c) == 0 &&
+		    (uint64_t)(sg.npage + c + 1) * sg.psize <= SMMU_SIZE)
+			cs.bank[cs.nb++] = (int)c;
+	if (bad || cs.nslot < nreq || cs.nb < nb) {
+		printf("camrx: smmu: no dedicated mapping (conflict %d, free SMRs %d of %d, banks %d of %d): abort before "
+		       "any IFE write\n", bad, cs.nslot, nreq, cs.nb, nb);
 		cs.nslot = 0;
-		cs.cb = -1;
+		cs.nb = 0;
+		cs.bank[0] = cs.bank[1] = -1;
 		return -1;
 	}
-	uint64_t p = cbpage((uint32_t)cs.cb), g = gr1();
+	cs.nslot = nsmr;
+	/* bank[0] = what SMR 0 needs; the other one (if any) the rest */
+	int b0trap = trap[0];
+	cs.trap = ntrap ? (b0trap ? 0 : 1) : -1;
 	for (int k = 0; k < nsmr; k++) {
+		cs.bk[k] = trap[k] == b0trap ? 0 : 1;
 		cs.smr[k] = rd32(SMMU + SM_SMR(cs.slot[k]));
 		cs.s2cr[k] = rd32(SMMU + SM_S2CR(cs.slot[k]));
-		printf("camrx: smmu: %#x/%#x -> SMR%d, CB%d (%s)\n", m[k][0], m[k][1], cs.slot[k], cs.cb,
-		       trap ? "trap" : "bypass");
+		printf("camrx: smmu: %#x/%#x -> SMR%d, CB%d (%s)\n", m[k][0], m[k][1], cs.slot[k], cs.bank[cs.bk[k]],
+		       trap[k] ? "trap" : "bypass");
 	}
-	cs.sctlr = rd32(p);
-	cs.cbar = rd32(g + 4 * cs.cb);
-	cs.cba2r = rd32(g + 0x800 + 4 * cs.cb);
-	cs.tcr = rd32(p + CB_TCR);
-	cs.tcr2 = rd32(p + CB_TCR2);
-	cs.ttbr0[0] = rd32(p + CB_TTBR0), cs.ttbr0[1] = rd32(p + CB_TTBR0 + 4);
-	cs.ttbr1[0] = rd32(p + CB_TTBR1), cs.ttbr1[1] = rd32(p + CB_TTBR1 + 4);
-	cs.mair[0] = rd32(p + CB_MAIR0), cs.mair[1] = rd32(p + CB_MAIR1);
 	cs.on = 1;
-	sw(p + CB_SCTLR_, 0, "CB SCTLR 0 while set up");
-	sw(p + CB_FSR, 0xffffffff, "CB FSR clear");
-	sw(p + CB_TTBR0, 0, "TTBR0");
-	sw(p + CB_TTBR0 + 4, 0, "TTBR0 hi");
-	sw(p + CB_TTBR1, 0, "TTBR1");
-	sw(p + CB_TTBR1 + 4, 0, "TTBR1 hi");
-	sw(p + CB_TCR, trap ? TRAP_TCR : 0, trap ? "TCR EPD0|EPD1" : "TCR");
-	sw(p + CB_TCR2, trap ? 0x2 : 0, "TCR2");
-	sw(p + CB_MAIR0, 0, "MAIR0");
-	sw(p + CB_MAIR1, 0, "MAIR1");
-	sw(g + 0x800 + 4 * cs.cb, CAM_CBA2R, "CBA2R AArch64");
-	sw(g + 4 * cs.cb, CAM_CBAR, "CBAR S1, S2 bypass");
-	sw(p + CB_TLBIALL, 0, "TLBIALL");
-	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
-	for (int i = 0; !dry && i < 1000 && (rd32(p + CB_TLBSTATUS) & 1); i++)
-		usleep(1000);
-	sw(p + CB_SCTLR_, trap ? TRAP_SCTLR : BYP_SCTLR, trap ? "SCTLR M|CFRE (trap)" : "SCTLR M=0 (identity)");
+	for (int b = 0; b < cs.nb; b++)
+		cb_setup(b, b == cs.trap);
 	for (int k = 0; k < nsmr; k++)
-		sw(SMMU + SM_S2CR(cs.slot[k]), (uint32_t)cs.cb, "S2CR translate -> bank");
+		sw(SMMU + SM_S2CR(cs.slot[k]), (uint32_t)cs.bank[cs.bk[k]], "S2CR translate -> bank");
 	for (int k = 0; k < nsmr; k++)
 		sw(SMMU + SM_SMR(cs.slot[k]), 1u << 31 | (uint32_t)m[k][1] << 16 | m[k][0], "SMR valid (last)");
 	smmu_sync();
@@ -1042,39 +1100,28 @@ static void cam_smmu_down(void)
 	if (!cs.on)
 		return;
 	cs.on = 0;
-	uint64_t p = cbpage((uint32_t)cs.cb), g = gr1();
 	for (int k = 0; k < cs.nslot; k++)
 		sw(SMMU + SM_SMR(cs.slot[k]), cs.smr[k], "SMR restore");
 	smmu_sync();
 	for (int k = 0; k < cs.nslot; k++)
 		sw(SMMU + SM_S2CR(cs.slot[k]), cs.s2cr[k], "S2CR restore");
-	sw(p + CB_SCTLR_, cs.sctlr, "SCTLR restore");
-	sw(p + CB_TCR, cs.tcr, "TCR restore");
-	sw(p + CB_TCR2, cs.tcr2, "TCR2 restore");
-	sw(p + CB_TTBR0, cs.ttbr0[0], "TTBR0 restore");
-	sw(p + CB_TTBR0 + 4, cs.ttbr0[1], "TTBR0 hi restore");
-	sw(p + CB_TTBR1, cs.ttbr1[0], "TTBR1 restore");
-	sw(p + CB_TTBR1 + 4, cs.ttbr1[1], "TTBR1 hi restore");
-	sw(p + CB_MAIR0, cs.mair[0], "MAIR0 restore");
-	sw(p + CB_MAIR1, cs.mair[1], "MAIR1 restore");
-	sw(g + 4 * cs.cb, cs.cbar, "CBAR restore");
-	sw(g + 0x800 + 4 * cs.cb, cs.cba2r, "CBA2R restore");
-	sw(p + CB_FSR, 0xffffffff, "FSR clear");
-	sw(p + CB_TLBIALL, 0, "TLBIALL");
-	sw(p + CB_TLBSYNC, 0, "TLBSYNC");
+	for (int b = 0; b < cs.nb; b++)
+		cb_restore(b);
 	smmu_sync();
-	printf("camrx: smmu restored (%d SMRs, CB%d)\n", cs.nslot, cs.cb);
+	printf("camrx: smmu restored (%d SMRs, CB%d%s%d)\n", cs.nslot, cs.bank[0], cs.nb > 1 ? " + CB" : "",
+	       cs.nb > 1 ? cs.bank[1] : 0);
 }
 
-/* --trap: what the bank caught; then clear FSR (write back) and, if stalled, terminate (RESUME TnR=1). 1 = a fault */
+/* the trap bank: what it caught; then clear FSR (write back) and, if stalled, terminate (RESUME TnR=1). 1 = a fault */
 static int cam_smmu_trap_report(void)
 {
-	if (dry || !cs.on)
+	if (dry || !cs.on || cs.trap < 0)
 		return 0;
-	uint64_t p = cbpage((uint32_t)cs.cb);
-	uint32_t fsr = rd32(p + CB_FSR), sy = rd32(p + CB_FSYNR0), fr = rd32(gr1() + 0x400 + 4 * cs.cb);
+	int cb = cs.bank[cs.trap];
+	uint64_t p = cbpage((uint32_t)cb);
+	uint32_t fsr = rd32(p + CB_FSR), sy = rd32(p + CB_FSYNR0), fr = rd32(gr1() + 0x400 + 4 * cb);
 	printf("camrx: trap CB%d: FSR %08x (TF %u AFF %u PF %u EF %u TLBMCF %u MULTI %u SS %u FORMAT %u) FAR %08x%08x "
-	       "FSYNR0 %08x (WNR %u PLVL %u) CBFRSYNRA %08x (SID %#x, guess: bits 14:0)\n", cs.cb, fsr, (fsr >> 1) & 1,
+	       "FSYNR0 %08x (WNR %u PLVL %u) CBFRSYNRA %08x (SID %#x, guess: bits 14:0)\n", cb, fsr, (fsr >> 1) & 1,
 	       (fsr >> 2) & 1, (fsr >> 3) & 1, (fsr >> 4) & 1, (fsr >> 5) & 1, fsr >> 31, (fsr >> 30) & 1,
 	       (fsr >> 9) & 3, rd32(p + CB_FAR + 4), rd32(p + CB_FAR), sy, (sy >> 4) & 1, sy & 3, fr, fr & 0x7fff);
 	printf("camrx: trap: sGFSR %08x (USF %u SMCF %u)\n", rd32(SMMU + SM_GFSR), (rd32(SMMU + SM_GFSR) >> 1) & 1,
@@ -1087,10 +1134,28 @@ static int cam_smmu_trap_report(void)
 	return (fsr & 0xc00001feu) != 0;
 }
 
+/* cam16 (cam15 reset ~10 s after cleanup): before the SMRs go, point the identity SMRs at the trap bank, so
+ * late IFE writes become context faults in our bank, not unmatched-stream faults; wait, report */
+static void cam_smmu_park(void)
+{
+	if (!cs.on || cs.trap < 0)
+		return;
+	for (int k = 0; k < cs.nslot; k++)
+		if (cs.bk[k] != cs.trap) {
+			cs.bk[k] = cs.trap;
+			sw(SMMU + SM_S2CR(cs.slot[k]), (uint32_t)cs.bank[cs.trap], "S2CR -> trap bank (park)");
+		}
+	smmu_sync();
+	msleep_(2000);
+	if (!dry)
+		printf("camrx: late writes after stop: %s\n", cam_smmu_trap_report() ? "Y (trap bank above)" : "N");
+}
+
 /* ---- stage d: one frame through IFE-lite RDI0 WM0 ---- */
 
 static struct {
 	int armed, ife, smmu;	/* what cap_down must undo */
+	int ife_used;		/* ife_config ran: cap_down resets the IFE-lite (cam16) */
 	uint64_t pa;		/* buffer, 0 = none */
 	uint32_t len;		/* frame + guard */
 	int owned;		/* PMEM_ALLOC32'd: PMEM_FREE it */
@@ -1112,8 +1177,20 @@ static void wm_off(const char *why)
 	iw(IFE_REG_UPDATE, 0x2, "REG_UPDATE RDI0");
 }
 
-/* every exit path (also exit(1) from wr and SIGINT/SIGTERM via the main loop): WM off, CSID down, wait a frame,
- * SMMU back, buffer freed. Notes section 4 restore order (the sensor is stopped by its own command). */
+/* cam16: IFE-lite GLOBAL_RESET as in ife_config (bounded poll), so the bus master is idle before the SMMU goes */
+static void ife_reset(const char *why)
+{
+	iw(IFE_IRQ_MASK0, 1u << 31, "IRQ_MASK0 reset done");
+	iw(IFE_IRQ_CLEAR0, 0xffffffff, "IRQ_CLEAR0");
+	iw(IFE_IRQ_GCLEAR, 1, "IRQ_GLOBAL_CLEAR");
+	iw(IFE_GLOBAL_RESET, 0x3f9f, why);
+	if (poll(IFE + IFE_IRQ_STATUS0, 1u << 31, 1u << 31, 100, 1000))
+		printf("camrx: ife-lite reset (cleanup) not done after 100 ms (irq0 %#x)\n", ir(IFE_IRQ_STATUS0));
+}
+
+/* every exit path (also exit(1) from wr and SIGINT/SIGTERM via the main loop): WM off, CSID down, IFE reset,
+ * wait a frame, SMMU parked on the trap bank + 2 s + late-write check, SMMU back, buffer freed. Notes section 4
+ * restore order (the sensor is stopped by its own command). */
 static void cap_down(void)
 {
 	if (cap.ife) {
@@ -1124,9 +1201,16 @@ static void cap_down(void)
 		cap.armed = 0;
 		paths_down();
 	}
+	if (cap.ife_used) {
+		cap.ife_used = 0;
+		stage("cleanup: ife-lite reset");
+		ife_reset("GLOBAL_RESET (cleanup, cam16)");
+	}
 	msleep_(100);	/* > 1 frame at ~30 fps: a write in flight finishes */
 	if (cap.smmu) {
 		cap.smmu = 0;
+		stage("cleanup: smmu park on the trap bank, 2 s");
+		cam_smmu_park();	/* cam16 */
 		cam_smmu_down();	/* cam13: own SMRs, not smmu_identity/smmu_release */
 	}
 	/* cam11: a camnoc RCG left on PLL0 even outlives `camclk off` and then camid can't start camnoc_axi
@@ -1190,6 +1274,7 @@ static int ife_config(uint32_t pa)
 	printf("camrx: ife-lite HW_VERSION %#x BUS_HW_VERSION %#x\n", ir(IFE_HW_VERSION), ir(BUS_HW_VERSION));
 	iw(IFE_IRQ_MASK0, 1u << 31, "IRQ_MASK0 reset done");
 	cap.ife = 1;
+	cap.ife_used = 1;
 	iw(IFE_GLOBAL_RESET, 0x3f9f, "GLOBAL_RESET");
 	if (poll(IFE + IFE_IRQ_STATUS0, 1u << 31, 1u << 31, 100, 1000)) {
 		printf("camrx: ife-lite does not reset (irq0 %#x)\n", ir(IFE_IRQ_STATUS0));
@@ -1276,7 +1361,59 @@ static int save_frame(uint64_t pa, const char *out)
 			return 1;
 		}
 	}
-	return fclose(f) ? 1 : 0;
+	/* cam16: cam15's file never reached disk before the reset: fsync it and its directory */
+	if (fflush(f) || fsync(fileno(f))) {
+		perror("camrx: fsync");
+		fclose(f);
+		return 1;
+	}
+	if (fclose(f))
+		return 1;
+	char dir[512];
+	snprintf(dir, sizeof dir, "%s", out);
+	char *sl = strrchr(dir, '/');
+	if (sl == dir)
+		sl[1] = 0;
+	else if (sl)
+		*sl = 0;
+	else
+		snprintf(dir, sizeof dir, ".");
+	int d = open(dir, O_RDONLY);
+	if (d < 0 || fsync(d)) {
+		perror(dir);
+		if (d >= 0)
+			close(d);
+		return 1;
+	}
+	close(d);
+	return 0;
+}
+
+/* cam16 (cam15: 5896 guard bytes): where the guard writes are: taller frame (contiguous after the end) or scattered */
+static void guard_where(uint64_t pa, uint32_t len)
+{
+	static uint8_t b[4096];
+	long first = -1, last = -1;
+	unsigned pages = 0;
+	for (uint32_t o = FRAME_BYTES & ~4095u; o < len; o += sizeof b) {
+		size_t k = len - o < sizeof b ? len - o : sizeof b;
+		if (pm_rd(pa + o, b, k))
+			return;
+		int hit = 0;
+		for (size_t i = 0; i < k; i++)
+			if (b[i] && o + i >= FRAME_BYTES) {
+				if (first < 0)
+					first = (long)(o + i);
+				last = (long)(o + i);
+				hit = 1;
+			}
+		pages += hit;
+	}
+	if (first < 0)
+		return;
+	printf("camrx: guard writes: first at +%ld, last at +%ld past the frame end (offsets %ld..%ld), in %u 4 KB "
+	       "pages; span = %.1f lines of 2520 B\n", first - (long)FRAME_BYTES, last - (long)FRAME_BYTES, first, last,
+	       pages, (last + 1 - (long)FRAME_BYTES) / 2520.0);
 }
 
 /* the carveout slot1 is ours only while the framebuffer's zero-copy mode is off */
@@ -1335,16 +1472,42 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 		printf("camrx: capture needs --trap, or --bypass --sid 0xNNN (the SID --trap reported)\n");
 		return 2;
 	}
-	uint16_t one[1][2] = { { (uint16_t)(sid & 0x7fff), 0 } };
+	/* --bypass (cam16): the SID (mask 0) -> identity bank; the DT SMRs that don't cover it and (optional, if free
+	 * slots) the other DT SIDs under the one that does -> a trap bank. No two of them overlap (SMCFCFG). */
+	uint16_t m[CS_MAXSMR][2];
+	int tk[CS_MAXSMR], nm = 0, nreq = 0;
 	if (sid >= 0) {
 		int in = 0;
+		m[nm][0] = (uint16_t)(sid & 0x7fff), m[nm][1] = 0, tk[nm++] = 0;
 		for (int k = 0; k < 3; k++)
-			in |= smr_overlap(ife_smr[k][0], ife_smr[k][1], one[0][0], 0);
+			if (smr_overlap(ife_smr[k][0], ife_smr[k][1], m[0][0], 0))
+				in = 1;
+			else
+				m[nm][0] = ife_smr[k][0], m[nm][1] = ife_smr[k][1], tk[nm++] = 1;
 		if (!in) {
 			printf("camrx: --sid %#x is not covered by the DT IFE SMRs: refused\n", sid);
 			return 2;
 		}
+		nreq = nm;
+		for (int i = 0; i < 14 && nm < CS_MAXSMR; i++) {
+			int ov = 0;
+			for (int k = 0; k < nm; k++)
+				ov |= smr_overlap(m[k][0], m[k][1], ife_sids[i], 0);
+			if (!ov)
+				m[nm][0] = ife_sids[i], m[nm][1] = 0, tk[nm++] = 1;
+		}
+	} else {
+		for (int k = 0; k < 3; k++)
+			m[nm][0] = ife_smr[k][0], m[nm][1] = ife_smr[k][1], tk[nm++] = 1;
+		nreq = nm;
 	}
+	for (int a = 0; a < nm; a++)	/* by construction; checked anyway */
+		for (int b = a + 1; b < nm; b++)
+			if (smr_overlap(m[a][0], m[a][1], m[b][0], m[b][1])) {
+				printf("camrx: own SMRs %#x/%#x and %#x/%#x overlap: refused\n", m[a][0], m[a][1], m[b][0],
+				       m[b][1]);
+				return 2;
+			}
 	if (!dry && cap_precheck())
 		return 1;
 	printf("camrx: note: SMMU SIDs/masks from the DT msm_cam_smmu_ife (guess: IFE-lite is one of them), WM frame mode values (redfin/Linux) and that one frame = "
@@ -1373,13 +1536,14 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 			return 1;
 		cap.pa = CAP_CO_PA;
 	}
-	stage(trap ? "smmu: 3 DT SMRs -> one trap bank (M=1, EPD0|EPD1)" : "smmu: one SMR (mask 0) -> identity bank");
+	stage(trap ? "smmu: 3 DT SMRs -> one trap bank (M=1, EPD0|EPD1)" :
+	      "smmu: SID SMR (mask 0) -> identity bank, other IFE SIDs -> trap bank");
 	uint32_t gfsr0 = rd32(SMMU + SM_GFSR);
 	cap.smmu = 1;	/* cam_smmu_down undoes whatever part was written */
-	if (trap ? cam_smmu_up(3, ife_smr, 1) : cam_smmu_up(1, (const uint16_t (*)[2])one, 0))
+	if (cam_smmu_up(nm, nreq, (const uint16_t (*)[2])m, tk))
 		return 1;
-	uint64_t cbp = cbpage((uint32_t)cs.cb);
-	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, cs.cb, dry ? 0 : rd32(cbp + CB_FSR));
+	uint64_t cbp = cbpage((uint32_t)cs.bank[0]);
+	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, cs.bank[0], dry ? 0 : rd32(cbp + CB_FSR));
 	signal(SIGINT, on_sig);
 	signal(SIGTERM, on_sig);
 	if (rx_arm())
@@ -1433,12 +1597,18 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 		uint32_t fsr = rd32(cbp + CB_FSR);
 		/* FSR 0x400 is the FORMAT field, not a fault (redfin 0934:42) */
 		printf("camrx: smmu after: GFSR %#x GFSYNR1 %#x; CB%d FSR %#x (fault bits %#x) FAR %#x%08x FSYNR0 %#x\n",
-		       rd32(SMMU + SM_GFSR), rd32(SMMU + 0x54), cs.cb, fsr, fsr & 0x800001feu,
+		       rd32(SMMU + SM_GFSR), rd32(SMMU + 0x54), cs.bank[0], fsr, fsr & 0x800001feu,
 		       rd32(cbp + CB_FAR + 4), rd32(cbp + CB_FAR), rd32(cbp + CB_FSYNR0));
-		int tf = trap ? cam_smmu_trap_report() : 0;
+		int tf = cam_smmu_trap_report();	/* --bypass: the other IFE SIDs' trap bank */
 		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, cap.len - FRAME_BYTES);
 		printf("camrx: nonzero bytes: frame %llu of %u, guard %llu of %u%s\n", (unsigned long long)nf, FRAME_BYTES,
 		       (unsigned long long)ng, cap.len - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
+		if (ng)
+			guard_where(cap.pa, cap.len);
+		/* no WM0 byte-count/last-address register in the notes (camera-stage-d.md): raw values only */
+		printf("camrx: wm0: STATUS0 %#x STATUS1 %#x IMAGE_ADDR %#x WIDTH %#x HEIGHT %#x STRIDE %#x FRAME_INC %#x\n",
+		       ir(WM0_STATUS0), ir(WM0_STATUS1), ir(WM0_IMAGE_ADDR), ir(WM0_WIDTH), ir(WM0_HEIGHT), ir(WM0_STRIDE),
+		       ir(WM0_FRAME_INC));
 		if (trap)
 			printf("camrx: trap verdict: %s; buffer/guard nonzero %llu/%llu (expected 0/0)\n",
 			       tf ? "fault caught (SID above)" : "NO fault in the trap bank: the IFE stream is not one of the 3 SMRs",
@@ -1448,7 +1618,7 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 			printf("camrx: writing %s failed\n", out);
 			bad = 1;
 		} else {
-			printf("camrx: frame (%u B) -> %s\n", FRAME_BYTES, out);
+			printf("camrx: frame (%u B) -> %s, saved, fsync ok\n", FRAME_BYTES, out);
 		}
 	}
 	cap_down();
