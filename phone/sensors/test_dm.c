@@ -312,6 +312,62 @@ static void t11_tests(void)
 	fails += !o;
 }
 
+/* dm12: a flat session can't move z or r; a saved fit from before the guard is ignored; batches lose no pairs */
+static void t12_tests(void)
+{
+	static struct dm_fusion f;
+	const float room[3] = { 21, 0, -44 }, hb[3] = { -34, -41, -60 };
+	float q[4] = { 1, 0, 0, 0 }, b[3];
+	uint64_t ts = 19200000;
+	const char *path = "out/magcal-t12.txt";
+	dm_init(&f, 0.04f);
+	f.cal.have_cal = 1, f.cal.acc = 1, f.cal.r = 52, f.cal.res = 2;
+	f.cal.c[0] = -30, f.cal.c[1] = -45, f.cal.c[2] = -60;
+	t11_run(&f, q, &ts, 4, room, 0);
+	t11_run(&f, q, &ts, 120, room, 2);
+	/* the ring of a flat turn at this z: any sphere it allows must not count */
+	for (int i = 0; i < DM_MAG_RING; i++) {
+		/* a band of a 45 uT sphere 35 uT high: good residual, enough for the old 30 uT spread test, z off by 25 */
+		float th = i * 0.7f, z = -45 + 35.0f * (i % 11) / 10, r = sqrtf(45 * 45 - z * z);
+		f.cal.ring[i][0] = hb[0] + r * cosf(th), f.cal.ring[i][1] = hb[1] + r * sinf(th), f.cal.ring[i][2] = hb[2] - 25 + z;
+	}
+	f.cal.ring_n = DM_MAG_RING, f.cal.ring_new = DM_MAG_FIT_EVERY;
+	float m[3] = { hb[0] + 21, hb[1], hb[2] - 44 };
+	float m2[3] = { m[0] + 6, m[1], m[2] };
+	dm_mag_ts(&f, m2, ts);
+	dm_mag_bias(&f, b);
+	int o = f.cal.fit_rej > 0 && fabsf(f.cal.c[2] + 60) < 1e-3f && f.cal.r == 52 && f.cal.gm_ok && hypotf(b[0] - hb[0], b[1] - hb[1]) < 1 && fabsf(b[2] + 60) < 1;
+	printf("%s dm12 flat session: fit rejected %u, c z %.1f r %.1f; bias %.2f,%.2f,%.2f acc %d\n", o ? "ok  " : "FAIL", f.cal.fit_rej, f.cal.c[2], f.cal.r,
+	    b[0], b[1], b[2], dm_mag_accuracy(&f));
+	fails += !o;
+	static struct dm_fusion g;
+	FILE *fp = fopen(path, "w");
+	if (fp) {
+		fputs("fit -33.0 -49.0 -82.7 31.4 3.05 1\n", fp);
+		fclose(fp);
+	}
+	dm_init(&g, 0.04f);
+	o = dm_magcal_load(&g, path) && !g.cal.have_cal;
+	g.cal.guard_off = 1;
+	o = o && !dm_magcal_load(&g, path);
+	printf("%s dm12 saved r 31.4 ignored at load; SNS_MAG_GUARD=0 takes it\n", o ? "ok  " : "FAIL");
+	fails += !o;
+	/* the state of a session that never reached gm_ok comes back */
+	dm_init(&f, 0.04f);
+	f.cal.gm_ok = 0, f.cal.gm_w = 3, f.cal.gm_pairs = 3, f.cal.gm_ata[0] = f.cal.gm_ata[3] = 2;
+	o = !dm_magcal_save(&f, path);
+	memset(&g, 0, sizeof(g));
+	dm_init(&g, 0.04f);
+	o = o && !dm_magcal_load(&g, path) && !g.cal.gm_ok && g.cal.gm_pairs == 3 && !strcmp(dm_mag_src(&g), "fit");
+	printf("%s dm12 partial normal equations saved and loaded\n", o ? "ok  " : "FAIL");
+	fails += !o;
+	char s[160];
+	dm_gm_status(&f, s, sizeof(s));
+	o = !strncmp(s, "gm pairs 3 solves", 17);
+	printf("%s dm12 status: %s\n", o ? "ok  " : "FAIL", s);
+	fails += !o;
+}
+
 int main(void)
 {
 	struct dm_report2 r;
@@ -522,6 +578,7 @@ int main(void)
 	}
 	t9_tests();
 	t11_tests();
+	t12_tests();
 	/* O13: interest from the status text (devmotion8) and the 5 s hold */
 	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
 	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"

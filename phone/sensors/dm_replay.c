@@ -3,7 +3,7 @@
  * dm_replay [--cal FILE] dump.csv. Prints one row per 0.5 s, then a summary; gyro_yaw is independent of the fusion
  * (run-wide bias from the still windows, own gyro-propagated up), the short-term truth for heading CHANGES.
  * Env: SNS_HEADING_GRAVITY=lp|q, SNS_HC_K_SLOW, SNS_HC_K_FAST, SNS_DM_BETA, and the phone's switches SNS_HEADING_LP,
- * SNS_MAG_HOLD, SNS_MAG_GATE, SNS_DM_GBIAS, SNS_HEADING_CF, SNS_MAG_GYROFIT (=0: off). SEE's own biases are not in the dump.
+ * SNS_MAG_HOLD, SNS_MAG_GATE, SNS_DM_GBIAS, SNS_HEADING_CF, SNS_MAG_GYROFIT, SNS_MAG_GUARD, SNS_GM_LIVE, SNS_HC_JUMP (=0: off), SNS_HC_RATE. SEE's own biases are not in the dump.
  * Yaw about vertical is path-dependent through a tilted tumble (the offset to h moves there, even with a perfect
  * calibration), so the summary also gives the RMS over the flat stretches, each with its own constant.
  */
@@ -68,6 +68,29 @@ static void flat_end(const float *d, int *n)
 	*n = 0;
 }
 
+/* dm12: the largest published steps per 0.5 s not explained by the gyro */
+#define TOP_N 10
+static struct top {
+	double t;
+	float sd, st, hmag, tilt, an, k;
+	int rej, still, skip;
+} top[TOP_N];
+
+static void top_add(const struct top *x)
+{
+	int m = 0;
+	for (int i = 1; i < TOP_N; i++)
+		m = top[i].sd < top[m].sd ? i : m;
+	if (x->sd > top[m].sd)
+		top[m] = *x;
+}
+
+static int top_cmp(const void *pa, const void *pb)
+{
+	const struct top *a = pa, *b = pb;
+	return a->sd < b->sd ? 1 : a->sd > b->sd ? -1 : 0;
+}
+
 /* In file order; the clock restarts with a boot (the CSV is appended to): such a part goes after the last one. */
 static struct smp *load(const char *path, size_t *np)
 {
@@ -98,7 +121,9 @@ static struct smp *load(const char *path, size_t *np)
 		s[n++] = x;
 	}
 	fclose(fp);
-	qsort(s, n, sizeof(*s), cmp);
+	/* DM_REPLAY_ORDER=file: arrival order, batches as on the phone (the default sort hid a batching bug) */
+	if (!getenv("DM_REPLAY_ORDER"))
+		qsort(s, n, sizeof(*s), cmp);
 	*np = n;
 	return s;
 }
@@ -156,6 +181,9 @@ int main(int argc, char **argv)
 	f.cal.hold_off = env_off("SNS_MAG_HOLD"), f.cal.gate_off = env_off("SNS_MAG_GATE");
 	f.cal.gbias_off = env_off("SNS_DM_GBIAS"), f.cal.hc_off = env_off("SNS_HEADING_CF");
 	f.cal.gm_off = env_off("SNS_MAG_GYROFIT");
+	f.cal.guard_off = env_off("SNS_MAG_GUARD"), f.cal.gm_live_off = env_off("SNS_GM_LIVE"), f.cal.hcj_off = env_off("SNS_HC_JUMP");
+	if ((e = getenv("SNS_HC_RATE")))
+		f.cal.hc_rate = (float)atof(e);
 	e = getenv("SNS_HEADING_GRAVITY");
 	f.cal.grav_q = !(e && !strcmp(e, "lp"));
 	if ((e = getenv("SNS_HC_K_SLOW")))
@@ -247,6 +275,8 @@ int main(int argc, char **argv)
 			float *ps = f.still && prev_still ? &step_still : &step_move, *pd = f.still && prev_still ? &sdiff_still : &sdiff_move;
 			*ps = st > *ps ? st : *ps;
 			*pd = sd > *pd ? sd : *pd;
+			struct top tx = { x->t, sd, st, f.hc_hmag_ok ? f.hc_hmag : -1.0f, f.hc_tilt, an, f.hc_k_used, f.mag_rej, f.still, f.hc_tilt_skip };
+			top_add(&tx);
 		}
 		h_prev = h, d_prev = d, row_prev = 1, prev_still = f.still;
 	}
@@ -263,7 +293,14 @@ int main(int argc, char **argv)
 	float bu[3];
 	dm_mag_bias(&f, bu);
 	printf("summary: bias %s %.2f %.2f %.2f acc %d; gyro-aided pairs %u eig %.1f %.1f %.1f res %.2f, rej jump %u\n", dm_mag_src(&f), bu[0],
-	    bu[1], bu[2], dm_mag_accuracy(&f), f.cal.gm_pairs, f.cal.gm_eig[0], f.cal.gm_eig[1], f.cal.gm_eig[2], f.cal.gm_res, f.gm_rej_jump);
+	    bu[1], bu[2], dm_mag_accuracy(&f), f.cal.gm_pairs, f.cal.gm_eig[0], f.cal.gm_eig[1], f.cal.gm_eig[2], f.cal.gm_res, f.cal.gm_rej[DM_GMR_JUMP]);
+	char gms[160];
+	dm_gm_status(&f, gms, sizeof(gms));
+	printf("summary: %s\n", gms);
+	qsort(top, TOP_N, sizeof(top[0]), top_cmp);
+	for (int i = 0; i < TOP_N && top[i].sd > 0; i++)
+		printf("jump: T %.2f less gyro %.1f step %.1f hmag %.1f gate_rej %d still %d tilt_err %.1f |a| %.2f k %.2f tilt_skip %d\n", top[i].t, top[i].sd,
+		    top[i].st, top[i].hmag, top[i].rej, top[i].still, top[i].tilt, top[i].an, top[i].k, top[i].skip);
 	printf("summary: gyro bias fusion %.4f %.4f %.4f, run-wide %.4f %.4f %.4f (%.0f s still)\n", f.gbias[0], f.gbias[1],
 	    f.gbias[2], tb[0], tb[1], tb[2], still_s);
 	printf("summary: largest step per 0.5 s: still %.1f deg, moving %.1f deg; less the gyro's: still %.1f, moving %.1f\n",

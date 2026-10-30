@@ -28,6 +28,8 @@ b=$(sysctl -n kern.boottime 2>/dev/null | sed 's/^{ sec = \([0-9]*\).*/\1/')
 case "$b" in ''|*[!0-9]*) sleep 25 ;; *) up=$(( $(date +%s) - b )); [ $up -lt 25 ] && sleep $(( 25 - up )) ;; esac
 # B46 DeviceMotion fusion (kernel124+ with sweetmotion|0x80): on with /var/local/sensors.devmotion
 [ -e /var/local/sensors.devmotion ] && export SNS_DEVMOTION=1
+# dm12: "hdg" lines in the log only on request; the recorder is opt-in too (/var/local/motion-dump.on, read by adspboot)
+[ -e /var/local/sensors.trace ] && export SNS_HEADING_TRACE=1
 [ -f /var/local/sensors.log ] && mv -f /var/local/sensors.log /var/local/sensors.log.prev
 exec /var/local/bin/adspboot boot --rpc --root --sensors --unsafe --sns-motion --sns-rot --sns-secs 0 --watch 0 \
 	>/var/local/sensors.log 2>&1

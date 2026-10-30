@@ -118,6 +118,33 @@ _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bi
 #define DM_GM_LAMBDA 0.5	/* Tikhonov weight toward the prior; a 25 deg pair adds ~0.2 */
 #define DM_GM_EIG_MIN 20.0	/* AtA eigenvalue of an observable direction */
 #define DM_GM_RES_GOOD 4.0f	/* uT: RMS pair residual for accuracy 2 */
+/*
+ * dm12 sphere guard (SNS_MAG_GUARD=0: off): flat turning leaves z and r degenerate (live: r 43 -> 31, z -64 -> -83). A fit
+ * counts only with every axis's spread >= DM_MAG_GUARD_SPREAD x r and r >= DM_MAG_GUARD_R_MIN (also for a saved fit at load).
+ */
+#define DM_MAG_GUARD_SPREAD 1.1f
+#define DM_MAG_GUARD_R_MIN 35.0f
+/*
+ * dm12 live path (SNS_GM_LIVE=0: off): mag samples wait for the gyro to pass their time, then take the orientation from a
+ * ring (batches of any size up to the rings), z stays at the prior while unobserved, a streak of jumps stays accepted
+ * until the pairs agree again, and the normal equations are saved before they reach gm_ok.
+ */
+#define DM_GM_GQ_N 256		/* gyro orientations, ~2.5 s at 100 Hz */
+#define DM_GM_PEND_N 128	/* mag samples waiting for the gyro, ~2.5 s at 50 Hz */
+#define DM_GM_PRIOR_W 1000.0	/* weight of the prior along the unobserved direction */
+enum { DM_GMR_OFF, DM_GMR_NOTS, DM_GMR_NOGB, DM_GMR_LAG, DM_GMR_SOON, DM_GMR_OLD, DM_GMR_FAST, DM_GMR_ANGLE, DM_GMR_JUMP, DM_GMR_N };
+/*
+ * dm12 heading correction (SNS_HC_JUMP=0: off): the median innovation over ~0.3 s, k x DM_HC_K_X, at most DM_HC_RATE deg/s
+ * unless still (SNS_HC_RATE overrides), x DM_HC_TUMBLE_X while tumbling; none while |accel| is near 1 g and the tilt from q
+ * is > DM_HC_TILT deg off it. Tuned on rec1 alone.
+ */
+#define DM_HC_MED_N 30		/* innovations, 0.3 s at 100 Hz */
+#define DM_HC_RATE 15.0f	/* deg/s: <= 7.5 deg per 0.5 s */
+#define DM_HC_TUMBLE 0.3f	/* rad/s off the vertical */
+#define DM_HC_TUMBLE_X 0.033f
+#define DM_HC_K_X 2.2f
+#define DM_HC_ACC_DEV 0.05f
+#define DM_HC_TILT 3.0f		/* deg */
 
 struct dm_fusion {
 	float q[4];		/* w x y z: device -> earth (z up) */
@@ -146,6 +173,10 @@ struct dm_fusion {
 		float gm_c[3], gm_r, gm_res;
 		int gm_ok, gm_acc, gm_off;	/* gm_ok: two directions observable, gm_c is the bias; gm_off: SNS_MAG_GYROFIT=0 */
 		unsigned gm_pairs;
+		/* dm12 */
+		int guard_off, gm_live_off, hcj_off;	/* SNS_MAG_GUARD=0, SNS_GM_LIVE=0, SNS_HC_JUMP=0 */
+		float hc_rate;
+		unsigned fit_rej, gm_solves, gm_rej[DM_GMR_N];	/* survive a fusion restart: "why" for the status line */
 	} cal;
 	/* dm8: mag used for the correction (gated), its time and the raw sample's time (ticks; 0 = untimed) */
 	float mag_use[3];
@@ -174,9 +205,21 @@ struct dm_fusion {
 		float m[3], q[4];
 	} gm_h[DM_GM_HIST];
 	int gm_hn, gm_hi, gm_tick, gm_jumps;
-	unsigned gm_rej_jump;
 	uint64_t gm_fast_ts, gm_solve_ts;
 	unsigned gm_solved_at;
+	/* dm12: the gyro orientation ring, the mag samples waiting for the gyro, the heading innovations */
+	struct dm_gm_gq {
+		uint64_t ts;
+		float q[4];
+	} gm_gq[DM_GM_GQ_N];
+	int gm_gq_n, gm_gq_i;
+	struct dm_gm_pend {
+		uint64_t ts;
+		float m[3];
+	} gm_pend[DM_GM_PEND_N];
+	int gm_pend_n, gm_pend_i;
+	float hc_d[DM_HC_MED_N], hc_k_used, hc_tilt;
+	int hc_d_n, hc_d_i, hc_tilt_skip;
 };
 
 void dm_init(struct dm_fusion *f, float beta);
@@ -200,6 +243,8 @@ void dm_mag_cal_bias(struct dm_fusion *f, const float b[3], int status);
 void dm_gyro_cal_bias(struct dm_fusion *f, const float b[3], int status);
 int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: the fit */
 const char *dm_mag_src(const struct dm_fusion *f);	/* dm11: "dsp", "gyro", "fit", "none" */
+/* dm12: "gm pairs P solves S eig a,b,c rej off/nots/nogb/lag/soon/old/fast/angle/jump fitrej F" */
+void dm_gm_status(const struct dm_fusion *f, char *buf, size_t n);
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
 float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */

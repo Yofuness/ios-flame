@@ -19,7 +19,7 @@ void dm_init(struct dm_fusion *f, float beta)
 	if (init)
 		f->cal = cal;
 	else
-		f->cal.heading_tc = DM_HEADING_TC, f->cal.hc_k_slow = DM_HC_K_SLOW, f->cal.hc_k_fast = DM_HC_K_FAST, f->cal.grav_q = 1;
+		f->cal.heading_tc = DM_HEADING_TC, f->cal.hc_k_slow = DM_HC_K_SLOW, f->cal.hc_k_fast = DM_HC_K_FAST, f->cal.grav_q = 1, f->cal.hc_rate = DM_HC_RATE;
 	f->see_mag_st = init ? sms : -1, f->see_gyro_st = init ? sgs : -1;
 	memcpy(f->see_mag_bias, smb, sizeof(smb)), memcpy(f->see_gyro_bias, sgb, sizeof(sgb));
 	if (gbh)
@@ -172,6 +172,10 @@ static void dm_mag_fit(struct dm_magcal *k)
 	if (sp < DM_MAG_COVER || dm_sphere_fit((const float (*)[3])k->ring, k->ring_n, c, &r, &res) ||
 	    r < DM_MAG_R_MIN || r > DM_MAG_R_MAX || !(res < DM_MAG_RES_MAX))
 		return;
+	if (!k->guard_off && (r < DM_MAG_GUARD_R_MIN || sp < DM_MAG_GUARD_SPREAD * r)) {	/* dm12 */
+		k->fit_rej++;
+		return;
+	}
 	if (k->have_cal) {
 		float d0 = c[0] - k->c[0], d1 = c[1] - k->c[1], d2 = c[2] - k->c[2];
 		if (sqrtf(d0 * d0 + d1 * d1 + d2 * d2) > DM_MAG_STEP) {
@@ -224,15 +228,34 @@ static void dm_gm_solve(struct dm_magcal *k)
 	}
 	if (e[1] < DM_GM_EIG_MIN)
 		return;
-	double l = DM_GM_LAMBDA, xx = a[0] + l, yy = a[3] + l, zz = a[5] + l;
-	double c0 = yy * zz - a[4] * a[4], c1 = a[2] * a[4] - a[1] * zz, c2 = a[1] * a[4] - a[2] * yy;
-	double det = xx * c0 + a[1] * c1 + a[2] * c2;
+	double l = DM_GM_LAMBDA, xx = a[0] + l, xy = a[1], xz = a[2], yy = a[3] + l, yz = a[4], zz = a[5] + l;
+	double r0 = k->gm_atb[0] + l * p[0], r1 = k->gm_atb[1] + l * p[1], r2 = k->gm_atb[2] + l * p[2], x[3];
+	if (e[0] < DM_GM_EIG_MIN && !k->gm_live_off) {
+		/* dm12: flat turning: the unobserved direction comes from the prior, a little tilt's noise must not move z */
+		double v[3] = { 0, 0, 1 }, vn = 0, r[3][3] = { { a[0] - e[0], a[1], a[2] }, { a[1], a[3] - e[0], a[4] }, { a[2], a[4], a[5] - e[0] } };
+		for (int i = 0; i < 3; i++) {	/* the eigenvector: the largest cross product of two rows */
+			const double *u = r[i], *w = r[(i + 1) % 3];
+			double t[3] = { u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0] };
+			double tn = t[0] * t[0] + t[1] * t[1] + t[2] * t[2];
+			if (tn > vn)
+				vn = tn, memcpy(v, t, sizeof(v));
+		}
+		if (vn > 0) {
+			double vs = sqrt(vn), W = DM_GM_PRIOR_W, vp;
+			v[0] /= vs, v[1] /= vs, v[2] /= vs;
+			vp = v[0] * p[0] + v[1] * p[1] + v[2] * p[2];
+			xx += W * v[0] * v[0], xy += W * v[0] * v[1], xz += W * v[0] * v[2];
+			yy += W * v[1] * v[1], yz += W * v[1] * v[2], zz += W * v[2] * v[2];
+			r0 += W * vp * v[0], r1 += W * vp * v[1], r2 += W * vp * v[2];
+		}
+	}
+	double c0 = yy * zz - yz * yz, c1 = xz * yz - xy * zz, c2 = xy * yz - xz * yy;
+	double det = xx * c0 + xy * c1 + xz * c2;
 	if (!(fabs(det) > 1e-9))
 		return;
-	double r0 = k->gm_atb[0] + l * p[0], r1 = k->gm_atb[1] + l * p[1], r2 = k->gm_atb[2] + l * p[2], x[3];
 	x[0] = (c0 * r0 + c1 * r1 + c2 * r2) / det;
-	x[1] = (c1 * r0 + (xx * zz - a[2] * a[2]) * r1 + (a[1] * a[2] - xx * a[4]) * r2) / det;
-	x[2] = (c2 * r0 + (a[1] * a[2] - xx * a[4]) * r1 + (xx * yy - a[1] * a[1]) * r2) / det;
+	x[1] = (c1 * r0 + (xx * zz - xz * xz) * r1 + (xy * xz - xx * yz) * r2) / det;
+	x[2] = (c2 * r0 + (xy * xz - xx * yz) * r1 + (xx * yy - xy * xy) * r2) / det;
 	for (int i = 0; i < 3; i++)
 		if (!isfinite(x[i]) || fabs(x[i]) > DM_MAG_MAX)
 			return;
@@ -244,6 +267,7 @@ static void dm_gm_solve(struct dm_magcal *k)
 	k->gm_res = k->gm_w > 0 && e2 > 0 ? (float)sqrt(e2 / k->gm_w) : 0;
 	k->gm_acc = e[0] >= DM_GM_EIG_MIN && k->gm_res < DM_GM_RES_GOOD ? 2 : 1;
 	k->gm_ok = 1;
+	k->gm_solves++;
 	if (!k->have_cal) {	/* no sphere yet: this is the calibration to save; the gate gets its radius */
 		memcpy(k->c, k->gm_c, sizeof(k->c));
 		k->r = k->gm_r, k->res = k->gm_res < DM_MAG_RES_MAX ? k->gm_res : DM_MAG_RES_MAX - 0.01f;
@@ -256,23 +280,46 @@ static void dm_gm_solve(struct dm_magcal *k)
 static void dm_gm_step(struct dm_fusion *f, const float m[3], uint64_t ts)
 {
 	struct dm_magcal *k = &f->cal;
-	if (k->gm_off || !ts || !f->last_ts || !(f->gbias_have || f->see_gyro_st >= 1 || k->gbias_off))
+	if (k->gm_off || !ts || !f->last_ts || !(f->gbias_have || f->see_gyro_st >= 1 || k->gbias_off)) {
+		k->gm_rej[k->gm_off ? DM_GMR_OFF : !ts || !f->last_ts ? DM_GMR_NOTS : DM_GMR_NOGB]++;
 		return;
+	}
 	double lag = ((double)ts - (double)f->last_ts) / 19200000.0;
-	if (fabs(lag) > 0.1)
+	if (k->gm_live_off && fabs(lag) > 0.1) {
+		k->gm_rej[DM_GMR_LAG]++;
 		return;		/* gyro and mag not in step */
+	}
 	if (f->gm_hn) {
 		uint64_t l = f->gm_h[(f->gm_hi + DM_GM_HIST - 1) % DM_GM_HIST].ts;
-		if (ts <= l || (double)(ts - l) / 19200000.0 < DM_GM_HIST_S)
+		if (ts <= l || (double)(ts - l) / 19200000.0 < DM_GM_HIST_S) {
+			k->gm_rej[DM_GMR_SOON]++;
 			return;
+		}
 	}
-	/* the gyro orientation at the sample's own time, first order from the newest gyro step */
-	const float *g = f->gyro, *q = f->gq;
-	float h = 0.5f * (float)lag, qi[4] = {
-		q[0] - h * (q[1] * g[0] + q[2] * g[1] + q[3] * g[2]),
-		q[1] + h * (q[0] * g[0] + q[2] * g[2] - q[3] * g[1]),
-		q[2] + h * (q[0] * g[1] - q[1] * g[2] + q[3] * g[0]),
-		q[3] + h * (q[0] * g[2] + q[1] * g[1] - q[2] * g[0]) };
+	float qi[4];
+	if (k->gm_live_off) {
+		/* the gyro orientation at the sample's own time, first order from the newest gyro step */
+		const float *g = f->gyro, *q = f->gq;
+		float h = 0.5f * (float)lag;
+		qi[0] = q[0] - h * (q[1] * g[0] + q[2] * g[1] + q[3] * g[2]);
+		qi[1] = q[1] + h * (q[0] * g[0] + q[2] * g[2] - q[3] * g[1]);
+		qi[2] = q[2] + h * (q[0] * g[1] - q[1] * g[2] + q[3] * g[0]);
+		qi[3] = q[3] + h * (q[0] * g[2] + q[1] * g[1] - q[2] * g[0]);
+	} else {
+		/* dm12: the nearest ring entry; the ring is 100 Hz, so at most ~5 ms from the sample's own time */
+		const struct dm_gm_gq *b = NULL;
+		double best = 0.05 * 19200000.0;
+		for (int s = 0; s < f->gm_gq_n; s++) {
+			double d = fabs((double)f->gm_gq[s].ts - (double)ts);
+			if (d < best)
+				best = d, b = &f->gm_gq[s];
+		}
+		if (!b) {
+			k->gm_rej[DM_GMR_LAG]++;
+			return;
+		}
+		memcpy(qi, b->q, sizeof(qi));
+	}
 	struct dm_gm_hist *n = &f->gm_h[f->gm_hi];
 	n->ts = ts;
 	memcpy(n->m, m, sizeof(n->m));
@@ -289,16 +336,20 @@ static void dm_gm_step(struct dm_fusion *f, const float m[3], uint64_t ts)
 		if (d < best)
 			best = d, o = &f->gm_h[s];
 	}
-	if (!o || (f->gm_fast_ts && f->gm_fast_ts >= o->ts))
+	if (!o || (f->gm_fast_ts && f->gm_fast_ts >= o->ts)) {
+		k->gm_rej[!o ? DM_GMR_OLD : DM_GMR_FAST]++;
 		return;
+	}
 	/* q_r = conj(q_i) * q_j, device j -> device i */
 	float w = qi[0], x = -qi[1], y = -qi[2], z = -qi[3], a = o->q[0], bq = o->q[1], c = o->q[2], d = o->q[3];
 	float r0 = w * a - x * bq - y * c - z * d, r1 = w * bq + x * a + y * d - z * c;
 	float r2 = w * c - x * d + y * a + z * bq, r3 = w * d + x * c - y * bq + z * a;
 	float rn = sqrtf(r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3);
 	r0 /= rn, r1 /= rn, r2 /= rn, r3 /= rn;
-	if (fabsf(r0) > cosf(DM_GM_MIN_DEG * (float)M_PI / 360.0f))
+	if (fabsf(r0) > cosf(DM_GM_MIN_DEG * (float)M_PI / 360.0f)) {
+		k->gm_rej[DM_GMR_ANGLE]++;
 		return;
+	}
 	double R[3][3] = {
 		{ 1 - 2 * (r2 * r2 + r3 * r3), 2 * (r1 * r2 - r0 * r3), 2 * (r1 * r3 + r0 * r2) },
 		{ 2 * (r1 * r2 + r0 * r3), 1 - 2 * (r1 * r1 + r3 * r3), 2 * (r2 * r3 - r0 * r1) },
@@ -309,11 +360,14 @@ static void dm_gm_step(struct dm_fusion *f, const float m[3], uint64_t ts)
 		for (int i = 0; i < 3; i++)
 			di += (m[i] - bp[i]) * (m[i] - bp[i]), dj += (o->m[i] - bp[i]) * (o->m[i] - bp[i]);
 		di = sqrtf(di), dj = sqrtf(dj);
-		if (fabsf(di - dj) > DM_GM_JUMP && ++f->gm_jumps <= DM_GM_JUMP_STREAK) {
-			f->gm_rej_jump++;
+		int jump = fabsf(di - dj) > DM_GM_JUMP;
+		if (jump && ++f->gm_jumps <= DM_GM_JUMP_STREAK) {
+			k->gm_rej[DM_GMR_JUMP]++;
 			return;
 		}
-		f->gm_jumps = 0;
+		/* dm12: past the streak the bias is what's off: keep taking pairs, not one in 51, until they agree again */
+		if (!jump || k->gm_live_off)
+			f->gm_jumps = 0;
 		k->gm_r = k->gm_r > 0 ? k->gm_r + 0.02f * (di - k->gm_r) : di;
 	} else {
 		float di = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
@@ -347,6 +401,43 @@ static void dm_gm_step(struct dm_fusion *f, const float m[3], uint64_t ts)
 		f->gm_solve_ts = ts;
 		dm_gm_solve(k);
 	}
+}
+
+/* dm12: mag samples up to the newest gyro step go in; the later ones wait, in order, for the gyro to pass them */
+static void dm_gm_feed(struct dm_fusion *f, const float m[3], uint64_t ts)
+{
+	if (f->cal.gm_live_off || !ts || !f->last_ts || ts <= f->last_ts) {
+		dm_gm_step(f, m, ts);
+		return;
+	}
+	struct dm_gm_pend *p = &f->gm_pend[(f->gm_pend_i + f->gm_pend_n) % DM_GM_PEND_N];
+	if (f->gm_pend_n == DM_GM_PEND_N) {	/* full: the oldest goes, it found no gyro in time */
+		f->cal.gm_rej[DM_GMR_LAG]++;
+		f->gm_pend_i = (f->gm_pend_i + 1) % DM_GM_PEND_N;
+		f->gm_pend_n--;
+	}
+	p->ts = ts;
+	memcpy(p->m, m, sizeof(p->m));
+	f->gm_pend_n++;
+}
+
+static void dm_gm_drain(struct dm_fusion *f, uint64_t ts)
+{
+	while (f->gm_pend_n && f->gm_pend[f->gm_pend_i].ts <= ts) {
+		struct dm_gm_pend p = f->gm_pend[f->gm_pend_i];
+		f->gm_pend_i = (f->gm_pend_i + 1) % DM_GM_PEND_N;
+		f->gm_pend_n--;
+		dm_gm_step(f, p.m, p.ts);
+	}
+}
+
+void dm_gm_status(const struct dm_fusion *f, char *buf, size_t n)
+{
+	const struct dm_magcal *k = &f->cal;
+	const unsigned *r = k->gm_rej;
+	snprintf(buf, n, "gm pairs %u solves %u eig %.0f,%.0f,%.0f rej %u/%u/%u/%u/%u/%u/%u/%u/%u fitrej %u", k->gm_pairs, k->gm_solves,
+	    k->gm_eig[0], k->gm_eig[1], k->gm_eig[2], r[DM_GMR_OFF], r[DM_GMR_NOTS], r[DM_GMR_NOGB], r[DM_GMR_LAG], r[DM_GMR_SOON],
+	    r[DM_GMR_OLD], r[DM_GMR_FAST], r[DM_GMR_ANGLE], r[DM_GMR_JUMP], k->fit_rej);
 }
 
 /* dm8: 1 = use this sample for the correction. Needs a calibration and accel; dips of all samples feed the median. */
@@ -427,7 +518,7 @@ int dm_mag_ts(struct dm_fusion *f, const float m[3], uint64_t ts)
 	}
 	f->have_mag = 1;
 	f->mag_raw_ts = ts;
-	dm_gm_step(f, m, ts);	/* dm11: not through the gate, which judges with the bias being learned */
+	dm_gm_feed(f, m, ts);	/* dm11: not through the gate, which judges with the bias being learned */
 	if (dm_mag_gate(f, m)) {	/* dm8 */
 		memcpy(f->mag_use, m, sizeof(f->mag_use));
 		f->have_mag_use = 1, f->mag_use_ts = ts;
@@ -503,6 +594,8 @@ int dm_magcal_load(struct dm_fusion *f, const char *path)
 			return -1;
 	if (a[3] < DM_MAG_R_MIN || a[3] > DM_MAG_R_MAX || !(a[4] < DM_MAG_RES_MAX) || acc < 1 || acc > 2)
 		return -1;
+	if (!f->cal.guard_off && a[3] < DM_MAG_GUARD_R_MIN)
+		return -1;	/* dm12: a fit from before the guard, from flat turning */
 	memcpy(f->cal.c, a, sizeof(f->cal.c));
 	f->cal.r = a[3], f->cal.res = a[4], f->cal.acc = acc, f->cal.n = 0;
 	f->cal.have_cal = 1;
@@ -534,7 +627,7 @@ int dm_magcal_save(const struct dm_fusion *f, const char *path)
 	float res = k->gm_ok ? k->gm_res : k->res;
 	fprintf(fp, "fit %.3f %.3f %.3f %.3f %.3f %d\n", c[0], c[1], c[2], k->r, res < DM_MAG_RES_MAX ? res : DM_MAG_RES_MAX - 0.01f,
 	    k->gm_ok ? k->gm_acc : k->acc);
-	if (k->gm_ok)
+	if (k->gm_ok || (!k->gm_live_off && k->gm_w > 0))	/* dm12: short sessions add up over reboots */
 		fprintf(fp, "gm %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %u\n", k->gm_ata[0], k->gm_ata[1], k->gm_ata[2],
 		    k->gm_ata[3], k->gm_ata[4], k->gm_ata[5], k->gm_atb[0], k->gm_atb[1], k->gm_atb[2], k->gm_yty, k->gm_w, k->gm_pairs);
 	if (fclose(fp))
@@ -621,7 +714,37 @@ static void dm_heading_step(struct dm_fusion *f, float dt, int stale)
 		} else {
 			int fast = fabsf(g[0]) >= DM_HC_FAST || fabsf(g[1]) >= DM_HC_FAST || fabsf(g[2]) >= DM_HC_FAST;
 			float d = fmodf(fmodf(hm - f->hc_h, 360.0f) + 540.0f, 360.0f) - 180.0f;
-			f->hc_h += (fast ? f->cal.hc_k_fast : f->cal.hc_k_slow) * d * dt;
+			float k = fast ? f->cal.hc_k_fast : f->cal.hc_k_slow;
+			if (f->cal.hcj_off) {
+				f->hc_h += k * d * dt;
+			} else {	/* dm12: a transient in hmag or a wrong tilt shouldn't show in the published heading */
+				float t[DM_HC_MED_N], an = sqrtf(f->acc[0] * f->acc[0] + f->acc[1] * f->acc[1] + f->acc[2] * f->acc[2]);
+				f->hc_d[f->hc_d_i] = d;
+				f->hc_d_i = (f->hc_d_i + 1) % DM_HC_MED_N;
+				f->hc_d_n += f->hc_d_n < DM_HC_MED_N;
+				memcpy(t, f->hc_d, sizeof(t));
+				for (int i = 1; i < f->hc_d_n; i++)
+					for (int j = i; j > 0 && t[j - 1] > t[j]; j--) {
+						float x = t[j];
+						t[j] = t[j - 1], t[j - 1] = x;
+					}
+				d = t[f->hc_d_n / 2];
+				float dev = an > 1e-3f ? fabsf(an - G_MS2) / G_MS2 : 1, cs = 1;
+				if (an > 1e-3f)
+					cs = (u[0] * f->acc[0] + u[1] * f->acc[1] + u[2] * f->acc[2]) / an;
+				f->hc_tilt = acosf(cs > 1 ? 1 : cs < -1 ? -1 : cs) * 180.0f / (float)M_PI;
+				f->hc_tilt_skip = dev <= DM_HC_ACC_DEV && f->hc_tilt > DM_HC_TILT;
+				k = f->hc_tilt_skip ? 0 : k * DM_HC_K_X;
+				f->hc_k_used = k;
+				float st = k * d;
+				if (!f->still && f->cal.hc_rate > 0) {
+					/* tumbling (the gyro off the vertical): hmag means little, nearly hold; else catch up */
+					float gv = u[0] * g[0] + u[1] * g[1] + u[2] * g[2], gt = g[0] * g[0] + g[1] * g[1] + g[2] * g[2] - gv * gv;
+					float lim = f->cal.hc_rate * (gt > DM_HC_TUMBLE * DM_HC_TUMBLE ? DM_HC_TUMBLE_X : 1);
+					st = st > lim ? lim : st < -lim ? -lim : st;
+				}
+				f->hc_h += st * dt;
+			}
 		}
 	}
 	f->hc_h = fmodf(fmodf(f->hc_h, 360.0f) + 360.0f, 360.0f);
@@ -647,6 +770,7 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 	if (dt > 0.1f) {
 		dt = 0.1f;	/* a gap (sensor restarted): integrate at most 100 ms */
 		f->gm_hn = 0, f->gm_hi = 0;	/* dm11: the gyro orientation broke here */
+		f->gm_gq_n = 0, f->gm_gq_i = 0, f->gm_pend_n = 0, f->gm_pend_i = 0;	/* dm12 */
 	}
 	if (g[0] * g[0] + g[1] * g[1] + g[2] * g[2] > DM_GM_MAX_RATE * DM_GM_MAX_RATE)
 		f->gm_fast_ts = ts;	/* dm11 */
@@ -657,6 +781,14 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 	gq[3] = gz1 + gh * (gw * g[2] + gx1 * g[1] - gy1 * g[0]);
 	float gqn = sqrtf(gq[0] * gq[0] + gq[1] * gq[1] + gq[2] * gq[2] + gq[3] * gq[3]);
 	gq[0] /= gqn, gq[1] /= gqn, gq[2] /= gqn, gq[3] /= gqn;
+	if (!f->cal.gm_live_off) {	/* dm12 */
+		struct dm_gm_gq *e = &f->gm_gq[f->gm_gq_i];
+		e->ts = ts;
+		memcpy(e->q, gq, sizeof(e->q));
+		f->gm_gq_i = (f->gm_gq_i + 1) % DM_GM_GQ_N;
+		f->gm_gq_n += f->gm_gq_n < DM_GM_GQ_N;
+		dm_gm_drain(f, ts);
+	}
 	dm_still_step(f, gr, dt);	/* dm9 */
 	float beta = f->still && !f->cal.hc_off ? DM_BETA_STILL : f->beta;
 	float q0 = f->q[0], q1 = f->q[1], q2 = f->q[2], q3 = f->q[3];

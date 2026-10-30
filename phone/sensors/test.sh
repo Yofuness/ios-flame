@@ -56,8 +56,9 @@ for path, soft in ((sys.argv[1], 1.0), (sys.argv[2], 1.2)):
                 o.write('h,%.4f,0.00,-1.00\n' % t)
 PY
 ./out/dm_replay out/dm_synth.csv | grep summary | tee out/dm_synth.txt
-grep -q 'fit yes c 12.0. -30.0. 5.0' out/dm_synth.txt
-awk '/rms flat stretches/ { ok = $8 < 3.0 && $11 >= 90 } END { exit !ok }' out/dm_synth.txt
+# dm12: the sphere stops at the last fit with the tumble in its ring, and the first 5 s flat are the limited catch-up
+grep -Eq 'bias gyro 1[12]\.[09][0-9] -(29\.9|30\.0)[0-9] [45]\.[09][0-9]' out/dm_synth.txt
+awk '/rms flat settled/ { ok = $(NF - 4) < 3.0 && $(NF - 1) >= 80 } END { exit !ok }' out/dm_synth.txt
 python3 -I ../../tools/sunfish-magcal-analyze.py out/dm_synth.csv
 python3 -I ../../tools/sunfish-magcal-analyze.py out/dm_synth_soft.csv | tee out/dm_synth.txt
 awk '$1 == "ellipsoid" && $2 != "center" { e = $NF } $1 == "sphere" && $2 != "center" { s = $NF } END { exit !(e < 1.5 && s > e + 2) }' out/dm_synth.txt
@@ -69,6 +70,6 @@ rec=../../work/cal/motion-rec1.csv
 if [ -f "$rec" ]; then
 	./out/dm_replay "$rec" | grep summary | tee out/dm_rec1.txt
 	awk '/summary: bias/ { dx = $4 + 34.3; dy = $5 + 41.5; ok1 = $3 == "gyro" && dx * dx < 6.25 && dy * dy < 6.25 }
-	    /rms flat settled/ { ok2 = $(NF - 4) <= 8.5 } END { exit !(ok1 && ok2) }' out/dm_rec1.txt
+	    /rms flat settled/ { ok2 = $(NF - 4) <= 6.0 } /less the gyro/ { ok3 = $NF <= 8 } END { exit !(ok1 && ok2 && ok3) }' out/dm_rec1.txt
 	echo 'dm11 recording: ok'
 fi

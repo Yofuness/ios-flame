@@ -73,12 +73,14 @@ static float dm_yaw;
  */
 #define MDUMP_ON "/var/local/motion-dump.on"
 #define MDUMP_CSV "/var/local/motion-dump.csv"
+#define MDUMP_PREV "/var/local/motion-dump.prev.csv"
 #define MDUMP_MAX (30L * 1024 * 1024)
 static FILE *mdump_fp;
 static long mdump_size, mdump_flush;
 static int mdump_said;		/* the stop reason was printed; again after the .on file goes away */
 static uint64_t mdump_h_last;
 static char mdump_buf[65536];
+static int mdump_rotated;	/* dm12: once per start: the old dump -> .prev (SNS_MDUMP_ROTATE=0: append as before) */
 /*
  * B46 dm5: SEE's background calibrations (mag_cal, gyro_cal; on-change streams) run while the fusion does; the mag
  * bias replaces the min/max box while its status is >= 1 (the box keeps learning as the fallback). SNS_SEE_CAL=0
@@ -108,6 +110,10 @@ static void mdump_check(void)
 		mdump_close("fusion off");
 	} else if (!mdump_fp && !mdump_said) {
 		mdump_said = 1;
+		const char *rot = getenv("SNS_MDUMP_ROTATE");
+		if (!mdump_rotated && !(rot && !strcmp(rot, "0")))
+			rename(MDUMP_CSV, MDUMP_PREV);
+		mdump_rotated = 1;
 		FILE *fp = fopen(MDUMP_CSV, "a");
 		if (!fp) {
 			printf("sns: %s: %s\n", MDUMP_CSV, strerror(errno));
@@ -419,6 +425,14 @@ static int start(void)
 	dm.cal.grav_q = !(e && !strcmp(e, "lp"));
 	e = getenv("SNS_MAG_GYROFIT");	/* dm11: gyro-aided hard iron, 0 = off */
 	dm.cal.gm_off = e && !strcmp(e, "0");
+	e = getenv("SNS_MAG_GUARD");	/* dm12: sphere guard, 0 = off */
+	dm.cal.guard_off = e && !strcmp(e, "0");
+	e = getenv("SNS_GM_LIVE");	/* dm12: gyro-aided fit, batches and flat turning, 0 = off */
+	dm.cal.gm_live_off = e && !strcmp(e, "0");
+	e = getenv("SNS_HC_JUMP");	/* dm12: heading correction limits, 0 = off */
+	dm.cal.hcj_off = e && !strcmp(e, "0");
+	if ((e = getenv("SNS_HC_RATE")))
+		dm.cal.hc_rate = (float)atof(e);
 	e = getenv("SNS_HEADING_TRACE");
 	dm_trace = e && !strcmp(e, "1");
 	e = getenv("SNS_DM_TYPE");
@@ -661,6 +675,9 @@ void sns_tick(const struct sns_link_ops *ops)
 			    (unsigned long long)(dm_gap_max / 19200), dm.rej_r, dm.rej_dip);	/* dm8 */
 			dm_gap_200 = dm_gap_1s = 0, dm_gap_max = 0;
 			printf(", gbias %.4f,%.4f,%.4f still %d", dm.gbias[0], dm.gbias[1], dm.gbias[2], dm.still);	/* dm9 */
+			char gms[160];
+			dm_gm_status(&dm, gms, sizeof(gms));
+			printf(", %s", gms);	/* dm12 */
 		}
 		printf("\n");
 		last_print = now;
