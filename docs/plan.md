@@ -5,9 +5,8 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. ▶ **App extensions** (B8): Files "On My iPhone" OPENS (kernel121, xnu 0240 v5: Sandbox op 4 answers the container from the exec's HOME). Next: PhotosFileProvider, survey widgets/share/keyboard extensions. (apps.md)
-2. **Sensors** (B12): auto-rotate and proximity work (kernel122); Compass needs a DeviceMotion service (B46, days: not now). (sensors.md)
-3. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
+1. ▶ **Sensors / Compass** (B46): fake DeviceMotion HID service {0xFF0C,4} + Madgwick fusion written (xnu 0243, kernel124, sweetmotion|0x80, /var/local/sensors.devmotion); first test dm1 running. (sensors.md)
+2. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
 Camera.app (U12), proximity by hand (U17), power key wake (U18), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),

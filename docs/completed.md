@@ -5,6 +5,7 @@ Newest first. Details stay in the feature Logs (docs/features/<name>.md).
 
 ## From the plan (2026-10-28 .. 2026-10-30)
 
+- 2026-10-30 APP EXTENSIONS WORK (B8, ext1): widgets + gallery, share sheet, Files "On My iPhone", emoji keyboard, 0 new crashes; leftovers: skeleton widgets, cover-sheet button glyphs (B44) (apps.md ext1).
 - 2026-10-30 App survey with screenshots (sv1): 25 OK, 5 empty-OK, 4 broken; findings in backlog B44-B46 (apps.md).
 - 2026-10-30 PROXIMITY in iOS (B12 part): xnu 0241 Placement = 1 + detection mode 3/6; near -> panel off in 0.5 s (sensors.md px3). Default boot sweetmotion=0x3f, kernel122.
 - 2026-10-30 FILES "ON MY IPHONE" OPENS (B37): fpfix.dylib (fileproviderd accepts our HFSX volume) + xnu 0240 v5 (Sandbox op 4 container path from the exec's HOME), kernel121 (docs/features/apps.md).

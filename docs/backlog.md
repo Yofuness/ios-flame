@@ -15,7 +15,7 @@ history in the feature Logs. Finished items move to [completed.md](completed.md)
 - B35 Privacy & Security has no Location Services row: CoreTelephony getSubscriptionInfo fails without CommCenter; the SweetMetal2 hook doesn't load in Preferences. Cosmetic; needs Preferences injection or a CommCenter stub (apps.md).
 - B33 Home swipe: no injected bottom-edge swipe goes home (5 variants, b33); tests use `H` (home button hook: Calculator -> home confirmed, bt1) and `K` (lock); a real finger swipe works (U8, 2026-10-30): only the injected swipe fails.
 - B29 Lock-screen flashlight/camera button icons and 5 Control Center tiles render as noise: icon-size backboardd buffer textures are shadows; forced shadow refresh (0108) no change. Parked 2026-10-29 (leads in apps.md). 2026-10-31: the lock-screen clock digits render as the same noise some minutes after boot (cam23, cam27: the camera was off in cam27, so not the camera).
-- B8 PhotosFileProvider crashes (cause found 2026-10-30: Sandbox op 4 ENOENT, fix xnu 0240 = B37's): 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
+- B8 (extensions work, ext1 2026-10-30; only this left) PhotosFileProvider crashes (cause found 2026-10-30: Sandbox op 4 ENOENT, fix xnu 0240 = B37's): 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.
 - B12 Sensors: [MOSTLY DONE 2026-10-30] auto-rotate works via the ADSP SNS client (sensors.md); open: proximity/light into iOS.

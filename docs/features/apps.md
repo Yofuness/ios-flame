@@ -1,5 +1,5 @@
 # Apps
-**State:** ✅ 32 staged apps installed in /Applications; 17 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music, Photos, App Store fixed/confirmed 2026-10-29); only Camera (no camera stack), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. **Updated:** 2026-10-29.
+**State:** ✅ 32 staged apps installed in /Applications; 17 of 18 surveyed apps open fine (Maps, Notes, Wallet, Music, Photos, App Store fixed/confirmed 2026-10-29); only Camera (no camera stack), plus CocoaTop (process viewer, tools/build-cocoatop-linux.sh); crash-looping launchd jobs dropped. App extensions work (2026-10-30 ext1: widgets, widget gallery, share sheet, Files "On My iPhone", emoji keyboard; 0 crashes). **Updated:** 2026-10-30.
 
 ## How to use
 Removed from `/System/Library/xpc/launchd.plist` with `tools/sunfish-launchd-drop.sh LABEL...` (applies on reboot).
@@ -47,6 +47,15 @@ from the backup with plistlib.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 16:50 ext1: APP EXTENSIONS WORK (kernel123, fake taps + flame-shot, no reboot)
+- Widgets (Today view): Notes widget shows real notes, Battery widget 100%; a third large widget stays a grey skeleton. Widget gallery ("+" in jiggle mode) lists Smart Stack, Notes, Weather (skeleton), Reminders, Calendar ("FRIDAY 30").
+- Share sheet (from Notes): AirDrop (blank icon), Messages, Mail, Reminders, Copy, Markup, Print, Save to Filza, Save to Files.
+- Files > Browse: iCloud Drive, On My iPhone, Recently Deleted, Tags; On My iPhone opens ("Folder is Empty"). No Photos location listed.
+- Keyboards: Settings lists English (US) + Emoji; Notes keyboard has predictions; the emoji key switches to the Emoji keyboard and back.
+- Notification Center swipe: cover sheet drawn (date, clock, "no notifications"), but its flashlight and camera buttons are garbled glyphs (likely B44 textures).
+- Crash reports: 1123 before and after (0 new). Not checked: the PlugInKit/pkd oslog grep printed nothing at all (grep may not have matched). Photos library is empty, so PhotosFileProvider was not exercised. Screens: work/shots/ext1-*.png.
+- Open: skeleton widgets (Weather needs Apple's signed service; the other unknown), cover-sheet button glyphs (B44), AirDrop icon blank.
 
 ### 2026-10-30 14:00 B44 round 2: UBWC off (TU_DEBUG=noubwc) doesn't fix it either; parked
 - research/notes/garbled-textures.md "round 2": every garbled widget's texture takes the bridge's "-> shadow" path (row pitch not a multiple of 64 or offset 32: 600x600 RGBA8 offset 32 row 2400, A8 566x79 / 543x358 / 480x65 / 224x192, BGRA8 194x237 row 784, ...); no 16-bit/compressed formats; colours right (no channel swap); rows slope gently and break into dashes.
