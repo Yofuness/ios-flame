@@ -48,7 +48,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
 | [Camera](docs/features/camera.md) | 🟡 | both camera sensors are powered and answer (IDs read); no pictures yet |
-| [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: on, devices listed, an Xbox controller pairs and connects; audio devices (AirPods) crash bluetoothd; serial drops |
+| [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); audio playback being tested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ✅ | auto-rotate works (accelerometer -> rotation); all 6 sensors answer on the audio DSP |
 

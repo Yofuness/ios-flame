@@ -1,5 +1,5 @@
 # Bluetooth
-**State:** ✅🟡 Bluetooth works in iOS Settings: on, discoverable, nearby devices listed (bt7, kernel105+, btbridge=1 default + btbridge). Pairing works (Xbox controller, U9); audio devices crash bluetoothd (AirPods; redfin 1016 next); 115200-baud polled UART drops bytes. **Updated:** 2026-10-30. **Updated:** 2026-10-30.
+**State:** ✅🟡 Bluetooth works in iOS Settings: on, discoverable, nearby devices listed (bt7, kernel105+, btbridge=1 default + btbridge). Pairing works (Xbox controller, AirPods Pro 2 with noise control); UART flow control fixed the drops; audio playback untested. **Updated:** 2026-10-30. **Updated:** 2026-10-30.
 
 ## Facts
 | Item | Value | Ref (../recon/live.dts) |
@@ -22,6 +22,11 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 20:00 AIRPODS CONNECT (bt10, kernel108; btbridge 297af9f)
+- Automatic RX flow control (SE_UART_MANUAL_RFR 0x2ac = 0, RX RFR watermark = FIFO depth - 2 = 30 words of 32), RX drained during TX, a 64 KB ring, per-packet logging off (-v), priority -10. Bring-up 1 failed once at boot, bring-up 2 worked (cause open).
+- The user: AirPods Pro 2 connect, noise control (transparency / noise cancelling) switches from Settings, and the Find My owner notice shows. No bluetoothd crash.
+- Next: audio playback to the AirPods (A2DP): an MP3 was put in Files > On My iPhone for the test (the Music library needs a sync database, not a plain file).
 
 ### 2026-10-30 19:45 AirPods again: RX overruns crash bluetoothd (reason 607)
 - During the AirPods connection (0x0405 Create Connection unanswered, then 0x0c03): "uart dropped 3347, overruns 88"; the watchdog recovered the chip (recovery 1), but bluetoothd had already died: "CRASH bluetoothd ... Bluetooth fatal error - crashing { reason=607 }". Root cause: the polled UART at 115200 cannot keep up and our RTS is held ready, so the chip overruns the FIFO. Fix in progress: GENI automatic RFR (RX watermark), burst drain, quieter logging.
