@@ -5,14 +5,13 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. **Compass calibration** (B46 follow-up): DSP mag_cal/gyro_cal stream (dm6, e226cad) but report bias 0 until the phone is turned: waits on U19. (sensors.md)
-2. ▶ **Camera** (B17): Camera.app rear preview + saved photos work (cam35, cam36); both cameras, auto-exposure, autofocus and sharp photos work (cam37, cam40, af5-af7); Live Photo off by default (it filled mediaserverd); next: switch time, front colour, preview CPU. (camera.md)
-3. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
+1. ▶ **Camera** (B17): Camera.app rear preview + saved photos work (cam35, cam36); both cameras, auto-exposure, autofocus and sharp photos work (cam37, cam40, af5-af7); Live Photo off by default (it filled mediaserverd); next: switch time, front colour, preview CPU. (camera.md)
+2. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
 Compass comparison (U21), Camera.app (U12), proximity by hand (U17), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
 Files check (U13), touch while plugged in (U14).
-Parked: smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
+Parked: Compass accuracy (rough compass; dm12 installed, recorder on, re-check U21 when convenient), smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
 Finished items: [completed.md](completed.md) (not auto-loaded).
 
 ## Questions for you (Claude took the recommended path meanwhile)

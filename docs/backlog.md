@@ -28,6 +28,7 @@ history in the feature Logs. Finished items move to [completed.md](completed.md)
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)
+- Compass accuracy: parked 2026-10-30 after a long day (sensors.md rec1, dm11, dm12): usable as a rough compass, up to ~20 deg off a Pixel 8 Pro and some jumps in the last hand test; live gyro-aided fit idle (status line counters in dm12 say why); next: read a recording from normal use (/var/local/motion-dump.csv), U21 comparison away from electronics.
 - B21 GPU busy-hang recovery + pool growth (no real hang seen since xnu 0207).
 - B4 Silent resets in long app soaks (PON reason is sticky, no lead).
 
