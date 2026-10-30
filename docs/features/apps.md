@@ -48,6 +48,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:00 Correction to files6/7
+- PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 has mtimes 1969-12-31 (from the root image): it existed all along; the `lsreg -r` after the clean files6 boot only linked it into the LaunchServices record. So earlier rebuilds missed it (they may have run with containermanagerd busy/wedged, or before it was up), and the hand-made container was not needed. Setup step: a full `lsreg -r` on a settled boot.
+
 ### 2026-10-30 03:55 files6/7: LocalStorage gets a real data container; pkd accepts it; Files' list unverified (night)
 - files6 boot (kernel111 CAMERA=1, 4438 mV): `lsreg -i` still (none) after boot; `lsreg -r` (63 s, "rebuild -> 1") then gave dataContainerURL /private/var/mobile/Containers/Data/PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 (made by containermanagerd: metadata 638 B; not the hand-made 718EBA02, which is now deleted).
 - files7 (pkd + fileproviderd + Files restarted): pkd: no "mis-configured" / "negative cache add" lines any more; fileproviderd discovers com.apple.FileProvider.LocalStorage (FPDLocalStorageExtension created, "default provider remains com.apple.FileProvider.LocalStorage"), "returning 3 providers"; Files' log has no "isn't available" line any more. LocalStorageFileProvider not running yet (it runs on browse). Files' Browse list not readable by the webcam at night brightness: user check (U13).
