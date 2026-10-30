@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:05 jack10: VirtualAudio lists "Codec" but never creates its device (info-level oslog of a mediaserverd restart)
+- `oslog -l -t 40 -n mediaserverd` (the tool's default is 10 s: the earlier short captures came from that). DeviceListener_Aspen.cpp:311 lists AudioObjectID 35 "ap:ha:nd:of:fd:ev-screen", 51 "Speaker", 57 "Hawking", 60 "Actuator", 64 "Codec", 71 "Null_Device"; but :195 "Newly connected device located" only for Actuator and Null_Device, and DeviceManager.cpp:227 "Creating Device ID" only for those two (VirtualAudio then takes hog mode on them).
+- So Device_Codec_Aspen (which asks HasProperty 'jack' in its Initialize, research/notes/headphone-jack.md "S4 jack9") is never made: no 'jack' call ever reaches the plug-in. Next: the condition between :311 and :195 (investigator).
+
 ### 2026-10-30 06:55 jack9 (boot sp16r, kernel112 CAMERA=1; SunfishAudio.driver b1a7d1c): the HAL never asks the plug-in for 'jack'
 - VirtualAudio RE (research/notes/headphone-jack.md "S4 jack8"): the Wired Headphones port and the jack handler exist only if the "Codec" device answers HasProperty({'jack','outp',0}) at the first check (once per process, __cxa_guard at va.s 0x241834); the listener is registered only for the scopes that passed.
 - b1a7d1c logs every 'jack' Has/Size/Get with the client pid. After a mediaserverd restart (pid 329) and `jackset 1/3/0`: 0 "jack call" lines, so neither the gate check nor a read after PropertiesChanged reaches our plug-in. The HAL does ask object 9 (Codec) other properties (jack8), so it knows the device.
