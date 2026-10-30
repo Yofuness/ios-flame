@@ -42,7 +42,7 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
 - **The plan:** `docs/plan.md` is the current plan, loaded into every session and agent, so keep it short (about
   6 KB): current state only, one line per item, details and history in the feature Logs. Keep it current as you
   work:
-  - Mark each step done or failed in the same commit as the work; move finished items to the "Done" line.
+  - Mark each step done or failed in the same commit as the work; move finished items to `docs/completed.md` (not auto-loaded; the user, 2026-10-30).
   - Add new findings or next steps as you find them.
 - **New plan:** move the old one to `docs/plans/YYYY-MM-DD-<topic>.md`. Put a short header on it saying
   what was done, what was not, and what replaced it, then write the new `plan.md`.

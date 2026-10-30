@@ -2,7 +2,7 @@
 
 Not loaded automatically: read it when waiting on a test or build, after finishing a priority item (to pick the
 next easy item), and when adding something newly broken. Priority items live in [plan.md](plan.md); details and
-history in the feature Logs.
+history in the feature Logs. Finished items move to [completed.md](completed.md).
 
 ## Broken (cheapest first; [phone] = needs the phone)
 - B42 Auto-brightness (parked 2026-10-30, sensors.md): lux reaches iOS, AAB ramps, but legacy mode writes only the slider value and new-arch mode needs a CADisplay brightness control we don't have. Option: our own lux -> brightness loop (night flag respected).
@@ -12,8 +12,6 @@ history in the feature Logs.
 - B38 Boot cmdline limit: CAMERA=1 plus 3 extra boot args = 606 bytes > 592; sunfish-boot.sh refuses (sp16 dropped sweetrtcoff by hand). Shorten the defaults or raise the limit (D6 in plan.md). 2026-10-30: flamereboot=0 (kernel default) dropped and the double space gone (-15 B: 575 with sweetse9=2 sweetcampmic=2), sunfish-boot.sh now fails fast with the length. Still 1 B short for a third arg like sweetampreset=1 (592); real fix = a kernel-side second arg string (e.g. from the ADT /chosen), later.
 - B37 Files has no "On My iPhone": cause = no plug-in data container (pkd "no sandbox data container"); after a boot + `lsreg -r` it has one and pkd/fileproviderd accept it (files7); user check U13.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
-- B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
-- B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.
 - B36 Touch silent while plugged in (was "Calculator froze the UI", kernel107 mo1, 2026-10-29 17:10 EDT): not a hang: kernel, GPU, backboardd kept running; no "SWEET HID: touch" from 150 s to 423 s, touch back right after the cable was replugged (research/notes/b36-calculator-freeze.md). Repro: plugged in (TB4, 240 W), idle 2-5 min, tap with a finger; check SWEET HID lines + the SE7 touch IRQ count. Needs the user (U14).
 - B35 Privacy & Security has no Location Services row: CoreTelephony getSubscriptionInfo fails without CommCenter; the SweetMetal2 hook doesn't load in Preferences. Cosmetic; needs Preferences injection or a CommCenter stub (apps.md).
 - B33 Home swipe: no injected bottom-edge swipe goes home (5 variants, b33); tests use `H` (home button hook: Calculator -> home confirmed, bt1) and `K` (lock); a real finger swipe works (U8, 2026-10-30): only the injected swipe fails.
@@ -26,9 +24,7 @@ history in the feature Logs.
 - B14 Charging drain under load = the USB source's budget; optional read-only TYPEC/APSD check (U4).
 - B15 Bluetooth: [MOSTLY DONE 2026-10-30] pairing + AirPods connect, 3 Mbaud (bluetooth.md); first bring-up fixed 2026-10-30 (bt12); open: AirPods audio (U11).
 - B16 Audio: see priority 1; then APR + CS35L41 for a beep (U5).
-- B17 Camera frames: [DONE 2026-10-31] both cameras stream into RAM (rear 60 fps, front 30 fps), camd + camera_device in SunfishAudio.driver; iOS lists both (camera.md).
 - B19 Respawn loops: lskdd, fairplayd.H2, wifip2pd dropped 2026-10-29; bluetoothd (10 s) kept until B15.
-- B20 Screen rotation: [DONE 2026-10-30] auto-rotate from the accelerometer.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B31 [MOSTLY FIXED 2026-10-30, a671ac2: reconnects, SIGSEGV handler] oslog segfaults (rc 139) mostly in the first minutes after boot (b31: old 6/8, new 4/8 back to back right after boot, then 0/6 a few minutes later); _exit fix didn't cure it, no crash report written. Workaround: rerun. Next: a 20-run loop right after boot with the kernel fault line.
@@ -44,10 +40,8 @@ history in the feature Logs.
 - O12 iOSPlus10 e23063c: slow USB/touch/key/BT polls while the display sleeps (their ~1270 timer wakeups/s with screen off).
 - O9 ios-redfin GPU line (survey 2026-10-30, research/notes/redfin-survey-2026-10-30.md), ranked: DEADFILL (plan item 0), bridge 0109+0110 COLOR_WRITES=fetch (1-2 h), 0111 scratch trim (1-2 h), TU_DEBUG=sysmem + Turnip 0108 retest (0.5 h), Turnip 0111 UBWC (1 h, A618 UBWC differs), bridge 0103-0108 rebase (4-8 h), 0130-0137 UniXNU ports (2-4 h), xnu 1041 CA threads on big cores (2-3 h), 1040 GPU IRQ fence waits (4-6 h, no fps gain), NILENC/PREWARM (2-3 h), rotfb4 landscape (2 h). Skip (no gain for them): ENCTHREAD 3, FP16, CONTRACT, COLOR_WRITES=plain, xnu 1035/1036/1037/1039/1042, triple buffering, gmem autotune.
 - O10 ios-redfin xnu 1034/1045 USB Ethernet fast path + replug recovery (not GPU; could help our USB link).
-- O8 [DONE 2026-10-30] Camera ISP speed: whole-frame renders in row bands, camisp 84.8 -> 10.6 ms binned, 372 -> 47 ms full (identical output; the live preview was already parallel).
 - O2 zero-copy scanout: works by hand (kernel103 `sctl kern.sweet_zc_scan=2`), no fps gain (zc5), auto mode (kernel104, sweetfb_zerocopy=2) garbled once in two boots; parked 2026-10-30 (smoothness.md).
 - O3 Reduce Transparency speed (with B10).
 - O7 ~21 fps limit = backboardd's GPU 25-30 ms per frame (blur passes) + CPU/GPU never overlap (research/notes/fps-limit.md): A76 bias (0147) and GPU clocks (565/650 MHz) were tried in Oct 23-24 with no gain; left: no-blur bench, 2 frames in flight (QuartzCore RE).
-- O4 [DONE 2026-10-29] lskdd respawn cost: dropped.
 - O5 display-off CPU fade when sweetpanelsleep is off.
 - O6 failed GPU hang recovery takes 3.9-12.8 s: fail faster.

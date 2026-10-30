@@ -6,7 +6,7 @@ feature changes state). Rules: [CLAUDE.md](../CLAUDE.md).
 | Where | What |
 |---|---|
 | [plan.md](plan.md) | the current plan: priorities, questions for the user, tasks at the phone, dev speed; old plans in [plans/](plans/) |
-| [backlog.md](backlog.md) | the Broken, Later and Optimize lists (read when idle or picking the next item) |
+| [backlog.md](backlog.md), [completed.md](completed.md) | the Broken, Later and Optimize lists (read when idle or picking the next item) |
 | [features/](features/) | one file per feature: facts and a dated, append-only Log (newest first); older entries in [archive/features/](archive/features/) |
 | [journal/](journal/) | one file per day of work |
 | [methods.md](methods.md) | tools and methods: boot, test loop, benches, logs, profiling, RE |
