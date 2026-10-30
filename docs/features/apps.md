@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:30 bl1: B47 not reproducible: the Control Center blur is there without any Turnip option
+- bl1a (kernel126, no TU_DEBUG knob, backboardd restarted, 25 s): CC shows the blurred wallpaper; Utilities folder panel translucent with blurred icons/dock. gm0's "flat blue, no blur" was probably the first CC open before the wallpaper/blur was ready (guess).
+- bl1b: per-process knob /var/local/mtl2-tu-debug.backboardd = sysmem (port fc0fef7; bridge log "MTL2[415 backboardd]: TU_DEBUG=sysmem" only for backboardd): identical look; fps (fpsbench 30 s home swipes) 20.3 -> 19.1 swaps/s, 19.4 -> 18.3 panel updates/s (-6%, one run each). Knob removed. B44 garbled CC tiles present in both.
+- B47 closed. The per-process knob stays (useful for one-process Turnip A/Bs).
+
 ### 2026-10-30 19:00 tx1 + round 4: texture-upload census; row pitch is not the cause; B44 parked
 - tx1 (kernel126, bridge a77f0f7 with /var/local/mtl2-b44log, backboardd restarted): 234 B44 lines (backboardd: linearTexture 121, texture 78, iosurface 9, replaceRegion 8, blitTexToTex 3, iosurfacePlanar 2, getBytes 1; SpringBoard: texture 7, replaceRegion 3, layoutUpload 2). Log: work/tx1-mtl2.log. Garbled areas as in gm0 (shots work/shots/tx1-*.png); sizes ~115x70 (CC glyph), ~90x70 (lock glyph), ~235x210 (VM icon), ~1030x680 (Tips banner).
 - "linearTexture" = Apple SPI newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage: (NativeBridgeMetalFrontend.mm:321), same route as buffer textures: alias (DRM_FORMAT_MOD_LINEAR with Metal's exact row pitch) or, when Turnip refuses the pitch, the B29 shadow (optimal image + vkCmdCopyBufferToImage, bufferRowLength = row/bpp).
