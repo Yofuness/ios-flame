@@ -5,6 +5,7 @@ Newest first. Details stay in the feature Logs (docs/features/<name>.md).
 
 ## From the plan (2026-10-28 .. 2026-10-30)
 
+- 2026-10-30 AUTOFOCUS: lens driver (LC898219 at 0x72, VAF sysctl xnu 0247), tap-to-focus and sharp photos in Camera.app (camera.md af2-af5).
 - 2026-10-30 CAMERA AUTO-EXPOSURE: both cameras settle at the right brightness (camera.md cam38-cam40).
 - 2026-10-30 FRONT CAMERA in Camera.app (camera.md cam37).
 - 2026-10-30 PHOTOS: Camera.app saves real HEIC photos from the rear camera (camera.md cam36).

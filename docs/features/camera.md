@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure works (cam40); open: autofocus (lens-motor driver), slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure (cam40) and tap-to-focus + sharp photos (af5) work; open: focus on open/after a switch, slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 22:30 af5: TAP-TO-FOCUS AND SHARP PHOTOS IN CAMERA.APP (kernel128)
+- Tap on the board: yellow AF box; F 704, 684, 715, 664, 719 (hunts, settles ~719); preview sharp. Shutter: IMG_0004.HEIC (1164081 B) in ~2 s, no stall; work/cam/af5-s.jpg: every board marking readable, colours right. Exposure and focus by the app itself.
+- Open: continuous AF sweeps F 420, 481, 542, 623, 643, 725 but the preview is soft 15 s later. After front -> rear: F 420, 405, soft, no search. Being tuned. DEVLOST 0, no FAULT.
 
 ### 2026-10-30 22:00 af3/af4: THE LENS FOCUSES under software control (kernel128)
 - af3 sweep looked flat: dark frames, and most FOCUS commands were lost (a FOCUS sent while the previous session was stopping is cleared at its end; only 3 reached camid). Rerun with sunfish-sharpness2.py (8x8 block mean of high bytes) and -e 6000 448.
