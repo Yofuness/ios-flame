@@ -92,3 +92,6 @@ Write `/var/local/wlan.conf` (mode 600) with your network name and password in t
 - Auto-Lock Never: Settings > Display & Brightness > Auto-Lock > Never (rows in [features/apps.md](features/apps.md),
   fake taps in [methods.md](methods.md) "Phone control file").
 - Location Services on: `echo "L 1" > /var/local/sweet-orient`.
+- Files "On My iPhone" (LocalStorage provider needs a plugin data container): `lsreg -i com.apple.FileProvider.LocalStorage`,
+  then `lsreg -c com.apple.FileProvider.LocalStorage /System/Library/Frameworks/FileProvider.framework/PlugIns/LocalStorageFileProvider.appex`,
+  then `launchctl kickstart -k system/com.apple.pluginkit.pkd` and `launchctl kickstart -k user/501/com.apple.FileProvider`.
