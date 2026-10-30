@@ -83,6 +83,8 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   is in flight.
 - **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
   choice made) to the "Questions for you" list in `docs/plan.md`, so they can answer later. Don't wait.
+- **Needs the user's hands at the phone** (feel, listen, look, plug in; the user, 2026-10-30): add it to
+  `docs/user-tasks.md` (not the plan's priority list), push-notify, and move straight on to the next item.
 - **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list (`docs/backlog.md`) and move on.
 - **Time limit:** if a priority item shows no visible progress in about half a day, write down where it stands in
   its feature Log, park it in `docs/backlog.md` and take the next item.
