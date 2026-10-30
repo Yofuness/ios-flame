@@ -1,0 +1,220 @@
+From 1c472ff90a9cce532eb1dfa4db7162635c6a5c83 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 09:19:13 -0400
+Subject: [PATCH] 0240 sunfish: Sandbox op 4 answers the container path from
+ the spawn attributes (app extensions), sweetsbcont=0 off
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/kern/sweet_amfi.c | 174 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 173 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index 8d4012f..f3140f9 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -26,6 +26,7 @@
+ #include <kern/clock.h>
+ #include <kern/debug.h>
+ #include <kern/kalloc.h>
++#include <kern/locks.h>
+ #include <IOKit/IOBSD.h>
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
+@@ -408,6 +409,174 @@ sweet_sbext_consume(struct proc *p, user_addr_t arg)
+ 	return 0;
+ }
+ 
++/*
++ * 0240: sandbox container path (op 4). PlugInKit's checkEnvironment asks
++ * sandbox_container_path_for_pid(self) and kills every app extension on
++ * failure. launchd/xpcproxy pass the container in the "Sandbox" spawn
++ * attributes (profile name at +0x10, container path at +0x50); remember it
++ * per pid at exec and answer op 4 from that table. Boot-arg sweetsbcont=0
++ * turns it off (op 4 -> ENOENT as before).
++ */
++#define SWEET_SBCONT_MAX        256
++#define SWEET_SBCONT_PROFILE    0x10
++#define SWEET_SBCONT_PATH       0x50
++static struct {
++	pid_t    pid;
++	uint64_t uniqueid;
++	char     path[MAXPATHLEN];
++} sweet_sbcont[SWEET_SBCONT_MAX];
++static unsigned int sweet_sbcont_next;
++static int sweet_sbcont_logged, sweet_sbcont_blobs_logged;
++static LCK_GRP_DECLARE(sweet_sbcont_grp, "sweet_sbcont");
++static LCK_MTX_DECLARE(sweet_sbcont_mtx, &sweet_sbcont_grp);
++
++static bool
++sweet_sbcont_enabled(void)
++{
++	static int enabled = -1;
++	if (enabled < 0) {
++		int v = 1;
++		(void)PE_parse_boot_argn("sweetsbcont", &v, sizeof(v));
++		enabled = v != 0;
++	}
++	return enabled;
++}
++
++/* bounded string length of blob[off..len); 0 if out of range */
++static size_t
++sweet_sbcont_strlen(const char *blob, size_t len, size_t off, size_t max)
++{
++	if (len <= off) {
++		return 0;
++	}
++	return strnlen(blob + off, MIN(len - off, max - 1));
++}
++
++/* exec hook: only records, never asks for a transition or fails the exec */
++static int
++sweet_sandbox_check_execve(kauth_cred_t old __unused, struct vnode *vp __unused,
++    off_t offset __unused, struct vnode *scriptvp __unused,
++    struct label *vnodelabel __unused, struct label *scriptvnodelabel __unused,
++    struct label *execlabel __unused, struct proc *p,
++    void *macpolicyattr, size_t macpolicyattrlen)
++{
++	if (macpolicyattr == NULL || macpolicyattrlen == 0 || !sweet_sbcont_enabled()) {
++		return 0;
++	}
++	const char *blob = macpolicyattr;
++	size_t plen = sweet_sbcont_strlen(blob, macpolicyattrlen, SWEET_SBCONT_PATH, MAXPATHLEN);
++	pid_t pid = proc_pid(p);
++	char name[32];
++	proc_name(pid, name, sizeof(name));
++	if (sweet_sbcont_blobs_logged < 16) {
++		sweet_sbcont_blobs_logged++;
++		printf("SWEET Sandbox: spawn blob pid %d (%s) len %zu profile %s container %s\n",
++		    pid, name, macpolicyattrlen,
++		    sweet_sbcont_strlen(blob, macpolicyattrlen, SWEET_SBCONT_PROFILE, 64) ? "yes" : "no",
++		    plen ? "yes" : "no");
++	}
++	if (plen == 0) {
++		return 0;
++	}
++	uint64_t uid = proc_uniqueid(p);
++	lck_mtx_lock(&sweet_sbcont_mtx);
++	unsigned int i;
++	for (i = 0; i < SWEET_SBCONT_MAX; i++) {
++		if (sweet_sbcont[i].pid == pid) {
++			break;
++		}
++	}
++	if (i == SWEET_SBCONT_MAX) {
++		i = sweet_sbcont_next++ % SWEET_SBCONT_MAX;       /* oldest overwritten */
++	}
++	sweet_sbcont[i].pid = pid;
++	sweet_sbcont[i].uniqueid = uid;
++	memcpy(sweet_sbcont[i].path, blob + SWEET_SBCONT_PATH, plen);
++	sweet_sbcont[i].path[plen] = '\0';
++	bool log = sweet_sbcont_logged < 64;
++	if (log) {
++		sweet_sbcont_logged++;
++	}
++	lck_mtx_unlock(&sweet_sbcont_mtx);
++	if (log) {
++		printf("SWEET Sandbox: container for pid %d (%s): %.200s\n", pid, name, blob + SWEET_SBCONT_PATH);
++	}
++	return 0;
++}
++
++static void
++sweet_sandbox_proc_exit(struct proc *p)
++{
++	pid_t pid = proc_pid(p);
++	lck_mtx_lock(&sweet_sbcont_mtx);
++	for (unsigned int i = 0; i < SWEET_SBCONT_MAX; i++) {
++		if (sweet_sbcont[i].pid == pid) {
++			sweet_sbcont[i].pid = 0;
++			sweet_sbcont[i].path[0] = '\0';
++		}
++	}
++	lck_mtx_unlock(&sweet_sbcont_mtx);
++}
++
++/* op 4: arg -> { pid (0 = self), 0, buf, len, 0 }; copies the path with its NUL */
++static int
++sweet_sbcont_path(struct proc *p, user_addr_t arg)
++{
++	struct {
++		uint64_t pid;
++		uint64_t unused1;
++		uint64_t buf;
++		uint64_t len;
++		uint64_t unused2;
++	} req;
++	char *path;
++	size_t plen = 0;
++	pid_t pid;
++	uint64_t uid;
++	int err = ENOENT;
++
++	if (!proc_is64bit(p) || arg == USER_ADDR_NULL) {
++		return EFAULT;
++	}
++	if (copyin(arg, &req, sizeof(req))) {
++		return EFAULT;
++	}
++	pid = (pid_t)req.pid;
++	if (pid == 0 || pid == proc_pid(p)) {
++		pid = proc_pid(p);
++		uid = proc_uniqueid(p);
++	} else {
++		proc_t t = proc_find(pid);
++		if (t == PROC_NULL) {
++			return ESRCH;
++		}
++		uid = proc_uniqueid(t);
++		proc_rele(t);
++	}
++	path = kalloc_data(MAXPATHLEN, Z_WAITOK);
++	if (path == NULL) {
++		return ENOMEM;
++	}
++	lck_mtx_lock(&sweet_sbcont_mtx);
++	for (unsigned int i = 0; i < SWEET_SBCONT_MAX; i++) {
++		if (sweet_sbcont[i].pid == pid && sweet_sbcont[i].uniqueid == uid) {
++			plen = strlcpy(path, sweet_sbcont[i].path, MAXPATHLEN) + 1;
++			err = 0;
++			break;
++		}
++	}
++	lck_mtx_unlock(&sweet_sbcont_mtx);
++	if (err == 0) {
++		if (plen > req.len) {
++			err = ERANGE;
++		} else if (copyout(path, (user_addr_t)req.buf, plen)) {
++			err = EFAULT;
++		}
++	}
++	kfree_data(path, MAXPATHLEN);
++	return err;
++}
++
+ static int
+ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+ {
+@@ -422,7 +591,8 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+ 		return sweet_sbext_enabled() ? sweet_sbext_issue(p, arg) : ENOENT;
+ 	case 6:         /* extension consume (0219) */
+ 		return sweet_sbext_enabled() ? sweet_sbext_consume(p, arg) : ENOENT;
+-	case 4:         /* container path (audit token / pid) */
++	case 4:         /* container path (pid); 0240 */
++		return sweet_sbcont_enabled() ? sweet_sbcont_path(p, arg) : ENOENT;
+ 	case 0x43:      /* container expected */
+ 		return ENOENT;
+ 	default:
+@@ -558,6 +728,8 @@ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
+ static const struct mac_policy_ops sweet_sandbox_mac_ops = {
+ 	.mpo_policy_syscall = sweet_sandbox_syscall,
+ 	.mpo_priv_grant = sweet_sandbox_priv_grant,
++	.mpo_cred_check_label_update_execve = sweet_sandbox_check_execve,      /* 0240 */
++	.mpo_proc_notify_exit = sweet_sandbox_proc_exit,                       /* 0240 */
+ };
+ 
+ static struct mac_policy_conf sweet_sandbox_mac_conf = {
+-- 
+2.56.0
+
