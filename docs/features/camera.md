@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:55 cam12 (kernel109, same boot): IFE wrote "a frame" but not to our buffer; RESET ~1 min later
+- `sunfish-cam-rx.sh --install --capture` (a47990d): slot1 0x9cb00000 + 0xB00000 zeroed in 0.126 s (2816 pages read back 0). camnoc 150 MHz then back to XO at cleanup. Stream ~1090 ms; **buf done at ~210 ms**; IFE VIOLATION 0, IRQ0 0x8000220, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0, WM0_STATUS0 0x9cb00000; CSID bytes 3810240/3810240. camrx exit 0.
+- **Frame region 0 of 3810240 nonzero, guard 0 nonzero**: the write did not land in the buffer.
+- SMMU: smmu_identity found SMR5 0x84400800 (SID 0x800 mask 0x440, valid) already matching 0x800 -> S2CR 3 -> CB3 (SCTLR 0xe0 bypass, CBAR 0x1f000) and wrote nothing (by design: never touches an existing SMR). GFSR 0 before/after, CB3 FSR 0x400 (no fault bits). But the IFE SIDs in our DT (live.dts:13150: 0x900, 0xd00, 0x880, 0xc80 mask 0x460; 0x820, 0xc20 mask 0x440; 0x920, 0xd20, 0x8a0, 0xca0, 0x940, 0xd40, 0x8c0, 0xcc0 mask 0x460) are NOT covered by SMR5's mask 0x440. So redfin's "0x800/0x5e0" assumption failed here: the stream went through some other SMR or the unmatched-stream path.
+- **RESET (hard)**: `sunfish-ssh true` was OK right after the capture; ~1 min later SSH timed out and the phone was in fastboot ("reboot bootloader"), 4438 mV; last boot-log lines are the camclk/camid execs. Rescued: cam12r (kernel109 sweetse9=2 sweetcampmic=2, 21:57). Guess (unverified): the IFE's 3.8 MB went to IOVA 0x9cb00000 through another context bank's translation (wrong RAM), or the hypervisor caught the camera SID's write.
+- Smaller next step: read-only SMMU dump (sCR0 USFCFG, every valid SMR/S2CR/CB, which SMR each DT IFE SID hits); then a dedicated SMR for the IFE SIDs into a FAULTING bank first (TCR EPD0/EPD1 = no walk: a write becomes a translation fault with FAR + SID in CBFRSYNRA, no data lands) to learn the exact SID, and only then a bypass bank for that SID.
+
 ### 2026-10-30 23:40 cam11 (kernel109, same boot): camid ABORT camnoc_axi (leftover camnoc RCG on PLL0)
 - `sunfish-cam-rx.sh --install --capture` (fbaddc1): camid stopped at "ABORT: camnoc_axi" after GDSC on and cpas_ahb 0x1. Cause: cam10's camrx set the camnoc RCG to 150 MHz (PLL0 even), then `camclk off` turned PLL0 off; RCG settings survive, so the camnoc_axi branch has no running source. No capture, no DMA, no reset.
 - Fix: camrx's cleanup puts the camnoc RCG back on XO while PLL0 still runs; sunfish-cam-rx.sh starts PLL2 + PLL0 before camid (PLLs need no GDSC, cam2).
