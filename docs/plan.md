@@ -7,12 +7,12 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md) and iOSPlus10 (MIT).
 1. **Speaker** (B16): PARKED 2026-10-30 after ~15 runs (all silent; amp, DSP, routing, memory proven); next: prove
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
-2. ▶ **Bluetooth follow-ups** (B15): pairing works (Xbox controller). Built, untested: btbridge watchdog + SIGTERM,
-   kernel108 = 107 + xnu 0231 (AirPods crash). Then 3 Mbaud / interrupt RX, faster boot firmware load. (bluetooth.md)
+2. **Bluetooth follow-ups** (B15): Xbox controller + AirPods pair and connect (auto RFR flow control), 3 Mbaud
+   (firmware 3.7 s). Open: btbridge first bring-up sometimes fails at boot; AirPods audio = U11. (bluetooth.md)
 3. ▶ **iOS sound path**: SunfishAudio.driver (null sink, from redfin) + VirtualAudio installed, mediaserverd stable (au1).
    Next: AirPods playback test (user, daytime); later feed /dev/sunfish-audio to the ADSP. (audio.md)
-4. ▶ **Sensors -> auto-rotate** (B12): samples flow (per-sensor ports); iOS rotates natively on fake events, but a
-   held real tilt only rotates on the way back (U10). Next: raw accel during a hold (logged now) -> axes/filter. (sensors.md)
+4. **Sensors -> auto-rotate** (B12): WORKS (adspboot --sns-rot writes R N; sweetmotion=0x37; the user confirmed).
+   Open: proximity/light, iOS-native motion services. (sensors.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
 6. ▶ **Camera** (B17): plan research/notes/camera-port.md (6 stages); a2 DONE (MCLK 24 MHz from camcc PLL2, IMX363 ID OK;
