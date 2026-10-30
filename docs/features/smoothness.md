@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:30 es1: CA_EMPTY_SHADERS=1 in backboardd's launchd env: no change, and the UI looked normal; smoothness PARKED
+- launchd.plist com.apple.backboardd EnvironmentVariables CA_EMPTY_SHADERS=1 (backup .pre-emptyshaders, restored after): 22.4 / 24.8 swaps/s vs restored baseline 22.1 / 22.1; GPU busy 20-49 %, bb GPU 1.0-2.1 s per 5 s. The home screen looked normal, so CA probably ignores the variable in this build: the bound is still unmeasured.
+- Today's ios-redfin line: DEADFILL +0.5, UI threads on the A76s +0.5, CA blur keys 0. GPU busy stays ~20-45 %: the limit is the serial CPU->GPU frame with one frame in flight (research/notes/fps-limit.md), not GPU throughput. A real fix (two frames in flight / CA pipelining) is days of QuartzCore RE: parked (backlog O7), after ~3 h today.
+
 ### 2026-10-30 09:45 hp5: CA blur defaults change nothing; the CA_EMPTY_SHADERS bound did not apply
 - kernel116, sunfish-m2env-bench.sh, H before each run: base 21.9 / 23.4 swaps/s; CADisableAutoSeparateBackdropLayers=1 21.5 / 21.8; CALinearBlurs=1 23.0; CALinearBlurs=0 24.6 / 23.6; final base 22.5 (all within the 21-25 noise; keys set in com.apple.coreanimation as mobile, removed after).
 - CA_EMPTY_SHADERS=1 via /var/local/mtl2-env: 24.0, but the home screen looked normal: mtl2-env is read by our Metal frontend, not put into backboardd's process environment, so the bound was never measured. Next: set it in backboardd's launchd job EnvironmentVariables for one boot (backup), or skip.
