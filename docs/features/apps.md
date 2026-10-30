@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:50 files3: pkd drops LocalStorage with a "negative cache hit"; parked
+- fp5 (oslog -l while Files + fileproviderd restart, work/files3/fp5-all.log, research/notes/files-on-my-iphone.md): fileproviderd asks PKHost for com.apple.fileprovider-nonui; pkd[184] "Will enumerate 8 candidate plugins", candidate 1 "negative cache hit", "Candidate plugin count from LaunchServices: 7", "Final plugin count: 7"; fileproviderd's "discovered extensions" list has the 7 others (Photos, CloudDocs x4, SMB, UserFS), NOT com.apple.FileProvider.LocalStorage; "found no value for key fpfs-providers / fpfs-disabled-providers / provider-filter"; "default provider remains com.apple.FileProvider.LocalStorage"; "returning 2 providers"; Files "Wanted to use com.apple.FileProvider.LocalStorage, but it isn't available". Side: "/dev/ufsroot1: non-apfs ... not eligible to store FP library".
+- pkd kill -9 (pid 184 -> 599), Files + fileproviderd restarted: LocalStorageFileProvider still never runs. No kernel AMFI/Sandbox lines for pkd. oslog -l stopped after ~7 s in both later captures (B31-like), so pkd's reason wasn't caught.
+- Parked. Next: a pkd capture that survives (oslog -n pkd started right after pkd's restart, or several short captures), grep "negative|reject|invalid|sign|entitle" + the bundle id; suspects: pkd's on-disk plug-in database / annotation, the appex's signature/entitlement check inside pkd, or the non-APFS data volume.
+
 ### 2026-10-30 02:35 files2: LaunchServices does know the LocalStorage extension; fileproviderd leaves it out
 - exq (installed to /var/local/bin/exq from phone/tools/out): com.apple.fileprovider-nonui has 8 records incl. com.apple.FileProvider.LocalStorage -> FileProvider.framework/PlugIns/LocalStorageFileProvider.appex (191 app / 517 extension records). `lsreg -p` on it -> 0 = success (files1's "-> 0" was success too, misread). lsd logs "_LSServerRegisterItemInfo begin", no refusal; AMFI trusted. So the 3-provider answer is fileproviderd's own filter; reading work/files1/fp-fileproviderd.log for the reason.
 - On-device: /var/local/bin/exq (phone tool).

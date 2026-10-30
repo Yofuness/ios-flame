@@ -5,6 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
+- B37 Files has no "On My iPhone": pkd negative-caches the LocalStorage FileProvider extension (8 candidates -> 7); reason not caught yet (oslog drops out); apps.md 2026-10-30 files1-files3.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
 - B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.
