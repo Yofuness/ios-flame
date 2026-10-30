@@ -25,7 +25,8 @@
  *                     codec clocks (0x30b-0x30d) around a second read; devote, exit. Never writes those blocks.
  *                     hj1: --swr-only N (1 gpio24, 2 va, 3 tx-macro, 4 rx-swr, 5 tx-swr), --swr-nohw (group 1, no vote);
  *                     every swr/vote line also goes to /var/local/swr-probe.log (fsync per line)
- *                     hj2: --swr-clk-first (clock votes before any read; reads only if all 3 ok), --swr-newlog
+ *                     hj2: --swr-clk-first (clock votes before any read), --swr-newlog
+ *                     hj3: + rx clocks 0x30e/0x30f; --swr-clk-first reads each group only if its own clocks are on
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -966,7 +967,13 @@ static int swr_only, swr_nohw;	/* hj1: --swr-only N (0 all, 1 gpio24 .. 5 tx-swr
 static int swr_fd = -1;
 static int swr_clk_first, swr_newlog;	/* hj2: --swr-clk-first (clock votes before any read), --swr-newlog */
 static unsigned swr_clk_ok;	/* bit i: swr_ids[i] voted, to un-vote */
-static const uint32_t swr_ids[3] = { 0x30b, 0x30c, 0x30d };
+#define SWR_NCLK 5
+/* hj3: + rx_core 0x30e, rx_npl 0x30f at 0x1588800 = 22.5792 MHz (live.dts rx_core_clk/rx_npl_clk, ~:23510-:23524) */
+static const uint32_t swr_ids[SWR_NCLK] = { 0x30b, 0x30c, 0x30d, 0x30e, 0x30f };
+static const uint32_t swr_hz[SWR_NCLK] = { 0x124f800, 0x124f800, 0x124f800, 0x1588800, 0x1588800 };
+/* hj3: clocks each group needs (bits of swr_ids): 1 none, 2 va_core, 3/5 tx_core+tx_npl, 4 rx_core+rx_npl */
+static const unsigned swr_need[6] = { 0, 0, 1u << 0, 3u << 1, 3u << 3, 3u << 1 };
+static int swr_gate;	/* hj3: swr_read skips a group whose clocks are not all in swr_clk_ok */
 
 static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16_t len)
 {
@@ -1045,6 +1052,25 @@ static uint32_t swr_rd(const char *what, uint64_t pa)
 static void swr_read(const char *when)
 {
 	swr_log("swr: --- reads (%s, group %d) ---\n", when, swr_only);
+	for (int g = 1; swr_gate && g <= 5; g++) {	/* hj3: per-group clock check */
+		unsigned miss = swr_need[g] & ~swr_clk_ok;
+		if ((swr_only && swr_only != g) || !miss)
+			continue;
+		swr_log("swr: group %d skipped: clock %#x not on\n", g, swr_ids[__builtin_ctz(miss)]);
+		if (swr_only)
+			return;
+	}
+	if (swr_gate && !swr_only) {	/* hj3: all groups: read only the clocked ones */
+		int keep = swr_only;
+		for (int g = 1; g <= 5; g++)
+			if (!(swr_need[g] & ~swr_clk_ok)) {
+				swr_gate = 0, swr_only = g;
+				swr_read(when);
+				swr_gate = 1;
+			}
+		swr_only = keep;
+		return;
+	}
 	if (!swr_only || swr_only == 1) {
 		swr_rd("lpi gpio24 cfg", LPI_PA + 0x1000u * 24);
 		swr_rd("lpi gpio24 in/out", LPI_PA + 0x1000u * 24 + 4);
@@ -1159,18 +1185,18 @@ static void afe_run(void)
 	case AFE_CLK_OFF: afe_clock(afe_clk_op, 0); break;
 	case AFE_SWR_CLK:	/* hj0: COUPLE_NO, root 0 as Linux audio-ref-clk */
 		swr_log("swr: stage clock %#x on request\n", swr_ids[swr_i]);	/* hj1 */
-		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 1);
+		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], swr_hz[swr_i], 1, 1);	/* hj3: DT rate */
 		break;
 	case AFE_SWR_UNCLK:
-		while (swr_i < 3 && !(swr_clk_ok & (1u << swr_i)))
+		while (swr_i < SWR_NCLK && !(swr_clk_ok & (1u << swr_i)))
 			swr_i++;
-		if (swr_i >= 3) {
+		if (swr_i >= SWR_NCLK) {
 			afe_step = AFE_DEVOTE;
 			afe_run();
 			break;
 		}
 		swr_log("swr: stage clock %#x off request\n", swr_ids[swr_i]);	/* hj1 */
-		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 0);
+		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], swr_hz[swr_i], 1, 0);
 		break;
 	default:
 		afe_op = 0;
@@ -1207,18 +1233,21 @@ static void afe_next(int ok, uint32_t status)
 	}
 	if (s == AFE_SWR_CLK || s == AFE_SWR_UNCLK) {	/* hj0 */
 		swr_log("swr: clock %#x %s: %s\n", swr_ids[swr_i], s == AFE_SWR_CLK ? "on" : "off", ok ? "ok" : "FAILED");
+		if (!ok)	/* hj3: why: APR status and the clock_set used (v1, id, hz, attr COUPLE_NO, root 0) */
+			swr_log("swr: clock %#x refused: APR status %#x (clock_set v1 id %#x hz %u attr 1 root 0 enable %d)\n",
+				swr_ids[swr_i], status, swr_ids[swr_i], swr_hz[swr_i], s == AFE_SWR_CLK);
 		if (s == AFE_SWR_CLK && ok)
 			swr_clk_ok |= 1u << swr_i;
-		if (++swr_i < 3) {
+		if (++swr_i < SWR_NCLK) {
 			afe_run();
 			return;
 		}
 		swr_i = 0;
 		if (s == AFE_SWR_CLK) {
-			if (!swr_clk_first || swr_clk_ok == 7)	/* hj2: reads only with all three clocks */
-				swr_read("hw vote + codec clocks");
-			else
-				swr_log("swr: clock vote failed: reads skipped (ok mask %#x)\n", swr_clk_ok);
+			swr_log("swr: clock ok mask %#x\n", swr_clk_ok);	/* hj3 */
+			swr_gate = swr_clk_first;	/* hj3: each group only with its own clocks */
+			swr_read("hw vote + codec clocks");
+			swr_gate = 0;
 			afe_step = AFE_SWR_UNCLK;
 		} else
 			afe_step = AFE_DEVOTE;
