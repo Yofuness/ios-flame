@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:30 Stage f symbol check (read-only, research/notes/camera-stage-f-symbols.md)
+- 49 of 53 symbols redfin's camera_device.c / inject_media.c need are in our dyld cache: 33/36 C exports (CMDerivedObjectCreate, CMBaseObjectGetDerivedStorage, FigCaptureDeviceGetClassID, FigCaptureStreamGetClassID, VT encoder calls, port types, 20 metadata keys in CMCaptureCore), 16/16 ObjC classes/methods (BWFigCaptureDeviceVendor +sharedCaptureDeviceVendor / -initWithDeviceCreateFunction:, BWNodeOutput emitSampleBuffer:, ...). Missing: 4 optional metadata keys (AWBCCT, ColorTemperature, FocusPosition, LensPosition), which camera_device.c treats as NULL. kFigCaptureSampleBufferAttachmentKey_MetadataDictionary unconfirmed (lookup timed out; stills need it: watch for "metadata disabled" in the f2 log).
+- Stream class vtable: -[BWFigCaptureStream start]/stop call slots +0x8/+0x10 of the class's third word = redfin's layout. Device class version/slots inferred from the same build (16.7.x). Risk of loading the camera code into mediaserverd: low.
+
 ### 2026-10-31 04:25 xnu 0233 + kernel110: the camera ring gets a write-combined pmem mapping
 - sweet_pmem.c pm_rw: reads/writes of 0x9cb00000..+0xB00000 go through one ml_io_map_unmappable(..., VM_WIMG_WCOMB) mapping with uiomove (wide loads) instead of 2 MB device windows + 32-bit loads; pm_io refuses that range. Both mappings are uncached, so IFE DMA needs no cache maintenance. kernel110 = kernel109 + 0233 (built 40 s). To test: camd copy_us (was ~276 ms) and client fps (was 4.0).
 
