@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:15 dm8: Compass heading steady at rest: no gaps, no fallback, steps at most 0.5 deg (port 9f65fe1)
+- kernel127, 4459 mV, SSH 17 s; magcal.txt kept; SNS_HEADING_TRACE=1 by hand in sensors-start.sh (gone at the next install). Compass in front ~113 s, phone still: 225 trace lines, heading 101.0..105.6 (slow wander), largest step 0.5 deg, 0 steps > 3 deg; "dm type 3" 0 of 11 status lines; "mag gaps >200ms 0 >1s 0 max 20 ms, gate rej r 0 dip 0". So at rest the mag stream has no gaps at all; the earlier type-3 lines were not shown to be caused by real gaps (not re-tested while moving).
+- Screenshot digits torn by flame-shot (~103 not readable). Next: the user's comparison away from electronics, and whether it jumps while being moved.
+
 ### 2026-10-30 16:45 dm7: sphere-fit calibration works (r 42 uT, residual 1.8); Compass 97 deg vs the user's Pixel 8 Pro 52 deg, still occasional jumps
 - kernel127, port 3528464 + 81d4e82 + e73eeac (4462 mV). sensors.log 66 KB/min (was ~0.5 MB/min). Fusion off until Compass opens ("dm on (devmotion+devmotion8)").
 - After the user's calibration turn: "cal fit r 42.0 res 1.78 n 300 bias -32.5,-43.4,-68.4", acc 1; magcal.txt "fit -32.542 -43.397 -68.388 41.976 1.781 1".
