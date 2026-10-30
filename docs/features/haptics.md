@@ -4,6 +4,16 @@
 ## How to use
 - Boot with `sweetse9=2`. `/var/local/bin/drvbuzz --gpio` (read-only), `--probe` (ID + register dump, no writes),
   `--buzz MS LEVEL` (MS 1..500, LEVEL 1..0x40 = at most half scale). SE9 is shared: not while cs35l41/camid run.
+- iOS haptics (step 3, not yet tested on the phone): boot with `HAPTICS=1` (ADT /product/haptics; composable with
+  `CAMERA=1`) and `sweetse9=2`; install SunfishAudio.driver (`tools/sunfish-install-audio.sh`) and
+  `python3 -I tools/flame-files.py put work/userland-linux/out/hapticd /var/local/bin/hapticd 755`; then by hand over
+  ssh: `/var/local/bin/hapticd > /var/local/hapticd.log 2>&1 &` (launchd job later). It makes the FIFO
+  /var/run/sunfish-haptic; the driver opens it within 1 s of the next Actuator write. Stop: `kill` it (gpio11 restored).
+  Lines: `hapticd: tap N: 18 ms level 0x.. (peak ..)`, `hapticd: vibration N: start level ..`, `hapticd: vibration|cut N:
+  .. ms level ..`, `hapticd: chip up` / `chip in reset (2 s idle)`; mediaserverd (camdev.log): `the actuator's FIFO ... open`.
+- Open: after the first HAPTICS=1 boot, the MobileGestalt cache must be moved aside once so iOS sees the haptics node
+  (as tools/sunfish-install-camera.sh step 5 does: systemgroup.com.apple.mobilegestaltcache/Library/Caches/
+  com.apple.MobileGestalt.plist, keep a copy); not scripted yet.
 
 ## Facts
 - TI DRV2624 LRA driver on SE9 I2C (qupv3_se9_i2c @0xa8c000) address 0x5a (../recon/live.dts:9641-9664); reset = TLMM gpio11
@@ -21,6 +31,13 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 haptics step 3 written (untested on the phone)
+- mkadt.py `--haptics` (/product/haptics closed-loop 1, supports-3rd-party-haptics 1: the two props of d22ap.json),
+  sunfish-boot.sh `HAPTICS=1`. SunfishAudio.driver: Actuator -> FIFO /var/run/sunfish-haptic (non-blocking, 512-byte
+  atomic writes, SIGPIPE off, reopen <= 1/s). hapticd (phone/wifi/hapticd.c): redwood_haptic.c's burst rules -> RTP
+  (tap 18 ms at 0x60*peak, vibration 0x40*peak following 20 ms, 1000 ms cap + 1000 ms rest), chip in reset after 2 s
+  idle. drvbuzz's chip code moved to phone/wifi/drv2624.c (same output and caps; RTP cap 0x40 there, 0x60 hard max).
 
 ### 2026-10-30 08:20 hp2: THE VIBRATION MOTOR BUZZES (kernel113 CAMERA=1 sweetse9=2 sweetcampmic=2; drvbuzz ab6f790)
 - `--gpio`: TLMM_N gpio11 cfg 0x00000001 io 0 (power-on default); TLMM_S slot 0 (not gpio11's tile).

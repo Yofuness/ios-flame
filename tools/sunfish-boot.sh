@@ -43,11 +43,15 @@ if [ ${#cmdline} -ge 592 ]; then
 fi
 echo "$cmdline" > "$P/$name.cmdline"
 # CAMERA=1: ADT with /arm-io/isp + /product/camera flash (mkadt.py --camera; Camera.app prerequisites,
-# camera.md); default the usual work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.
+# camera.md); HAPTICS=1: /product/haptics (mkadt.py --haptics; iOS's Actuator, haptics.md); both: one tree with
+# both. Default the usual work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.
 adt=${ADT:-$P/sunfish-hi.adt}
-if [ "${CAMERA:-0}" = 1 ]; then
-	adt=$P/sunfish-hi-camera.adt
-	python3 -I tools/mkadt.py "$adt" --highmem --camera 2>/dev/null
+adtflags= adtname=sunfish-hi
+[ "${CAMERA:-0}" = 1 ] && adtflags="$adtflags --camera" adtname=$adtname-camera
+[ "${HAPTICS:-0}" = 1 ] && adtflags="$adtflags --haptics" adtname=$adtname-haptics
+if [ -n "$adtflags" ]; then
+	adt=$P/$adtname.adt
+	python3 -I tools/mkadt.py "$adt" --highmem $adtflags 2>/dev/null
 fi
 python3 -I tools/mkpayload.py "$kernel" "$adt" "$P/$name.payload" --cmdline "$cmdline" --gpufw "${GPUFW:-$PWD/../restore/fw/gpu}" >/dev/null
 shim/build.sh "$P/$name.payload" "$P/$name.img" >/dev/null

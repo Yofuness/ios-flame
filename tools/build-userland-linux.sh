@@ -66,7 +66,7 @@ cp toybox "$OUT/" ) || echo "WARNING: toybox failed (see $W/build/toybox-$TOYBOX
 echo "== wland + phone tools"
 ( cd "$ROOT"
 sh phone/wifi/build.sh
-cp phone/wifi/out/wland phone/wifi/out/adspboot phone/wifi/out/aprtest phone/wifi/out/apr_tone phone/wifi/out/i2cprobe phone/wifi/out/camid phone/wifi/out/drvbuzz phone/wifi/out/btup phone/wifi/out/btbridge phone/wifi/out/bluetool-stub "$OUT/"
+cp phone/wifi/out/wland phone/wifi/out/adspboot phone/wifi/out/aprtest phone/wifi/out/apr_tone phone/wifi/out/i2cprobe phone/wifi/out/camid phone/wifi/out/drvbuzz phone/wifi/out/hapticd phone/wifi/out/btup phone/wifi/out/btbridge phone/wifi/out/bluetool-stub "$OUT/"
 bash phone/tools/build.sh || echo "WARNING: some phone tools failed"
 # camisp (camera stage e3, ios-redfin camera_isp.c); also builds work/cam/camisp-host
 sh phone/camera/build.sh && cp phone/camera/out/camisp phone/camera/out/camera_avtest "$OUT/" || echo "WARNING: camisp failed"

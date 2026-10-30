@@ -5,7 +5,7 @@ Only what the early boot path actually reads (see docs/archive/sweet/NOTES.md); 
 MMIO address comes from the flame (Pixel 4, SM8150) live FDT. The kernel's
 built-in drivers still match the Redmi names (xiaomi,sweet, qcom,kryo470,
 sweet,display), so those stay next to the flame ones.
-Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--camera]
+Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--camera] [--haptics]
 """
 import hashlib, os, struct, sys
 
@@ -91,9 +91,17 @@ def product_camera_node(ph):
     return node('camera', [ph(), ('flash', u32(1))])
 
 
-def build(seed=None, qemu=False, highmem=False, camera=False):
+# HAPTICS (haptics step 3; hakios-xnu xnuloader/identity.h:107-113, MIT; the real tree: research/re/d22ap.json
+# /product/haptics, these two props only): iOS plays its haptics on the "Actuator" audio device only with this node.
+# MobileGestalt caches its answers: move its cache aside once after changing it (as for the camera above).
+def product_haptics_node(ph):
+    return node('haptics', [ph(), ('closed-loop', u32(1)), ('supports-3rd-party-haptics', u32(1))])
+
+
+def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py).
-    camera=True: /arm-io/isp + /product/camera flash (Camera.app prerequisites, camera.md)."""
+    camera=True: /arm-io/isp + /product/camera flash (Camera.app prerequisites, camera.md).
+    haptics=True: /product/haptics (closed-loop, supports-3rd-party-haptics; haptics.md)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
@@ -268,7 +276,8 @@ def build(seed=None, qemu=False, highmem=False, camera=False):
     ])
 
     product_props = d22ap_product()
-    product = [node('product', [ph()] + product_props, [product_camera_node(ph)] if camera else [])] if product_props else []
+    product = [node('product', [ph()] + product_props, ([product_camera_node(ph)] if camera else []) +
+                    ([product_haptics_node(ph)] if haptics else []))] if product_props else []
 
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
@@ -286,7 +295,8 @@ def build(seed=None, qemu=False, highmem=False, camera=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, camera='--camera' in sys.argv)
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, camera='--camera' in sys.argv,
+                 haptics='--haptics' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

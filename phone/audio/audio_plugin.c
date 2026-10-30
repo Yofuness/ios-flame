@@ -3,7 +3,7 @@
  *
  * Sunfish (Pixel 4a) port of ios-redfin's RedwoodAudio.driver, which is HackiOS's
  * userland/src/audio_plugin.c (MIT, Copyright (c) 2026 OOSEX GANG, LICENSE.HackiOS).
- * Changed: names (Redwood -> Sunfish, /dev/sunfish-audio|-haptic|-mic, which do not exist yet:
+ * Changed: names (Redwood -> Sunfish, /dev/sunfish-audio|-mic, which do not exist yet:
  * the null sink below counts the frames as refused and I/O runs on), a fresh factory UUID, and
  * say() also goes to os_log and /var/local/camdev.log (mediaserverd's stderr goes nowhere here). Device UIDs unchanged.
  *
@@ -31,7 +31,7 @@
  *               only port is this input; without it everything stays on the null port.
  *   "Actuator"  one output of one channel: the iPhone's Taptic Engine, on which iOS plays its
  *               haptics as waveforms (through the chain 'd22_actuator_general'); its samples go to
- *               the kernel's motor driver, /dev/sunfish-haptic (see actuator_write())
+ *               the FIFO /var/run/sunfish-haptic, read by hapticd (see actuator_write())
  *   "Codec"     one input of one channel: on an iPhone, the audio codec that the built-in
  *               microphones are on, of which the virtual audio device makes the built-in microphone
  *               port; its samples come from the kernel, /dev/sunfish-mic (the phone's main
@@ -61,6 +61,7 @@
 #include <CoreFoundation/CFPlugInCOM.h>
 #include <CoreAudioTypes/CoreAudioTypes.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <math.h>
 #include <notify.h>
@@ -73,6 +74,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sunfish_audio.h"
@@ -1133,14 +1135,26 @@ begin_end_io_operation(__unused AudioServerPlugInDriverRef driver, __unused Audi
 
 /*
  * What iOS plays on the actuator -- the haptics: the system's feedbacks and the ringer's vibration,
- * CoreHaptics' patterns, UIKit's feedbacks, as waveforms of one channel -- goes to the kernel's motor
- * driver (/dev/sunfish-haptic, ios-redfin: bsd/dev/redwood_haptic.c; no sunfish driver yet), which plays Android's own
- * waveforms on the phone's motor by it. (iOS plays on this device at all only because the device
- * tree says the phone's haptics are "closed-loop": see mkidentity.py.) Said the first times, with
- * how loud.
+ * CoreHaptics' patterns, UIKit's feedbacks, as waveforms of one channel -- goes to the FIFO
+ * /var/run/sunfish-haptic, whose reader, hapticd (phone/wifi/hapticd.c), plays it on the DRV2624
+ * (ios-redfin did it in the kernel: bsd/dev/redwood_haptic.c). (iOS plays on this device at all only
+ * because the device tree says the phone's haptics are "closed-loop": mkadt.py --haptics.) Haptics
+ * step 3: never waits -- no reader (ENXIO), a full FIFO (EAGAIN) or a reader gone (EPIPE) drops the
+ * samples, and the open is tried again at most once a second. Off: no hapticd, no FIFO. Said the
+ * first times, with how loud, and when the FIFO opens or closes.
  */
-static int haptic = -1;          /* the motor driver; -2: not there (the kernel runs without haptic=5) */
+#define HAPTIC_FIFO "/var/run/sunfish-haptic"
+static int haptic = -1;          /* the FIFO, -1: not open */
+static uint64_t haptic_tried;    /* when the open was last tried (ns, CLOCK_UPTIME_RAW) */
 static unsigned haptic_said;
+
+static void
+haptic_close(const char *why)
+{
+	close(haptic);
+	haptic = -1;
+	say("sunfish: audio: the actuator's FIFO %s closed (%s)\n", HAPTIC_FIFO, why);
+}
 
 static void
 actuator_write(const int16_t *samples, UInt32 frames)
@@ -1152,17 +1166,33 @@ actuator_write(const int16_t *samples, UInt32 frames)
 
 		peak = v > peak ? v : peak;
 	}
-	if (haptic == -1) {
-		haptic = open("/dev/sunfish-haptic", O_WRONLY | O_NONBLOCK);
-		haptic = haptic >= 0 ? haptic : -2;
+	if (haptic < 0) {
+		uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+
+		if (haptic_tried == 0 || now - haptic_tried >= 1000000000ull) {
+			haptic_tried = now;
+			haptic = open(HAPTIC_FIFO, O_WRONLY | O_NONBLOCK);
+			if (haptic >= 0) {
+				(void)fcntl(haptic, F_SETNOSIGPIPE, 1);    /* a reader gone: EPIPE, not mediaserverd's death */
+				say("sunfish: audio: the actuator's FIFO %s open\n", HAPTIC_FIFO);
+			}
+		}
 	}
-	if (haptic >= 0) {
-		(void)write(haptic, samples, (size_t)frames * 2);
+	/* in pieces of PIPE_BUF: each goes in whole or not at all, so the reader never loses a sample's half */
+	for (size_t off = 0, len = (size_t)frames * 2; haptic >= 0 && off < len; off += PIPE_BUF) {
+		size_t n = len - off < PIPE_BUF ? len - off : PIPE_BUF;
+
+		if (write(haptic, (const char *)samples + off, n) < 0) {
+			if (errno == EPIPE || errno == ENXIO) {
+				haptic_close(errno == EPIPE ? "no reader" : "gone");
+			}
+			break;          /* EAGAIN (full): the rest dropped */
+		}
 	}
 	if (peak > 0 && haptic_said < 12) {
 		haptic_said++;
 		say("sunfish: audio: the actuator plays: %u frames, peak %d of 32768%s\n", (unsigned)frames, peak,
-		    haptic >= 0 ? "" : " (no /dev/sunfish-haptic: not felt)");
+		    haptic >= 0 ? "" : " (no hapticd on " HAPTIC_FIFO ": not felt)");
 	}
 }
 
