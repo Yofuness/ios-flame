@@ -111,7 +111,7 @@ static int rpc_on;
 #define PCM_BUF		(PCM_PERIODS * PCM_STRIDE)
 #define REC_READS	4		/* sp7: --rec READ_V2 buffers after the playback pages, one page each */
 #define REC_BYTES	0x1000
-static int pcm_on, rec_on, rec_hex;
+static int pcm_on, rec_on, rec_hex, rec_echo, lpi_slew;	/* sp15: rec_echo, lpi_slew */
 static uint32_t pcm_buf_len = PCM_BUF;	/* sp7: + REC_READS pages with --rec, same mapping */
 static uint32_t pcm_sid = 0x1b21, pcm_shift = 1;
 static uint64_t pcm_pa, pcm_dsp;
@@ -1473,6 +1473,17 @@ static int lpi_pins(int on)
 	return bad;
 }
 
+/* sp15: --lpi-slew: the LPI slew-rate registers stock bolero writes (live.dts:20771-20774); not restored */
+static void lpi_slew_set(void)
+{
+	static const struct { uint64_t pa; uint32_t v; } sl[2] = { { 0x62b6f000ull, 0x3333 }, { 0x62b6f004ull, 0x0f } };
+	for (int i = 0; i < 2; i++) {
+		uint32_t cur = rd32(sl[i].pa);
+		wr32(sl[i].pa, sl[i].v);
+		printf("lpi-slew: %#llx %#x -> %#x\n", (unsigned long long)sl[i].pa, cur, rd32(sl[i].pa));
+	}
+}
+
 static void lpi_restore(void)	/* atexit too: pins back even if the devote never runs */
 {
 	if (lpi_set)
@@ -1624,6 +1635,8 @@ static void afe_next(int ok, uint32_t status)
 		if (ok && s == AFE_START)
 			afe_started = 1;
 		afe_step = ok ? s + 1 : AFE_CLK_OFF;
+		if (ok && s == AFE_CFG && lpi_slew)	/* sp15: before the AFE start */
+			lpi_slew_set();
 		if (ok && s == AFE_START && !no_lpi && lpi_pins(1)) {	/* sp2b: pins only once the port runs */
 			printf("lpi: read-back mismatch: stopping the port\n");
 			afe_step = AFE_STOP;
@@ -1703,7 +1716,7 @@ static int rec_failed, rec_afe, rec_copp_open, rec_open, rec_running, rec_hexed;
 static uint32_t rec_copp, rec_lead, rec_reads, rec_errs;
 static uint64_t rec_t0;
 static uint64_t rec_win_ss[2], rec_ph_ss[3][2], rec_ph_n[3];	/* 100 ms window, per phase: baseline/tone/after */
-static uint32_t rec_win_n, rec_win_pk[2], rec_ph_pk[3][2];
+static uint32_t rec_win_n, rec_win_pk[2], rec_ph_pk[3][2], rec_win_z[2];	/* sp15: rec_win_z zeros per channel */
 static int pcm_step, pcm_mapped, pcm_copp_open, pcm_stream_open, pcm_running, pcm_failed;
 static uint32_t pcm_op, pcm_rsp, pcm_handle, pcm_copp, pcm_tone_at;
 static uint32_t pcm_sent, pcm_done, pcm_out, pcm_underflow, pcm_werr;
@@ -1733,7 +1746,8 @@ static uint64_t amp_stop_t;
 
 /* sp7: --rec ASP TX routing (vi-loopback.md step 2): VMON/IMON on, TX1 = VMON slot 0, TX2 = IMON slot 1, 16 bit,
  * TX1/2 enabled. on = 1 saves + writes + reads back, 0 restores (PWR_CTRL2 is left to cs_power_down: it zeroes it). */
-static const struct { const char *n; uint32_t reg, mask, val; } amp_txr[] = {
+/* sp15: --rec-echo puts TX1 = VPMON 0x28 (non-zero control) and TX2 = ASPRX1 0x08 (echo of SD0), cs35l41.h:645/650 */
+static struct { const char *n; uint32_t reg, mask, val; } amp_txr[] = {
 	{ "pwr_ctrl2", 0x2018, 0x3000, 0x3000 }, { "asp_tx1_src", 0x4c20, 0xffffffffu, 0x18 },
 	{ "asp_tx2_src", 0x4c24, 0xffffffffu, 0x19 }, { "sp_tx_wl", 0x4830, 0xffffffffu, 16 },
 	{ "sp_frame_tx_slot", 0x4810, 0xffffffffu, 0x0100 }, { "sp_enables", 0x4800, 0x3, 0x3 },
@@ -1759,6 +1773,12 @@ static void amp_tx(int on)
 		cs_read(&amp, amp_txr[k].reg, &back);
 		printf("amp: rec %s %s %#x: %#x -> %#x, read back %#x%s\n", on ? "set" : "restore", amp_txr[k].n,
 		       amp_txr[k].reg, cur, v, back, back == v ? "" : " MISMATCH");
+	}
+	if (on && rec_echo) {	/* sp15 */
+		uint32_t t1 = 0, t2 = 0;
+		cs_read(&amp, 0x4c20, &t1);
+		cs_read(&amp, 0x4c24, &t2);
+		printf("rec-echo: tx1src %#x tx2src %#x\n", t1, t2);
 	}
 	amp_tx_set = on;
 }
@@ -1954,6 +1974,7 @@ static void rec_back(unsigned b, const uint32_t *pl, uint32_t len)
 				for (int c = 0; c < 2; c++) {
 					int v = d[i + c], a = v < 0 ? -v : v;
 					rec_win_ss[c] += (uint64_t)(v * v);
+					rec_win_z[c] += !v;	/* sp15 */
 					rec_ph_ss[ph][c] += (uint64_t)(v * v);
 					if ((uint32_t)a > rec_win_pk[c])
 						rec_win_pk[c] = a;
@@ -1963,10 +1984,11 @@ static void rec_back(unsigned b, const uint32_t *pl, uint32_t len)
 			rec_win_n += n / 4;
 			rec_ph_n[ph] += n / 4;
 			if (rec_win_n >= 4800) {	/* 100 ms */
-				printf("rec t=%.1f ch0 rms %d peak %u ch1 rms %d peak %u\n", (now_ms() - rec_t0) / 1000.0,
-				       (int)sqrt((double)rec_win_ss[0] / rec_win_n), rec_win_pk[0],
-				       (int)sqrt((double)rec_win_ss[1] / rec_win_n), rec_win_pk[1]);
-				rec_win_n = rec_win_pk[0] = rec_win_pk[1] = 0;
+				printf("rec t=%.1f ch0 rms %d peak %u zero %u ch1 rms %d peak %u zero %u\n",
+				       (now_ms() - rec_t0) / 1000.0,
+				       (int)sqrt((double)rec_win_ss[0] / rec_win_n), rec_win_pk[0], rec_win_z[0],
+				       (int)sqrt((double)rec_win_ss[1] / rec_win_n), rec_win_pk[1], rec_win_z[1]);
+				rec_win_n = rec_win_pk[0] = rec_win_pk[1] = rec_win_z[0] = rec_win_z[1] = 0;
 				rec_win_ss[0] = rec_win_ss[1] = 0;
 			}
 		}
@@ -2857,6 +2879,10 @@ int main(int argc, char **argv)
 			amp_on = apr_on = afe_on = pcm_on = smmu = 1;
 		else if (!strcmp(argv[i], "--rec"))	/* sp7: VMON/IMON loopback over SEC_MI2S_TX; needs --pcm --amp */
 			rec_on = 1;
+		else if (!strcmp(argv[i], "--rec-echo"))	/* sp15: TX1 = VPMON, TX2 = ASPRX1 (amp echoes SD0 on SD1) */
+			rec_echo = 1;
+		else if (!strcmp(argv[i], "--lpi-slew"))	/* sp15: LPI slew-rate regs as stock bolero */
+			lpi_slew = 1;
 		else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
 			rec_hex = 1;
 		else if (!strcmp(argv[i], "--amp-pcm-stop-test"))	/* sp6: let the ADSP underflow with the amp on */
@@ -2937,6 +2963,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "adspboot: --rec needs --pcm --amp\n");
 		return 2;
 	}
+	if (rec_echo && !rec_on) {	/* sp15 */
+		fprintf(stderr, "adspboot: --rec-echo needs --rec\n");
+		return 2;
+	}
+	if (rec_echo) {	/* sp15: amp_txr[1] / [2] are ASP_TX1_SRC / ASP_TX2_SRC */
+		amp_txr[1].val = 0x28;
+		amp_txr[2].val = 0x08;
+	}
 	if (rec_on)
 		rec_lead = REC_LEAD_PERIODS;
 	if (amp_db > -20)
@@ -2997,7 +3031,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
