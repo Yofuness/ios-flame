@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dm_fusion.h"
+#include "sns.h"
 
 static int fails;
 
@@ -29,6 +30,7 @@ static float run(const float earth_dev[3], float yaw, struct dm_report2 *r)
 {
 	struct dm_fusion f;
 	const float bias[3] = { 12, -30, 5 }, acc[3] = { 0, 0, 9.81f }, g[3] = { 0, 0, 0 };
+	memset(&f, 0, sizeof(f));
 	dm_init(&f, 0.04f);
 	f.have_cal = 1;		/* as if loaded from magcal.txt: a 90 uT box around the bias */
 	for (int i = 0; i < 3; i++)
@@ -61,12 +63,50 @@ int main(void)
 	check("report heading accuracy", r.heading_acc, 10, 0);
 	/* no calibration: accuracy 0xff */
 	struct dm_fusion f;
+	memset(&f, 0, sizeof(f));
 	dm_init(&f, 0.04f);
 	dm_mag(&f, north);
 	dm_mag(&f, north);
 	dm_report2(&f, 1, 0, &r);
 	printf("%s uncalibrated accuracy 0x%x\n", r.mag_accuracy == 0xff ? "ok  " : "FAIL", r.mag_accuracy);
 	fails += r.mag_accuracy != 0xff;
+	/* dm5: a hand-built sns_cal_event (msg 1026): 1 packed bias {-7, 25, 18} uT, 2 comp_matrix (unpacked, 1 value),
+	 * 3 status 3 (high), 4 cal_id 9. No box: the SEE bias alone must give the heading and accuracy 2. */
+	static const uint8_t ev[] = { 0x0a, 12, 0, 0, 0xe0, 0xc0, 0, 0, 0xc8, 0x41, 0, 0, 0x90, 0x41,
+		0x15, 0, 0, 0x80, 0x3f, 0x18, 3, 0x20, 9 };
+	float cb[3];
+	int st, nb = sns_parse_cal_event(ev, sizeof(ev), cb, &st);
+	printf("%s cal event: %d bias %.1f,%.1f,%.1f status %d\n", nb == 3 && st == 3 && cb[0] == -7 && cb[1] == 25 &&
+	    cb[2] == 18 ? "ok  " : "FAIL", nb, cb[0], cb[1], cb[2], st);
+	fails += !(nb == 3 && st == 3 && cb[0] == -7 && cb[1] == 25 && cb[2] == 18);
+	sns_print_fields("     raw", 1026, ev, sizeof(ev));
+	const float acc[3] = { 0, 0, 9.81f }, g0[3] = { 0, 0, 0 };
+	memset(&f, 0, sizeof(f));
+	dm_init(&f, 0.04f);
+	dm_mag_cal_bias(&f, cb, st);
+	dm_accel(&f, acc);
+	const float m[3] = { -20 + cb[0], 0 + cb[1], -40 + cb[2] };	/* top east + the SEE bias */
+	for (int i = 0; i < 500; i++) {
+		dm_mag(&f, m);
+		dm_gyro(&f, g0, 1000000ull + i * 192000ull, 19200000.0);
+	}
+	dm_report2(&f, 1, 0, &r);
+	check("SEE mag_cal, top east: heading", heading(&r), 90, 1);
+	printf("%s SEE mag_cal accuracy %d dsp %d\n", r.mag_accuracy == 2 && dm_mag_cal_dsp(&f) ? "ok  " : "FAIL",
+	    r.mag_accuracy, dm_mag_cal_dsp(&f));
+	fails += !(r.mag_accuracy == 2 && dm_mag_cal_dsp(&f));
+	/* status 0: back to the box (here none: uncalibrated); gyro_cal bias is subtracted from rotRate */
+	dm_mag_cal_bias(&f, cb, 0);
+	const float gb[3] = { 0.01f, -0.02f, 0.03f };
+	dm_gyro_cal_bias(&f, gb, 2);
+	dm_gyro(&f, gb, 0, 19200000.0);
+	dm_report2(&f, 1, 0, &r);
+	float rr[3];
+	memcpy(rr, r.rot_rate, sizeof(rr));
+	int ok = r.mag_accuracy == 0xff && fabsf(rr[0]) + fabsf(rr[1]) + fabsf(rr[2]) < 1e-6f;
+	printf("%s SEE status 0 -> accuracy 0x%x, gyro_cal rotRate %.4f,%.4f,%.4f\n", ok ? "ok  " : "FAIL",
+	    r.mag_accuracy, rr[0], rr[1], rr[2]);
+	fails += !ok;
 	printf("%s\n", fails ? "dm: FAILED" : "dm: all ok");
 	return !!fails;
 }

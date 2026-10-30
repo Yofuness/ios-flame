@@ -2,6 +2,7 @@
  * From ios-redfin (DenialOfGravity, https://github.com/DenialOfGravity/ios-redfin) phone/sensors/sns.c,
  * Copyright (c) 2026 dipa-studio, MIT License (see LICENSE.redfin). Sunfish changes are marked "sunfish".
  */
+#include <stdio.h>
 #include <string.h>
 #include "pb.h"
 #include "sns.h"
@@ -360,6 +361,50 @@ int sns_parse_sensor_event(const uint8_t *p, size_t n, float *data, int max, int
 			*status = (int)f.v;
 	}
 	return rc < 0 ? -1 : count;
+}
+
+/* sunfish B46 dm5: see sns.h */
+int sns_parse_cal_event(const uint8_t *p, size_t n, float bias[3], int *status)
+{
+	struct pb_rd r;
+	struct pb_field f;
+	int rc, count = 0;
+
+	*status = 0;
+	pb_rd_init(&r, p, n);
+	while ((rc = pb_next(&r, &f)) == 1) {
+		if (f.num == 1 && (f.wt == PB_FIXED32 || f.wt == PB_LEN))
+			count = pb_floats(&f, bias, count, 3);	/* packed or not */
+		else if (f.num == 3 && f.wt == PB_VARINT)
+			*status = (int)f.v;
+	}
+	return rc < 0 ? -1 : count;
+}
+
+void sns_print_fields(const char *tag, uint32_t msg_id, const uint8_t *p, size_t n)
+{
+	struct pb_rd r;
+	struct pb_field f;
+	int rc;
+
+	printf("%s msg %u, %zu bytes:", tag, msg_id, n);
+	pb_rd_init(&r, p, n);
+	while ((rc = pb_next(&r, &f)) == 1) {
+		printf(" [%u/%u", f.num, f.wt);
+		if (f.wt == PB_VARINT || f.wt == PB_FIXED64)
+			printf(" %llu", (unsigned long long)f.v);
+		else if (f.wt == PB_FIXED32)
+			printf(" %g", pb_f32(&f));
+		else if (f.wt == PB_LEN) {
+			float v[16];
+			int k = pb_floats(&f, v, 0, 16);
+			printf(" len %zu:", f.len);
+			for (int i = 0; i < k; i++)
+				printf(" %g", v[i]);
+		}
+		printf("]");
+	}
+	printf("%s\n", rc < 0 ? " (malformed)" : "");
 }
 
 int sns_parse_prox_event(const uint8_t *p, size_t n, int *near, uint32_t *raw, int *status)
