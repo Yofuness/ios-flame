@@ -38,7 +38,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U12 Camera app (when you're up): ready now (kernel111, camera on, camd idle, preview textures installed): open Camera (Utilities folder), say what you see (preview? colours?), switch to the front camera, take one photo each, check Photos. Keep Live Photo off. ~3 min. If backboardd misbehaves: Claude runs `tools/sunfish-metal2-install.sh --undo`.
 - U13 Files app: open Files > Browse: is "On My iPhone" listed now? (B37 fix, 2026-10-30.) ~1 min.
 - U14 Touch while plugged in (B36): on the charger, leave the phone idle 3 min, then tap a few times: does it react? Also: in yesterday's Calculator freeze, were you touching the screen? ~4 min.
-- U15 Headphone jack: when Claude has S3 ready, plug wired headphones in and out a few times on request. ~2 min.
+- U15 Headphone jack: READY (jack6 passed): Claude starts a 60-s detect run; plug wired headphones in at ~15 s, out at ~35 s. ~2 min.
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).

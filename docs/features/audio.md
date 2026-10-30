@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:15 jack6 (adspboot b7cca2a --swr-mbhc 20, no headphones): MBHC init clean, no plug event, no reset
+- Efuse 0x34CD 0x03, 0x34C0 0x04, 0x34C1 0x0b (-> SLEEP_CTL bits[3:1] from efuse29 & 0x0E, Linux wcd937x_io_init; an earlier <<1 was fixed before the run). Codec writes over the SoundWire FIFO, all read back: 0x3103 0x16->0x12->0x92->0xd2; 0x312a 0x10->0x00; 0x3029 0x55->0x85; 0x3001 0x00->0x80->0xc0->0x80; 0x31b1 0x00->0x08 (2 uA pull-up); 0x3014 0x39->0xff; 0x3122 0xe9->0xe6; 0x3120 0x02->0x82; 0x3015 0x08->0x09.
+- Poll 20 s: 0x346E (INTR_STATUS_0) 0 throughout; 0x3019 (RESULT_3) 0 -> 0x10 right after init (bit 4 SWCH_LEVEL_REMOVE: "removed" level, fits no plug), 0x3125 0; no PLUG line. Teardown restored all 9 registers (read back). 4438-4440 mV; restored sensors/camd/btbridge.
+- Ready for U15 (Claude runs `adspboot boot --swr-probe --swr-newlog --swr-mbhc 60` with sensors.off; the user plugs headphones in at ~15 s, out at ~35 s; if 0x346E never latches, repeat with --swr-mbhc-unmask; 0x3019 bit 4 may already show the level).
+
 ### 2026-10-30 05:55 jack5 (adspboot 2c36d58 --swr-init a-d): THE HEADPHONE CODEC ANSWERS over SoundWire (S2 done), no reset
 - Each stage a fresh kernel112 CAMERA=1 boot, sensors.off, 4437-4438 mV; all writes read back as written; every stage torn down (pins/gpio24/macro restored, clocks 0x30c-0x30f off).
 - a: tx-macro MCLK +0x00 0->1, FS_CNT +0x04 0->1, SWR control +0x08 0->2->3->1; SoundWire pins gpio18/19/20 0x401 -> 0xca/0xce/0xca; master +0x14 = 0, COMP_PARAMS +0x100 = 0x036840c1, version 0x01050000.
