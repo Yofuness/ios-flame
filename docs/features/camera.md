@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 01:20 cam17 (kernel109): bypass for SID 0x8c0 + 0xcc0 (mask 0x400) -> RESET at stream start
+- `CAPMODE="--bypass --sid 0x8c0 --sid-mask 0x400"` (e4445e1): SMR15 0x840008c0 -> CB16 (bypass); trap CB17: 0x900/0x460, 0x820/0x440, 0x880, 0xc80, 0x8a0, 0xca0. The script hung at "sensor stream" (camid --stream); the per-boot log (20261029-221640.log) ends at 1121.2 s with ordinary IOKit lines, no panic. Phone in fastboot, 4439 mV; rescued cam17r (22:38). No frame. Note: the banks chosen were CB16/17, not CB14/15: cam16's S2CR restore wrote 0x000200ff but read back 0x0000000f (restore of S2CR doesn't stick; harmless with the SMRs invalid, but banks 14/15 then look used).
+- cam16's frame (numbers only): zero blocks at 1 KB granularity exactly alternate (3720 blocks, 1860 zero, pattern 1010...; 2 KB blocks: 0 zero): **the WM interleaves by address bit 10 across SID 0x8c0 (even KB) and 0xcc0 (odd KB)**, so 0xcc0 is needed for a full frame.
+- So letting 0xcc0 through resets the phone, 0x8c0 alone doesn't. Cause unknown (0xcc0 writes elsewhere too? something about that port?). Next: sample every 0xcc0 trap FAR during a cam16-style run (safe), then `--xlate`: both SIDs through a stage-1 bank that maps only 0x9ca00000..0x9d600000 (everything else faults).
+
 ### 2026-10-31 01:00 cam16 (kernel109, cam15r boot): FIRST FRAME CAPTURED AND SAVED, no reset (3ed415d)
 - `CAPMODE="--bypass --sid 0x8c0" sunfish-cam-rx.sh --capture`: 8 SMRs (SMR15 0x8c0 -> CB14 bypass; SMR16-22 0x900/0x460, 0x820/0x440, 0x880, 0xc80, 0x8a0, 0xca0, 0xcc0 -> CB15 trap). buf done ~200 ms; CB14 FSR 0x400 clean, sGFSR 0; IFE VIOLATION 0, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0; CSID 3810240/3810240.
 - **Trap bank during the capture: FSR 0x402 (TF), FAR 0x9cb00400, write, SID 0xcc0**: the IFE-lite WM also writes through SID 0xcc0 (= 0x8c0 | 0x400), apparently alternating bursts (first fault at +0x400). Frame region 1889395 of 3810240 nonzero (49.6% of sampled bytes): consistent with every 0xcc0 burst being dropped (guess). Next: one bypass SMR 0x8c0 mask 0x400 (covers both; no overlap with SMR5 0x800/0x440).
