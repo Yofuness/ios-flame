@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:05 hp1: after autobright 0/1 the ramps are real, but no step reaches the kernel
+- `autobright 0` then `1` (BrightnessSystemClient DisplayBrightnessAuto): backboardd "begin ramping L: 105.56 -> L: 399.41 Brightness: 0.718309 -> 0.959318 t: 2.710891 rate: 108.40 nits/s 60.62hz" at 20000 lux, "begin ramping L: 399.41 -> L: 2.00 ... t: 57.559097" at 1 lux; "begin virtual ramp" 0. So the runtime auto flag needed the re-toggle (now part of the recipe).
+- Kernel: no SWEET BL setProperties/nits and no SWEET FB IOMFBBrightnessLevel line during either ramp (only the periodic "IOMFBBrightnessLevel = 6917855" = 105.56 nits every ~73 s). Webcam: no visible change. Next: where the per-step writes go (investigator).
+
 ### 2026-10-30 07:55 Auto-brightness on kernel113: CoreBrightness ramps, but only "virtually" (als1/als2)
 - als1 (kernel113 CAMERA=1 sweetse9=2 sweetcampmic=2, 4456 mV): backboardd "Begin ramp ... Lmax=500.000000 Lmin=2.000000" (0237's range is seen); boot brightness now 105 nits ("SWEET BL: nits 105 (raw 698edf)", slider 0x5f58). ("nits range 2..500 published" is not in the live log: printed before the log link was up.)
 - als2 (`m fake als 20000 5000` for 60 s, then 1 lux 60 s): "_Esensor_trusted: 20000.00 L: 399.4088", "L_newtarget=399.408783 _L_current=392.568665", but no SWEET BL write and no visible change; 1 lux -> L 2.0.

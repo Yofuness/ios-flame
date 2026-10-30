@@ -48,6 +48,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:05 phone/tools/shot (iOSPlus10 negroni-shot port, 52ad05b): wrong image
+- hp1: `tools/sunfish-shot.sh hp1` -> "1125x2436" (the fallback size: CADisplay mainDisplay bounds not read) and a PNG with a blue gradient block (~710x368) on white, not the lock screen. D7 stays open; webcam meanwhile.
+
 ### 2026-10-30 07:30 U13 by Claude (fake taps + webcam, boot sp16r): Files still has no "On My iPhone"
 - Browse > Locations lists only "Recently Deleted" (plus Tags); no On My iPhone, no iCloud Drive. `lsreg -i com.apple.FileProvider.LocalStorage`: dataContainerURL .../PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 (the link survived the reboot).
 - oslog -l across a Files relaunch: Files[558] "Wanted to use com.apple.FileProvider.LocalStorage, but it isn't available" (and the same for CloudDocs); pkd "Candidate plugin count from LaunchServices: 1".
