@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:20 jack10b: VirtualAudio accepts only "Null_Device" and "Actuator" (read-only RE); iOS side of the jack PARKED
+- research/notes/headphone-jack.md "S4 jack10": the device listener (handler va.s 0xaa124) keeps a UID only if it is in a static set built at 0x470460: mode 2 = accept-only, set {"Null_Device", "Actuator"} (mode 3 would mean exclude). The factory 0x21ebc8 (the only maker of Device_Codec_Aspen) is reached only from there, so no plug-in answer can get "Codec" created; it is the UID alone.
+- Options: (a) a patched copy of /Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin (mov w9,#2 -> #3 at 0x47046c, re-signed like our driver): Speaker/Hawking/Codec would then become VirtualAudio devices and Actuator/Null_Device drop out, side effects unknown (mediaserverd crash risk; revert = restore the file + restart mediaserverd); (b) report the jack some other way (a HID headset event or our own route), later.
+- Parked: without sound through the codec (speaker/ADSP path silent, B16) a "Wired Headphones" route has no use yet. The plug-in keeps the jack code behind /var/local/sunfish-jack-enable; S3 (MBHC plug detect with real headphones, U15) is still the next hardware step.
+
 ### 2026-10-30 07:05 jack10: VirtualAudio lists "Codec" but never creates its device (info-level oslog of a mediaserverd restart)
 - `oslog -l -t 40 -n mediaserverd` (the tool's default is 10 s: the earlier short captures came from that). DeviceListener_Aspen.cpp:311 lists AudioObjectID 35 "ap:ha:nd:of:fd:ev-screen", 51 "Speaker", 57 "Hawking", 60 "Actuator", 64 "Codec", 71 "Null_Device"; but :195 "Newly connected device located" only for Actuator and Null_Device, and DeviceManager.cpp:227 "Creating Device ID" only for those two (VirtualAudio then takes hog mode on them).
 - So Device_Codec_Aspen (which asks HasProperty 'jack' in its Initialize, research/notes/headphone-jack.md "S4 jack9") is never made: no 'jack' call ever reaches the plug-in. Next: the condition between :311 and :195 (investigator).
