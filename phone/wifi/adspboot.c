@@ -25,6 +25,7 @@
  *                     codec clocks (0x30b-0x30d) around a second read; devote, exit. Never writes those blocks.
  *                     hj1: --swr-only N (1 gpio24, 2 va, 3 tx-macro, 4 rx-swr, 5 tx-swr), --swr-nohw (group 1, no vote);
  *                     every swr/vote line also goes to /var/local/swr-probe.log (fsync per line)
+ *                     hj2: --swr-clk-first (clock votes before any read; reads only if all 3 ok), --swr-newlog
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -963,6 +964,7 @@ static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response w
 static int swr_on, swr_clk, swr_i;
 static int swr_only, swr_nohw;	/* hj1: --swr-only N (0 all, 1 gpio24 .. 5 tx-swr), --swr-nohw (group 1, no vote) */
 static int swr_fd = -1;
+static int swr_clk_first, swr_newlog;	/* hj2: --swr-clk-first (clock votes before any read), --swr-newlog */
 static unsigned swr_clk_ok;	/* bit i: swr_ids[i] voted, to un-vote */
 static const uint32_t swr_ids[3] = { 0x30b, 0x30c, 0x30d };
 
@@ -1188,7 +1190,9 @@ static void afe_next(int ok, uint32_t status)
 		       hw_handle, ok ? "" : "; going on without it");	/* sp2b: no abort */
 		if (swr_on) {	/* hj0: no reads without the vote (unclocked bus) */
 			swr_log("swr: hw vote reply %s, handle %d (status %x)\n", ok ? "ok" : "FAILED", hw_handle, status);	/* hj1 */
-			if (ok)
+			if (ok && swr_clk_first)	/* hj2: va-macro read right after the vote resets (unclocked) */
+				swr_log("swr: --swr-clk-first: clock votes before any read\n");
+			else if (ok)
 				swr_read("hw vote only");
 			else
 				swr_log("swr: no hw vote: reads skipped\n");
@@ -1211,7 +1215,10 @@ static void afe_next(int ok, uint32_t status)
 		}
 		swr_i = 0;
 		if (s == AFE_SWR_CLK) {
-			swr_read("hw vote + codec clocks");
+			if (!swr_clk_first || swr_clk_ok == 7)	/* hj2: reads only with all three clocks */
+				swr_read("hw vote + codec clocks");
+			else
+				swr_log("swr: clock vote failed: reads skipped (ok mask %#x)\n", swr_clk_ok);
 			afe_step = AFE_SWR_UNCLK;
 		} else
 			afe_step = AFE_DEVOTE;
@@ -2447,6 +2454,10 @@ int main(int argc, char **argv)
 			swr_clk = 1;
 		else if (!strcmp(argv[i], "--swr-only") && i + 1 < argc)	/* hj1: one read group per run (1-5) */
 			swr_only = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--swr-clk-first"))	/* hj2: clocks before the first read; implies --swr-clk */
+			swr_clk = swr_clk_first = 1;
+		else if (!strcmp(argv[i], "--swr-newlog"))	/* hj2: truncate /var/local/swr-probe.log at start */
+			swr_newlog = 1;
 		else if (!strcmp(argv[i], "--swr-nohw"))	/* hj1: skip the hw vote; group 1 only */
 			swr_nohw = 1;
 		else if (!strcmp(argv[i], "--no-lpi"))	/* sp2: no LPASS hw vote, no LPI pin mux */
@@ -2568,6 +2579,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "adspboot: --swr-only takes 0-5; --swr-nohw needs --swr-only 1 and no --swr-clk\n");
 		return 2;
 	}
+	if (swr_on && swr_newlog) {	/* hj2: fresh log without an external rm; fsync file + dir, settle 200 ms */
+		swr_fd = open("/var/local/swr-probe.log", O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, 0644);
+		if (swr_fd >= 0)
+			fsync(swr_fd);
+		int dfd = open("/var/local", O_RDONLY);
+		if (dfd >= 0) {
+			fsync(dfd);
+			close(dfd);
+		}
+		sync();
+		usleep(200000);
+		swr_log("swr: --swr-newlog: log truncated\n");
+	}
 	if (rpc_on && !unsafe && strcmp(cmd, "smmu")) {
 		/* rpc2 (buffer at 0xe0f80000, identity) and rpc3 (pm_alloc buffer at 32-bit IOVA 0x80000000) both reset
 		 * the SoC right after the attach: the DSP reaching any HLOS buffer is fatal until the memory is shared
@@ -2586,7 +2610,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk] [--swr-only N] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
