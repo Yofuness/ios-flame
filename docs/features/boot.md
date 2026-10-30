@@ -31,6 +31,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:30 bk1: kernel125 has 23 boot-args built in (xnu 0244, D6/B38)
+- Cause of the limit (investigator): tools/mkpayload.py packs the args into boot_args.CommandLine[608] (BOOT_LINE_LENGTH, pexpert/arm64/boot.h:26) and keeps the ramlog VAs in its last 16 bytes, so 591 usable; nothing from ABL or the boot image.
+- Fix: xnu 0244: PE_parse_boot_argn / PE_parse_boot_arg_str fall back to a compiled-in `sweet_default_bootargs` when a key is missing from the real line (real line wins; `sweetnodefaults=1` turns the fallback off; kern.bootargs unchanged). Baked: sweetfb_noconsole, sweetfb_hz, ufslogsecs, sweetuiwdt, flametouch, sweettouch, sweetkeys, sweetusb, sweetgpu, sweetgpufreq, sweetfb_thread, sweetmtl, sweetddr, sweetgpurecover, sweetgpukill, sweetbattery, sweetwifiev, sweetpanelsleep, sweetpresentwait, sweetbl, sweettorch, btbridge, sweetmotion=0x3f (325 bytes). tools/sunfish-boot.sh drops them for kernel >= 125 (its $baked list and the 0244 string must be kept the same by hand).
+- bk1 (kernel125, everyday recipe + sweetmotion=0xbf): kernel log "boot-args 266 bytes" (kernel124: ~574); SSH 17 s; touch (SWEET TOUCH/STFTS at 65 s), /dev/btbridge + btwake, motion services, home screen (work/shots/bk1-home.png) all as on kernel124. bk1b: recipe + 3 more args (sweetnodefaults=0 sweetuibig=1 sweetdark=1) boots, SSH 17 s (length not read).
+- kernel125 = kernel123 + 0243 (DeviceMotion service, off unless sweetmotion|0x80) + 0244; now the everyday kernel.
+
 ### 2026-10-28 20:40 boot-to-SSH spread: the phone is ready at the same time; the first session gets lost
 - Log analysis of 8 boots (investigator): fast and slow boots alike reach dropbear at 25-37 s and the first SSH session's `exec dash` at ~33.5 s kernel time. In slow boots (36-41 s) that first session never completes on the PC; the next one lands ~12.7 s later (~46 s). No gaps > 2 s in the kernel log. During the lost window the PC re-sends unicast ARP every 1 s and the phone answers each, i.e. packets from the phone get lost for ~10-15 s about 10-15 s after the link comes up.
 - tools/sunfish-test.sh sshok now bounds each probe (`timeout 3`, ServerAliveInterval 1). bta/btb/btc: 36 / 25 / 24 s: the bounded probe helps, but bta shows the loss window itself (USB NCM) still costs ~10 s sometimes.

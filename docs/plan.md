@@ -21,7 +21,7 @@ Finished items: [completed.md](completed.md) (not auto-loaded).
 In [user-tasks.md](user-tasks.md) (not auto-loaded): 10 open. Claude doesn't wait on them; it moves to the next item.
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
-- D6 [PARTLY 2026-10-30] boot cmdline over 591 bytes (B38): -15 B, fast failure; a third extra arg still needs work/rtc-offset moved aside; kernel-side fix later.
+- (none open)
 
 ## Backlog
 The Broken, Later and Optimize lists are in [backlog.md](backlog.md) (not auto-loaded).
