@@ -53,6 +53,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-31 Metal bridge with planar IOSurface textures (615c313) installed via tools/sunfish-metal2-install.sh; previous bundle kept as /System/Library/Extensions/SweetMetal2.bundle.prev (`--undo`).
 - 2026-10-31 Camera for iOS (feature under work): tools/sunfish-install-camera.sh written (row 30; not yet installed).
 - 2026-10-31 Camera (feature under work): SunfishAudio.driver rebuilt with the camera device (camera_device.c/inject_media.c/camera_client.c, gated by /var/local/camdev.on, off now) via phone/audio/build.sh + tools/sunfish-install-audio.sh; /var/local/bin/camd + camclient (phone tools); /var/local/camdev.log (0666, empty), /var/local/camd.log; /var/run/sunfish-camera.shm/.sock are created by camd at run time.
 - 2026-10-30 Camera (feature under work): camid (+ --mclk-asis, --stream) and camclk in /var/local/bin; /var/local/cam/imx363-mode8.txt (row 29). Test runs leave the SLG51000 LDOs on at camid's verified voltages until reboot; all camcc clocks/GDSC off.

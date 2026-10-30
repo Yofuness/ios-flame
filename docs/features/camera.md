@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 08:30 cam33: Camera.app preview support installed (Metal bridge 615c313); UI unchanged
+- `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out` (now keeps the old bundle as SweetMetal2.bundle.prev; `--undo` swaps it back, b480234): backboardd restarted (pid 61 -> 366), lock screen and home screen render as before (B29 noise only), backboardd crash reports 5 before / 5 after, 2 min stable. "planar iosurface refused": 0 (no planar surface yet; Camera.app not opened).
+- Ready for U12 (Camera.app, both cameras): kernel111 CAMERA=1, camera setup installed, camd idle, preview textures in.
+- Correction (times): the "2026-10-31 HH:MM" headings of tonight's camera entries (from "00:15 cam13" to this one) are estimates that ran ahead of the clock; the PC clock says these runs happened between about 22:00 on 2026-10-29 and 01:35 on 2026-10-30 EDT. Run tags and order are right.
+
 ### 2026-10-31 08:15 cam32 (kernel111 CAMERA=1): iOS LISTS BOTH CAMERAS; camd idle after the boot prewarm (1d93eee)
 - camera_device.c front port restored (redfin's, half-turned; centre-crop of 1640x924 to the plist's 4:3 photo / 16:9 video sizes; SENSOR a=2 before START); camd race fixed (front chosen before the session thread; it would have stopped every front session). Off switches: /var/local/camdev.nofront (no front port), CAMD_NO_FRONT=1 (camd refuses SENSOR 2).
 - Battery 4439 mV, lock screen at ~55 s. camd by launchd (pid 42), idle (0.06-0.08 s CPU, no camid). camdev.log: "the device made: 2 streams, the back camera, the front one", the prewarm (back then front), socket not yet up, "streams given back (2)", "reopen skipped", "stop (0 frames)". **camera_avtest: Back Camera (built-in_video:0, position 1, 16 formats) + Front Camera (built-in_video:1, position 2, 18 formats).** 2 min stable, no reset.
