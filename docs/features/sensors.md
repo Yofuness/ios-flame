@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:35 cs4: DeviceMotion report layout decoded; fake service being written (xnu 0243)
+- RE (research/notes/devicemotion.md "Report layout"): payload size must match a table at 0x191cd3cb8: type 2 = 88 bytes, types 3/4 = 52 bytes; little-endian float32; timestamp from the HID event (mach time). Type 3/4: q[x,y,z,w] @0x0c, rotationRate @0x1c, userAccel @0x28. Type 2 adds raw magnetometer, bias and accuracy. Units (g, rad/s, uT) and which class wants which type: not confirmed; type 3 is the first try.
+- Implementation started: SweetHID service {0xFF0C,4} behind a new sweetmotion bit 0x40 (default off), raw-report write path in /dev/redwood-motion, Madgwick fusion in phone/sensors (SNS_DEVMOTION=1).
+
 ### 2026-10-30 16:20 cs3: no switch to CoreMotion's own software fusion; Compass needs a DeviceMotion service (B46)
 - Read-only RE (CoreMotion.s, research/notes/devicemotion.md "SPU vs AP fusion selector"): after "Starting device motion" (0x1919c43c4) CoreMotion tests bits 3/4/7 of CLPlatformInfo::motionCaps() (sub_1919c14e0, cached u64). A set bit picks the motion-coprocessor (SPU) class, which opens HID {0xFF0C,4}; clear bits pick the built-in software fusion (AP classes, Mekf filters).
 - motionCaps is a fixed mask per hardware type, compiled in (queryMotionCaps sub_1919c4c9c, jump table 0x191ba7234). The hardware type comes from MGIsDeviceOfType on ProductType iPhone10,3, and a real iPhone X has the M11, so we get the SPU bits. No MobileGestalt key, defaults key or IORegistry property changes it. The only preference, OverrideMotionCapEclipseService, touches bit 8 only. The IsSimulator route gives caps 0 (no motion at all). So the cheap "flag" fix is out.
