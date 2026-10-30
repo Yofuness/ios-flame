@@ -48,6 +48,13 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:20 gm0-gm2: Turnip `sysmem` and `flushall,syncdraw` don't fix the garbled images; `sysmem` brings back the Control Center blur
+- Knob /var/local/mtl2-tu-debug (read once per process at launch, SweetMetal2.mm:213; was absent, removed again), backboardd restarted per run, kernel125, flame-shot of CC, Voice Memos, Tips, lock screen (work/shots/gm{0,1,2}-*.png).
+- gm0 baseline: 6 CC tiles garbled (2 top-left circles, 3 bottom tiles, right tile of the flashlight row), Voice Memos welcome icon garbled, Tips banner garbled with black bands, both lock-screen buttons garbled; CC background flat blue (no blur).
+- gm1 `sysmem` (no GMEM tiling) and gm2 `flushall,syncdraw`: the same areas stay garbled (Tips bands change colour/pattern). Both show the CC blur/vibrancy background, and the brightness slider looks dark/unfilled. So causes 1 (GMEM) and 2 (sync) are ruled out for B44; new finding: the missing blur depends on Turnip's render path (GMEM vs sysmem / flushes) -> backlog B47.
+- No crashes seen (count 1123 at the end; not counted before). No obvious fps change.
+- Next for B44: cause 3 (an unlogged upload path): log pixelFormat/size/bytesPerRow in newTextureWithDescriptor / replaceRegion / IOSurface texture creation and match the garbled sizes.
+
 ### 2026-10-30 17:45 B44 round 3 (read-only): not compressed textures; correction to rp1
 - Correction to rp1 (13:00): "the repack fired 8 times, none in the apps" is wrong: 8 is only the log cap in bridge patch 0109 (repack_log, LOGGED >= 8); the repack ran for every shadow and still changed nothing.
 - Log census (all ../logs/boots, ~60.7k "B29" lines): only uncompressed formats reach the buffer-texture path (A8, RGBA8, BGRA8; RGBA16F/RG8/BGR10XR as aliases), all drawn by backboardd; no ASTC/ETC/PVRTC anywhere (the bridge handles ASTC/ETC2 separately, NativeBridgeMetalFrontend.mm:1727-1870). Colours in the garbled art are right; only the geometry is broken.
