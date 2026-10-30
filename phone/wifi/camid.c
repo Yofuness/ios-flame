@@ -24,6 +24,11 @@
  * then only reads: 0xB3 at 0x72 (LC898219, 1-byte address), 4 bytes of 0xF100 at 0x3e (LC898123, 16-bit address); ACK/NACK
  * and values printed; kern.sweet_camvaf=0, power down. No sensor ID read, no stream. Refused while camd has a session.
  * Stop camd's clients first (Camera.app); camd has no off file and launchd restarts it after a kill; an idle camd is fine.
+ * --lens-move CODE (af2, step D; same conditions as --lens-probe): VAF on, init, ramp to 400, walk to CODE (clamped to
+ * 400..725), read 0x84 back, 2 s, read back, park to 0, VAF off, power down. SIGINT/SIGTERM: the same park.
+ * --lens-init (af2, step E; rear, with --stream --ctl): the same init before the stream, a failure only means no AF.
+ * Reply "F CODE" at the end of it and of each move ("F -1": no lens); the stdin line "F CODE" walks the lens,
+ * clamped, between the other commands. Parked and VAF off on Q, stdin's end, signals and die().
  * Hazard rule: no CAMCC register but GDSC/GDSC_CLK before the GDSC is on, no CCI register before the GDSC and
  * the cci_0 branch are on (enforced in mrd/mwr). Needs SE9 clocks + pins (boot with sweetse9=2).
  */
@@ -35,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
+#include <time.h>
 #include <unistd.h>
 #include "geni_i2c.h"
 #include "pmem.h"
@@ -73,6 +79,10 @@
 
 static int dry, keep, front, mclk_asis;
 static int lens_probe, vaf_set;	/* --lens-probe; vaf_set: kern.sweet_camvaf may be 1 */
+static int lens_opt, lens_move = -1, lens_up, lens_quiet;	/* af2: --lens-init, --lens-move CODE */
+static int lens_code = -1, lens_target = -1, lens_phase;	/* af2: last code written (-1 none yet), where it is going */
+static void lens_off(void);
+static void lens_step(void);
 static const char *stream_file;
 static int hold = 1, exp_lines = -1, gain_code = -1;	/* e1/e2: --hold, --exposure, --gain */
 static int gdsc_on, cci_clk_on, in_pd;
@@ -227,10 +237,7 @@ static void power_down(void)
 {
 	if (in_pd++)
 		return;
-	if (vaf_set) {	/* also on die() and signals */
-		vaf_set = 0;
-		(void)vaf_write(0);
-	}
+	lens_off();	/* also on die() and signals: af2 parks first, then the rail */
 	if (keep) {
 		printf("camid: --keep: left powered\n");
 		return;
@@ -265,13 +272,17 @@ static void die(const char *msg)
 {
 	printf("camid: ABORT: %s\n", msg);
 	power_down();
+	if (vaf_set) {	/* af2: died inside power_down's own park */
+		vaf_set = 0;
+		(void)vaf_write(0);
+	}
 	exit(1);
 }
 
 static void on_sig(int s)
 {
 	printf("camid: signal %d\n", s);
-	if (ctl) {	/* f1: the stream loop ends and turns the stream off */
+	if (ctl || lens_move >= 0) {	/* f1: the stream loop ends and turns the stream off; af2: no CCI in a handler */
 		ctl_quit = 1;
 		return;
 	}
@@ -494,6 +505,11 @@ static int exposure(unsigned a)
 static struct sw { unsigned addr, val, us, line; } sws[MAX_WRITES];
 
 /* f1 (--ctl): commands from camd on stdin while streaming, replies on fd 3; 0 = ended cleanly */
+static int lens_clamp(int code)
+{
+	return code < 400 ? 400 : code > 725 ? 725 : code;	/* af2: lens_write_pos holds this anyway */
+}
+
 static int ctl_loop(unsigned a)
 {
 	char buf[256];
@@ -501,9 +517,11 @@ static int ctl_loop(unsigned a)
 	rb_fl = read_u16(a, 0x0340), rb_lines = read_u16(a, 0x0202), rb_code = read_u16(a, 0x0204);
 	fl_least = rb_fl;
 	dprintf(3, "S %d %d %d\n", rb_fl, rb_lines, rb_code);
-	for (int t = 0; !ctl_quit; t++) {
+	int walking = 0;
+	for (int t = 0; !ctl_quit; t += !walking) {	/* af2: t counts 100 ms polls, not the walk's 2 ms ones */
 		struct pollfd p = { .fd = 0, .events = POLLIN };
-		int r = poll(&p, 1, 100);
+		walking = lens_up && lens_code != lens_target;
+		int r = poll(&p, 1, walking ? 2 : 100);
 		if (r > 0) {
 			ssize_t k = read(0, buf + n, sizeof buf - 1 - n);
 			if (k <= 0) {
@@ -515,12 +533,17 @@ static int ctl_loop(unsigned a)
 			char *nl;
 			while ((nl = strchr(buf, '\n'))) {
 				*nl = 0;
-				int l, c, fl = -1;
+				int l, c, fl = -1, fc;
 				if (buf[0] == 'Q') {
 					printf("camid: ctl: Q\n");
 					return 0;
 				}
-				if (sscanf(buf, "E %d %d %d", &l, &c, &fl) >= 2 && l <= 0xffff && c <= 0xffff) {
+				if (sscanf(buf, "F %d", &fc) == 1) {	/* af2 */
+					if (lens_up)
+						lens_target = lens_clamp(fc);
+					if (!lens_up || lens_code == lens_target)
+						dprintf(3, "F %d\n", lens_up ? lens_code : -1);
+				} else if (sscanf(buf, "E %d %d %d", &l, &c, &fl) >= 2 && l <= 0xffff && c <= 0xffff) {
 					exp_lines = l, gain_code = c, exp_fl = fl;
 					if (exposure(a))
 						dprintf(3, "X\n");
@@ -536,7 +559,8 @@ static int ctl_loop(unsigned a)
 			if (n >= sizeof buf - 1)
 				n = 0, buf[0] = 0;
 		}
-		if (t % 100 == 99) {	/* every 10 s */
+		lens_step();	/* af2 */
+		if (!walking && t % 100 == 99) {	/* every 10 s */
 			int v = read_u8(a, 0x0005);
 			if (v < 0)
 				return -1;
@@ -669,10 +693,12 @@ static int lens_read(unsigned a, int wide, unsigned reg, unsigned n, uint8_t *ou
 		for (int k = 0; k < 4; k++)
 			b[nb++] = (v >> (8 * k)) & 0xff;
 	}
-	printf("camid: lens: 0x%02x %#x: level %u raw:", a, reg, lvl);
-	for (unsigned i = 0; i < nb; i++)
-		printf(" %02x", b[i]);
-	printf("\n");
+	if (!lens_quiet) {	/* af2: not on each poll of 0xB3 */
+		printf("camid: lens: 0x%02x %#x: level %u raw:", a, reg, lvl);
+		for (unsigned i = 0; i < nb; i++)
+			printf(" %02x", b[i]);
+		printf("\n");
+	}
 	if (nb < n + 1) {
 		printf("camid: lens: 0x%02x %#x: short read\n", a, reg);
 		return -1;
@@ -690,6 +716,204 @@ static void lens_recover(void)
 	mwr(CCI + 0x108 + cci_mo, 0x000A004D);
 	mwr(CCI + 0x10c + cci_mo, 0x76);
 	mwr(CCI + 0x110 + cci_mo, 0x161);
+}
+
+/*
+ * af2: the lens motor (LC898219 at 0x72, research/notes/camera-af.md). lens_write_pos() is the one place that writes
+ * the position register, and it holds the limits whoever calls it: stock travel 400..725, below that only the ramp up
+ * from 0 to 400 and the park down to 0; at most LENS_STEP codes a write; at least LENS_GAP_US between writes (it waits
+ * out the rest). lens_wr8() writes only the init list's registers. Nothing writes to 0x3e.
+ */
+#define LENS_A		0x72
+#define LENS_MIN	400
+#define LENS_MAX	725
+#define LENS_STEP	20
+#define LENS_GAP_US	2000
+#define LENS_SLOW_MS	5	/* ramp and park */
+enum { LENS_ZERO, LENS_RAMP, LENS_RUN, LENS_PARK };
+
+static double lens_now(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static int lens_write_pos(int code)
+{
+	static double last;
+	int cur = lens_code, ok = 0;
+	switch (lens_phase) {
+	case LENS_ZERO:
+		ok = cur < 0 && code == 0;
+		break;
+	case LENS_RAMP:
+		ok = cur >= 0 && code > cur && code <= LENS_MIN;
+		break;
+	case LENS_RUN:
+		ok = cur >= LENS_MIN && code >= LENS_MIN && code <= LENS_MAX;
+		break;
+	case LENS_PARK:
+		ok = cur > 0 && code >= 0 && code < cur;
+		break;
+	}
+	if (ok && cur >= 0 && abs(code - cur) > LENS_STEP)
+		ok = 0;
+	if (!ok) {
+		printf("camid: lens: code %d from %d refused (phase %d)\n", code, cur, lens_phase);
+		return -1;
+	}
+	while (lens_now() - last < LENS_GAP_US / 1e6)
+		usleep(200);
+	int e = write_reg(LENS_A, 0x8400 | (unsigned)code >> 8, (unsigned)code & 0xff);
+	last = lens_now();
+	if (e)
+		return -1;
+	lens_code = code;
+	return 0;
+}
+
+/* the init list's 1-byte registers, nothing else */
+static int lens_wr8(unsigned reg, unsigned v)
+{
+	uint32_t w[3] = { 1 | LENS_A << 4, 9 | 2 << 4 | reg << 8 | v << 16, 0x108 };
+	if (reg != 0xe0 && reg != 0x8a && reg != 0x89 && reg != 0x87) {
+		printf("camid: lens: reg %#x refused\n", reg);
+		return -1;
+	}
+	if (dry) {
+		printf("[dry] cci wr 0x%02x %#x = %#04x\n", LENS_A, reg, v);
+		return 0;
+	}
+	if (cci_run(w, 3, cci_q_report)) {
+		printf("camid: lens: write %#x = %#04x failed\n", reg, v);
+		return -1;
+	}
+	return 0;
+}
+
+/* park (a failed write: one CCI recovery, one more go), then the rail off; also on die(), signals, Q */
+static void lens_off(void)
+{
+	int retried = 0;
+	lens_up = 0;
+	lens_phase = LENS_PARK;
+	while (lens_code > 0) {
+		if (lens_write_pos(lens_code > LENS_STEP ? lens_code - LENS_STEP : 0)) {
+			if (retried++)
+				break;
+			lens_recover();
+			continue;
+		}
+		delay_ms(LENS_SLOW_MS);
+	}
+	if (lens_code >= 0)
+		printf("camid: lens: parked at %d\n", lens_code);
+	if (vaf_set) {
+		vaf_set = 0;
+		(void)vaf_write(0);
+	}
+}
+
+static int lens_read_pos(const char *when)
+{
+	uint8_t v[2];
+	if (dry)
+		return 0;
+	if (lens_read(LENS_A, 0, 0x84, 2, v)) {
+		printf("camid: lens: read back 0x84 (%s) failed\n", when);
+		return -1;
+	}
+	printf("camid: lens: read back 0x84 (%s): %d (written %d)\n", when, v[0] << 8 | v[1], lens_code);
+	return 0;
+}
+
+/* VAF on, the init list, ramp to 400; 0 = lens up, else parked and VAF off (no AF) */
+static int lens_init(void)
+{
+	uint8_t v = 0xff;
+	vaf_set = 1;
+	if (vaf_write(1))
+		goto fail;
+	delay_ms(8);
+	if (lens_wr8(0xe0, 0x01))
+		goto nack;
+	double t0 = lens_now();
+	for (;;) {
+		lens_quiet = 1;
+		int e = dry ? (v = 0, 0) : lens_read(LENS_A, 0, 0xb3, 1, &v);
+		lens_quiet = 0;
+		if (e)
+			goto nack;
+		if (!v)
+			break;
+		if (lens_now() - t0 > 0.1) {
+			printf("camid: lens: 0xB3 still %02x after 100 ms: no AF\n", v);
+			goto fail;
+		}
+		delay_ms(1);
+	}
+	printf("camid: lens: 0xB3 = 00 after %.1f ms\n", (lens_now() - t0) * 1e3);
+	if (lens_wr8(0x8a, 0xa5) || lens_wr8(0x89, 0x3f) || lens_wr8(0x87, 0x1d))
+		goto nack;
+	lens_phase = LENS_ZERO;
+	if (lens_write_pos(0) || lens_read_pos("after init"))
+		goto nack;
+	lens_phase = LENS_RAMP;
+	for (int c = LENS_STEP; c <= LENS_MIN; c += LENS_STEP) {
+		delay_ms(LENS_SLOW_MS);
+		if (ctl_quit)
+			goto fail;
+		if (lens_write_pos(c))
+			goto nack;
+	}
+	lens_phase = LENS_RUN;
+	lens_target = lens_code;
+	lens_up = 1;
+	printf("camid: lens up, code %d\n", lens_code);
+	return 0;
+nack:
+	lens_recover();
+fail:
+	lens_off();
+	return -1;
+}
+
+/* one step towards lens_target; a failed write ends the lens's session, not the stream */
+static void lens_step(void)
+{
+	if (!lens_up || lens_code == lens_target)
+		return;
+	int d = lens_target - lens_code;
+	if (lens_write_pos(lens_code + (d > LENS_STEP ? LENS_STEP : d < -LENS_STEP ? -LENS_STEP : d))) {
+		printf("camid: lens: move failed at %d: no more AF\n", lens_code);
+		lens_recover();
+		lens_off();
+		if (ctl)
+			dprintf(3, "F -1\n");
+	} else if (ctl && lens_code == lens_target) {
+		dprintf(3, "F %d\n", lens_code);
+	}
+}
+
+/* --lens-move (step D): no stream */
+static int lens_move_run(void)
+{
+	if (ctl_quit || lens_init())
+		return 1;
+	lens_target = lens_clamp(lens_move);
+	printf("camid: lens: to %d (asked %d)\n", lens_target, lens_move);
+	while (lens_up && lens_code != lens_target && !ctl_quit)
+		lens_step();	/* (lens_write_pos keeps the 2 ms) */
+	int rc = lens_up ? 0 : 1;
+	if (rc == 0 && lens_read_pos("at target"))
+		rc = 1;
+	for (int i = 0; i < 200 && !ctl_quit; i++)
+		delay_ms(10);
+	if (rc == 0 && lens_read_pos("after 2 s"))
+		rc = 1;
+	lens_off();
+	return rc || ctl_quit;
 }
 
 static int lens_run(void)
@@ -731,7 +955,7 @@ static int lens_camd_idle(void)
 	if (n != (ssize_t)sizeof h || memcmp(h.magic, SUNFISH_CAMERA_SHM_MAGIC, 8))
 		return 0;	/* camd is still creating it: no session yet */
 	if (h.state != SUNFISH_CAMERA_IDLE) {
-		printf("camid: --lens-probe: camd (pid %u) state %u, not idle: refused. Close the camera client (Camera.app); "
+		printf("camid: lens test: camd (pid %u) state %u, not idle: refused. Close the camera client (Camera.app); "
 		       "after a FAULT kill camd (launchd restarts it)\n", h.pid, h.state);
 		return -1;
 	}
@@ -764,9 +988,14 @@ int main(int argc, char **argv)
 			addr = strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--lens-probe"))
 			lens_probe = 1;
+		else if (!strcmp(argv[i], "--lens-init"))
+			lens_opt = 1;
+		else if (!strcmp(argv[i], "--lens-move") && i + 1 < argc)
+			lens_move = atoi(argv[++i]) < 0 ? 0 : atoi(argv[i]);
 		else {
 			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure LINES] [--gain CODE]]\n"
-					"       camid [--dry-run] [--mclk-asis] --lens-probe    (camd idle: close Camera.app; camd has no off file)\n");
+					"       camid [--dry-run] [--mclk-asis] --lens-probe | --lens-move CODE    (camd idle: close Camera.app; camd has no off file)\n"
+					"       camid ... --stream FILE --ctl --lens-init    (rear)\n");
 			return 2;
 		}
 	}
@@ -779,7 +1008,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "camid: --lens-probe: rear only, no --keep, --stream or --addr\n");
 		return 2;
 	}
-	if (lens_probe && lens_camd_idle())
+	if (lens_move >= 0 && (lens_probe || lens_opt || keep || front || stream_file || addr)) {
+		fprintf(stderr, "camid: --lens-move: rear only, no --lens-probe, --lens-init, --keep, --stream or --addr\n");
+		return 2;
+	}
+	if (lens_opt && (front || !stream_file || !ctl)) {
+		fprintf(stderr, "camid: --lens-init: rear only, with --stream and --ctl\n");
+		return 2;
+	}
+	if ((lens_probe || lens_move >= 0) && lens_camd_idle())
 		return 1;
 	if (addr && addr != 0x10 && addr != 0x1a && !(front && (addr == 0x36 || addr == 0x2d)))
 		return 2;
@@ -945,6 +1182,11 @@ int main(int argc, char **argv)
 		power_down();
 		return rc;
 	}
+	if (lens_move >= 0) {
+		rc = lens_move_run();
+		power_down();
+		return rc;
+	}
 	if (front && !addr) {
 		static const unsigned fa[4] = { 0x1a, 0x10, 0x36, 0x2d };
 		for (int i = 0; i < 4 && rc; i++) {
@@ -967,6 +1209,11 @@ int main(int argc, char **argv)
 	if (!rc && stream_file && front && addr != 0x1a && addr) {
 		printf("camid: --front --stream: only at 0x1a\n");
 		rc = 1;
+	}
+	if (!rc && lens_opt) {	/* af2: a lens that fails leaves the stream without AF */
+		int e = lens_init();
+		if (ctl)
+			dprintf(3, "F %d\n", e ? -1 : lens_code);
 	}
 	if (!rc && stream_file && stream(addr ? addr : 0x1a))
 		rc = 1;

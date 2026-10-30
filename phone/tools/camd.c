@@ -21,6 +21,8 @@
  * read-back, not at once: AE saw old levels with new numbers and ran away); longer frames than the mode's, down to
  * 15 fps; one exposure command at camid at a time (a queue of them held up its Q for seconds). Off: CAM38_OFF=1 in
  * camd's environment.
+ * af2: rear sessions run camid --lens-init; FOCUS a (0..1023) -> camid "F 400 + a*325/1023"; the frames' focus says a
+ * once the lens is up (front or a failed init: NO_FOCUS). Off: CAMD_NO_AF=1 in camd's environment.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -34,6 +36,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -92,6 +95,10 @@ static unsigned took_head, took_tail;
 static int hdr_fl, hdr_lines, hdr_code;	/* the copier's: the exposure of the frame in hand */
 static volatile int cur_fl = 1608, cur_lines = -1, cur_code = -1;	/* camid's read-backs */
 static int camid_in = -1, camid_out = -1;
+/* af2: lens_up from camid's "F"; focus_a survives until the session's end, so a FOCUS before START counts */
+static volatile int lens_up, focus_a, focus_pending;
+static int lens_spawned;
+static double focus_logged;
 
 /* the copier */
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -171,9 +178,13 @@ static int h_spawn(pid_t *pid)
 					   "--ctl", NULL };
 	static const char *const avf[] = { BIN "camid", "--front", "--addr", "0x1a", "--keep", "--mclk-asis", "--stream",
 					   TABLE_F, "--ctl", NULL };
-	const char *const *av = front ? avf : avr;
-	printf("camd: stream command: camid %s--addr 0x1a --keep --mclk-asis --stream %s --ctl\n", front ? "--front " : "",
-	       front ? TABLE_F : TABLE);
+	static const char *const avr_af[] = { BIN "camid", "--addr", "0x1a", "--keep", "--mclk-asis", "--stream", TABLE,
+					      "--ctl", "--lens-init", NULL };
+	const char *no_af = getenv("CAMD_NO_AF");
+	lens_spawned = !front && !(no_af && !strcmp(no_af, "1"));	/* af2 */
+	const char *const *av = front ? avf : lens_spawned ? avr_af : avr;
+	printf("camd: stream command: camid %s--addr 0x1a --keep --mclk-asis --stream %s --ctl%s\n", front ? "--front " : "",
+	       front ? TABLE_F : TABLE, lens_spawned ? " --lens-init" : "");
 	fflush(stdout);
 	*pid = fork();
 	if (*pid < 0)
@@ -230,10 +241,16 @@ static void camid_replies(void)
 	char *nl;
 	while ((nl = strchr(buf, '\n'))) {
 		*nl = 0;
-		int fl, l, c;
+		int fl, l, c, fc;
 		if (buf[0] == 'E' || buf[0] == 'X')
 			exp_in_flight = 0;	/* cam38 */
-		if (sscanf(buf, "%*c %d %d %d", &fl, &l, &c) == 3 && (buf[0] == 'S' || buf[0] == 'E')) {
+		if (buf[0] == 'F' && sscanf(buf, "F %d", &fc) == 1) {	/* af2: not an answer to an E */
+			if (fc >= 0 && !lens_up)
+				printf("camd: lens up, code %d\n", fc);
+			else if (fc < 0)
+				printf("camd: no lens: no AF\n");
+			lens_up = fc >= 0;
+		} else if (sscanf(buf, "%*c %d %d %d", &fl, &l, &c) == 3 && (buf[0] == 'S' || buf[0] == 'E')) {
 			cur_fl = fl, cur_lines = l, cur_code = c;
 			pthread_mutex_lock(&mu);	/* cam38 */
 			if (buf[0] == 'S') {
@@ -273,6 +290,15 @@ static int h_tick(void)
 		} else {
 			dprintf(camid_in, "E %d %d %d\n", exp_lines_req, exp_code_req, exp_fl_req);
 			exp_in_flight = 1, exp_sent_at = mono();
+		}
+	}
+	if (focus_pending && lens_up && camid_in >= 0) {	/* af2 */
+		int a = focus_a, code = 400 + a * 325 / 1023;
+		focus_pending = 0;
+		dprintf(camid_in, "F %d\n", code);
+		if (mono() - focus_logged >= 1) {
+			focus_logged = mono();
+			printf("camd: F %d (focus %d)\n", code, a);
 		}
 	}
 	return want_stop || term;
@@ -335,7 +361,8 @@ static void *copier(void *arg)
 		f->frame_lines = (uint32_t)h_fl;
 		f->frame_lines_min = cam38_off ? (uint32_t)cur_fl : front ? FL_F : FL_R;
 		f->frame_lines_max = cam38_off ? (uint32_t)cur_fl : front ? FL_MAX_F : FL_MAX_R;
-		f->margin = front ? MARGIN_F : MARGIN, f->sensor = (uint32_t)cam->sensor, f->focus = REDWOOD_CAMERA_NO_FOCUS;
+		f->margin = front ? MARGIN_F : MARGIN, f->sensor = (uint32_t)cam->sensor;
+		f->focus = lens_up ? (uint32_t)focus_a : REDWOOD_CAMERA_NO_FOCUS;	/* af2 */
 		f->reserved[REDWOOD_CAMERA_R_SOF_LO] = (uint32_t)tsof;
 		f->reserved[REDWOOD_CAMERA_R_SOF_HI] = (uint32_t)(tsof >> 32);
 		f->reserved[REDWOOD_CAMERA_R_FPS_MILLI] = front ? FPS_MILLI_F : FPS_MILLI;
@@ -366,6 +393,12 @@ static void power_down(void)
 		return;
 	powered = 0;
 	printf("camd: == power down\n");
+	if (lens_spawned) {	/* af2: camid turns it off itself, unless it was killed */
+		int v = 0;
+		lens_spawned = 0;
+		if (sysctlbyname("kern.sweet_camvaf", NULL, NULL, &v, sizeof v))
+			printf("camd: kern.sweet_camvaf = 0 failed: %s\n", strerror(errno));
+	}
 	if (!precheck()) {	/* camrx's commands need it too; the script's down runs them anyway */
 		rx_stop();
 		phy_off();
@@ -438,6 +471,7 @@ static void *session(void *arg)
 	while (__atomic_load_n(&copy_slot, __ATOMIC_ACQUIRE) >= 0)
 		usleep(1000);
 	power_down();
+	lens_up = 0, focus_pending = 0, focus_a = 0;	/* af2 */
 	/* cam36: not started again by itself: the clients are told, the next START retries */
 	sess_failed = !latch && !want_stop && !term && (rc || !sh->published) && !cam36_off();
 	if (sess_failed && !rc)
@@ -552,7 +586,11 @@ static void command(struct client *c)
 			reply(c, m.command, -EINVAL);
 		}
 		break;
-	case REDWOOD_CAMERA_FOCUS:
+	case REDWOOD_CAMERA_FOCUS:	/* af2: the session's next tick passes it on, once the lens is up */
+		focus_a = (int)(m.a > REDWOOD_CAMERA_FOCUS_MAX ? REDWOOD_CAMERA_FOCUS_MAX : m.a);
+		focus_pending = 1;
+		reply(c, m.command, 0);
+		break;
 	case REDWOOD_CAMERA_FLASH:
 	case REDWOOD_CAMERA_KEEP:
 		reply(c, m.command, 0);

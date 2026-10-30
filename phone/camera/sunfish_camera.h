@@ -7,7 +7,7 @@
  *   connection drops it; when no connection has it started, everything goes down. EXPOSURE a lines, b gain (256 =
  *   1x, linear; 0 = keep); c, d ignored (frame length stays the mode's). SENSOR a 1 rear (default),
  *   2 front (IMX355 1640x924, stride 2064; a running stream restarts on it; data_bytes and the frame header follow),
- *   others -EINVAL. FOCUS, FLASH, KEEP accepted, ignored.
+ *   others -EINVAL. FOCUS moves the rear lens (af2). FLASH, KEEP accepted, ignored.
  * /var/run/sunfish-camera.shm (0666, mmap read-only): struct sunfish_camera_shm, then SUNFISH_CAMERA_SLOTS slots of
  *   slot_bytes at shm + head_bytes: struct sunfish_camera_slot (gen + the frame header), the RAW10 bytes at
  *   slot + data_offset (2016x1512, stride 2528: cam34, the WM pads RAW10 lines to 16 B; data_bytes = height * stride).
