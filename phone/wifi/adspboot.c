@@ -20,6 +20,9 @@
  *   adspboot boot --afe [--watch 40]  ap4: --apr, then the SEC_MI2S_RX port: clock, I2S config, start, 2 s, stop, clock off
  *                     sp2: first an LPASS core hw vote (sp2b: 0x100F4, --vote-block N), LPI pin mux (gpio8-10) after
  *                     DEVICE_START, undone before DEVICE_STOP; --no-lpi skips both
+ *   adspboot boot --swr-probe [--swr-clk]  hj0: --afe's LPASS hw vote, then READ ONLY the TX/RX SoundWire masters,
+ *                     the TX/VA macros and LPI gpio24 (codec reset); --swr-clk also votes the va/tx core + tx npl
+ *                     codec clocks (0x30b-0x30d) around a second read; devote, exit. Never writes those blocks.
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -942,13 +945,20 @@ struct afe_i2s {		/* afe_param_id_i2s_cfg */
 	uint16_t data_format, reserved;
 } __attribute__((packed));
 
-enum { AFE_IDLE, AFE_VOTE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD, AFE_STOP, AFE_CLK_OFF, AFE_DEVOTE,
-       AFE_DONE };
+enum { AFE_IDLE, AFE_VOTE, AFE_CLK_F3, AFE_CLK_FC, AFE_CFG, AFE_START, AFE_HOLD, AFE_STOP, AFE_CLK_OFF, AFE_SWR_CLK, AFE_SWR_UNCLK,
+       AFE_DEVOTE, AFE_DONE };	/* hj0: SWR steps only via --swr-probe */
 static int afe_on, afe_step, afe_clk_ok, afe_started;
 static int no_lpi, hw_handle = -1, lpi_set;	/* sp2 */
 static uint32_t vote_block = 2;	/* sp2b: --vote-block */
 static uint32_t lpi_saved[4];
 static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response we wait for */
+/* hj0: --swr-probe (headphone jack S0, research/notes/headphone-jack.md). Addresses from recon/live.dts:
+ * tx_swr_master swrm-io-base 0x62ed0000 (:20799), rx_swr_master 0x62ef0000 (:20833), tx-macro@62ec0000 (:20784),
+ * va-macro@62f20000 (:20776), LPI gpio24 = LPI_PA + 0x18000 (lpi_pinctrl@62b40000 :22897, gpio24 :22944).
+ * --swr-clk: va_core 0x30b, tx_core 0x30c, tx_npl 0x30d, each 0x124f800 = 19.2 MHz (:23505, :23532, :23541). */
+static int swr_on, swr_clk, swr_i;
+static unsigned swr_clk_ok;	/* bit i: swr_ids[i] voted, to un-vote */
+static const uint32_t swr_ids[3] = { 0x30b, 0x30c, 0x30d };
 
 static void afe_send(uint16_t dest_port, uint32_t opcode, const void *pl, uint16_t len)
 {
@@ -971,18 +981,45 @@ static int amp_invert_clk;	/* sp8: --amp-invert-clk */
 static int i2s_bits = 16;	/* pcm32: --i2s-32: 32-bit I2S slots, BCLK 48000*32*2 */
 static int adm_bits;		/* pcm32: --adm-bits N (0 = 16, or 24 with --i2s-32 as ios-redfin) */
 
-static void afe_clock(uint32_t opcode, int enable)
+static void afe_clock_id(uint32_t opcode, uint32_t id, uint32_t hz, uint16_t attr, int enable)
 {
 	uint8_t b[16 + sizeof(struct afe_param) + sizeof(struct afe_clock_set)] = { 0 };
 	struct afe_param p = { AFE_MODULE_CLOCK_SET, AFE_PARAM_ID_CLOCK_SET, sizeof(struct afe_clock_set), 0 };
-	struct afe_clock_set c = { 1, AFE_CLK_SEC_MI2S_IBIT, 48000u * (uint32_t)i2s_bits * 2,
-				   amp_invert_clk ? 4 /* sp8: INVERT_COUPLE_NO, ios-redfin */ : 1 /* COUPLE_NO */, 0,
-				   (uint32_t)enable };
+	struct afe_clock_set c = { 1, id, hz, attr, 0, (uint32_t)enable };
 	uint32_t size = sizeof(p) + sizeof(c);	/* payload size; address 0/0 and mem_map_handle 0: in band */
 	memcpy(b, &size, 4);
 	memcpy(b + 16, &p, sizeof(p));
 	memcpy(b + 16 + sizeof(p), &c, sizeof(c));
 	afe_send(0, opcode, b, sizeof(b));
+}
+
+static void afe_clock(uint32_t opcode, int enable)
+{
+	afe_clock_id(opcode, AFE_CLK_SEC_MI2S_IBIT, 48000u * (uint32_t)i2s_bits * 2,
+		     amp_invert_clk ? 4 /* sp8: INVERT_COUPLE_NO, ios-redfin */ : 1 /* COUPLE_NO */, enable);
+}
+
+/* hj0: one read with a stage line first (a bus hang or reset then shows which register) */
+static uint32_t swr_rd(const char *what, uint64_t pa)
+{
+	printf("swr: stage read %s %#llx\n", what, (unsigned long long)pa);
+	fflush(stdout);
+	uint32_t v = rd32(pa);
+	printf("swr: %s %#llx = %#010x\n", what, (unsigned long long)pa, v);
+	fflush(stdout);
+	return v;
+}
+
+static void swr_read(const char *when)
+{
+	printf("swr: --- reads (%s) ---\n", when);
+	for (unsigned i = 0; i < 0x10; i++)
+		swr_rd(i ? "tx-swr" : "tx-swr version", 0x62ed0000ull + 4 * i);
+	swr_rd("rx-swr version", 0x62ef0000ull);
+	swr_rd("tx-macro (live.dts tx-macro@62ec0000)", 0x62ec0000ull);
+	swr_rd("va-macro (live.dts va-macro@62f20000)", 0x62f20000ull);
+	swr_rd("lpi gpio24 cfg", LPI_PA + 0x1000u * 24);
+	swr_rd("lpi gpio24 in/out", LPI_PA + 0x1000u * 24 + 4);
 }
 
 static void pcm_start(void);
@@ -1078,6 +1115,19 @@ static void afe_run(void)
 		apr_due = now_ms() + 2000;
 		break;
 	case AFE_CLK_OFF: afe_clock(afe_clk_op, 0); break;
+	case AFE_SWR_CLK:	/* hj0: COUPLE_NO, root 0 as Linux audio-ref-clk */
+		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 1);
+		break;
+	case AFE_SWR_UNCLK:
+		while (swr_i < 3 && !(swr_clk_ok & (1u << swr_i)))
+			swr_i++;
+		if (swr_i >= 3) {
+			afe_step = AFE_DEVOTE;
+			afe_run();
+			break;
+		}
+		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 0);
+		break;
 	default:
 		afe_op = 0;
 		printf("afe: done (clock %s via %x, start %s)\n", afe_clk_ok ? "ok" : "failed", afe_clk_op,
@@ -1094,7 +1144,34 @@ static void afe_next(int ok, uint32_t status)
 	if (s == AFE_VOTE) {	/* sp2 */
 		printf("afe: LPASS core hw vote (block %u) %s, handle %d%s\n", vote_block, ok ? "ok" : "FAILED",
 		       hw_handle, ok ? "" : "; going on without it");	/* sp2b: no abort */
+		if (swr_on) {	/* hj0: no reads without the vote (unclocked bus) */
+			if (ok)
+				swr_read("hw vote only");
+			else
+				printf("swr: no hw vote: reads skipped\n");
+			swr_i = 0;
+			afe_step = ok && swr_clk ? AFE_SWR_CLK : AFE_DEVOTE;
+			afe_run();
+			return;
+		}
 		afe_step = AFE_CLK_F3;
+		afe_run();
+		return;
+	}
+	if (s == AFE_SWR_CLK || s == AFE_SWR_UNCLK) {	/* hj0 */
+		printf("swr: clock %#x %s: %s\n", swr_ids[swr_i], s == AFE_SWR_CLK ? "on" : "off", ok ? "ok" : "FAILED");
+		if (s == AFE_SWR_CLK && ok)
+			swr_clk_ok |= 1u << swr_i;
+		if (++swr_i < 3) {
+			afe_run();
+			return;
+		}
+		swr_i = 0;
+		if (s == AFE_SWR_CLK) {
+			swr_read("hw vote + codec clocks");
+			afe_step = AFE_SWR_UNCLK;
+		} else
+			afe_step = AFE_DEVOTE;
 		afe_run();
 		return;
 	}
@@ -1118,7 +1195,7 @@ static void afe_next(int ok, uint32_t status)
 			afe_step = AFE_STOP;
 		}
 	} else
-		afe_step = s + 1;
+		afe_step = s == AFE_CLK_OFF ? AFE_DEVOTE : s + 1;	/* hj0: skip the SWR steps */
 	if (afe_step == AFE_CLK_OFF && !afe_clk_ok)
 		afe_step = AFE_DONE;
 	if (afe_step == AFE_DONE && s < AFE_DEVOTE && (hw_handle >= 0 || lpi_set))
@@ -1864,7 +1941,7 @@ static void apr_poll(void)
 			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
 			afe_step = AFE_DONE;
 		} else if (afe_on && afe_step == AFE_IDLE) {
-			afe_step = no_lpi ? AFE_CLK_F3 : AFE_VOTE;	/* sp2 */
+			afe_step = no_lpi && !swr_on ? AFE_CLK_F3 : AFE_VOTE;	/* hj0: the probe always votes */	/* sp2 */
 			afe_run();
 		} else if (afe_step > AFE_IDLE && afe_step < AFE_DONE && now_ms() >= apr_due) {
 			if (afe_op)
@@ -2189,6 +2266,10 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 		}
 		rpc_poll();
 		apr_poll();
+		if (swr_on && afe_step == AFE_DONE) {	/* hj0: probe over, exit */
+			printf("swr: probe done\n");
+			return 0;
+		}
 		amp_poll();	/* sp1 */
 		sns_tick(&sns_ops);	/* sns1 */
 		if (stop && now_ms() >= next) {
@@ -2310,6 +2391,10 @@ int main(int argc, char **argv)
 			apr_on = 1;
 		else if (!strcmp(argv[i], "--afe"))	/* ap4: AFE port start without amps; implies --apr */
 			apr_on = afe_on = 1;
+		else if (!strcmp(argv[i], "--swr-probe"))	/* hj0: read-only SoundWire/macro/gpio24 probe; implies --afe */
+			apr_on = afe_on = swr_on = 1;
+		else if (!strcmp(argv[i], "--swr-clk"))	/* hj0: + codec clock votes 0x30b-0x30d around a second read */
+			swr_clk = 1;
 		else if (!strcmp(argv[i], "--no-lpi"))	/* sp2: no LPASS hw vote, no LPI pin mux */
 			no_lpi = 1;
 		else if (!strcmp(argv[i], "--vote-block") && i + 1 < argc)	/* sp2b: hw_block_id of the vote */
@@ -2443,7 +2528,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
