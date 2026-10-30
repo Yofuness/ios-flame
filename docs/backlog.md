@@ -5,6 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
+- B42 Auto-brightness (parked 2026-10-30, sensors.md): lux reaches iOS, AAB ramps, but legacy mode writes only the slider value and new-arch mode needs a CADisplay brightness control we don't have. Option: our own lux -> brightness loop (night flag respected).
 - B39 Haptics (new from the 2026-10-30 survey, hakios-xnu 9ae5bde/06817c6, MIT): iOS drives haptics as waveforms on the "Actuator" audio device only with an ADT /product/haptics node (closed-loop 1, supports-3rd-party-haptics 1); without it FigVibratorInitialize -16490. Our motor = TI DRV2624 on I2C (research/notes/hackios-survey.md:133). ~1-1.5 d. (research/notes/upstream-2026-10-30-ports.md)
 - B40 Before U12 (Camera.app), check iOSPlus10's camera fixes: c26ce1c StartRecorderServer (we set it), 51f6f0b /arm-io/isp + /product/camera (CAMERA=1 has them), 3b0eca8 tccd camera sandbox extensions (-11852; compare xnu 0219), 86a5df1 IOSurface plane bytesPerRow at +0x10 (colour flashes); hakios-sm7150 0021 pick the camera before the first read (front/back switch).
 - B41 Screenshot tool (D7): port iOSPlus10 13a23e5 userland/screenshot/negroni-shot.m (MIT, 73 lines: render the display into an IOSurface, write a PNG), 1-2 h.

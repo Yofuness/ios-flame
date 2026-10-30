@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:05 Auto-brightness PARKED (~2 h): lux reaches iOS and AAB ramps, but no path writes the steps to our panel
+- bl3 (kernel115, new arch): backboardd "Modules not ready: Caching DisplayBrightnessFadePeriod property" and no later ready line; 0 SWEET BL lines all boot. RE (research/notes/ambient-light.md "modules not ready"): in new-arch mode BLControl builds the container from QuartzCore's CADisplay brightness control (CBBrtControl initWithCABrightnessControl:), and its modules start only when CA reports brightness capabilities or sends brightnessNotificationAttached: CA never does here. Our backlight property types all match what CoreBrightness reads.
+- Legacy mode (kernel113 / sweetblnew=0): AAB runs (real ramps after autobright 0/1, "begin ramping L: 105.56 -> 399.41"), but the legacy fade only writes the slider's brightness, never AAB's L (ramp output path).
+- So neither mode gets AAB's target to the panel. 0239 default switched to OFF (sweetblnew=1 to opt in). Options later: our own auto-brightness (lux from adspboot -> a curve -> the slider/DisplayBrightness path, respecting the night flag), or giving CA a brightness control. Backlog B42.
+
 ### 2026-10-30 08:30 k115 (kernel115 = + xnu 0239 new-backlight-architecture): new path on, but auto-brightness stops entirely
 - No reset in two boots (sweetuibig=0, then default). The runner's tests were void: the panel auto-locked at ~67 s and was never woken (all frames black).
 - By hand (screen woken with H, backboardd restarted): oslog "New backlight architecture." (0239 works). But then backboardd sets no ALS properties at all (only accel/gyro ReportInterval), no AAB lines, no SWEET BL writes during `m fake als 20000` / `1`, and BrightnessSystemClient DisplayBrightnessAuto reads (none) (was 1); "EDR - transceive_data: mach_msg() => (ipc/send) timed out" x2.
