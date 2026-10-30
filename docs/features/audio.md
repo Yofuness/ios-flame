@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:25 iOS has an audio output device: SunfishAudio.driver + VirtualAudio (au1, kernel108)
+- phone/audio (from ios-redfin RedwoodAudio.driver, MIT; research/notes/ios-audio-device.md): a CoreAudio HAL plug-in with redfin's devices (Speaker, Hawking input, Actuator, Codec), 48 kHz 16-bit, a null sink while /dev/sunfish-audio is missing. tools/sunfish-install-audio.sh installed it to /System/Library/Audio/Plug-Ins/HAL and moved VirtualAudio.plugin back into /Library/Audio/Plug-Ins/HAL (BTAudioHALPlugin.driver present, /Library/Audio/Tunings/D22 present).
+- au1 boot: no CRASH of backboardd / mediaserverd / SpringBoard in 110 s, GPU presenting (up to 32.8 fps). mediaserverd restarted with an oslog capture: "sunfish: audio: the speaker is with the HAL (/dev/sunfish-audio: No such file or directory)", "HALS_Device::Activate: activating device 51: Speaker", the Hawking input queried, "Starting BTAudioPlugin for mediaserverd", "Register audio plugin connection with bluetoothd". The earlier VirtualAudio crash (missing 'vdef') does not recur.
+- Next (needs the user, daytime): play the MP3 (Files/Filza/Music/Safari) with the AirPods connected; expect "sunfish: audio: playing" or a Bluetooth route. The phone speaker stays parked.
+
 ### 2026-10-30 20:20 sp15: LPI pin input bits don't follow function-mode pins (inconclusive)
 - phone/tools/pinsample (fast read-only /dev/pmem sampler, 100k reads in 0.2-1 s). Baseline (idle, GPIO mode): gpio8/9/10 in/out = 1, 0 transitions. During the 0x41 tone (first ~1 s): all three read 0, 0 transitions, BCLK included. The amp locks its PLL on BCLK, so BCLK does toggle: the LPI in/out bit does not reflect a pin in function mode. The pin probe cannot answer the SD0 question; next probe is the amp side (CS35L41 ASP/DSP status) or an AFE internal loopback.
 

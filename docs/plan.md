@@ -9,7 +9,8 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
 2. ▶ **Bluetooth follow-ups** (B15): pairing works (Xbox controller). Built, untested: btbridge watchdog + SIGTERM,
    kernel108 = 107 + xnu 0231 (AirPods crash). Then 3 Mbaud / interrupt RX, faster boot firmware load. (bluetooth.md)
-3. **iOS sound path**: redfin's kernel APR stream + RedwoodAudio.driver HAL plug-in, once the speaker plays. (audio.md)
+3. ▶ **iOS sound path**: SunfishAudio.driver (null sink, from redfin) + VirtualAudio installed, mediaserverd stable (au1).
+   Next: AirPods playback test (user, daytime); later feed /dev/sunfish-audio to the ADSP. (audio.md)
 4. ▶ **Sensors -> auto-rotate** (B12): samples flow (per-sensor ports); iOS rotates natively on fake events, but a
    held real tilt only rotates on the way back (U10). Next: raw accel during a hold (logged now) -> axes/filter. (sensors.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
@@ -31,6 +32,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
 - U9 [DONE 2026-10-30: Xbox controller pairs; AirPods crash bluetoothd] Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
+- U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
 
