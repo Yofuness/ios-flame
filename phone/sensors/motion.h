@@ -41,7 +41,20 @@ enum {
 
 /* Sensor service index in struct motion_want. */
 enum { MOTION_ACCEL, MOTION_GYRO, MOTION_ALS, MOTION_PROX, MOTION_COMPASS, MOTION_PRESSURE, MOTION_ORIENT,
-	MOTION_NSENSORS };
+	MOTION_DEVMOTION, MOTION_NSENSORS };
+
+/*
+ * sunfish B46 (kernel 0243, sweetmotion bit 0x80): one raw device-motion report for the {0xff0c, 4} service,
+ * written alone (104 bytes); bytes[0] = report type (3/4: len 52, 2: len 88), see dm_fusion.h.
+ */
+#define MOTION_TYPE_DEVMOTION 40
+struct motion_devmotion {
+	uint32_t type;		/* MOTION_TYPE_DEVMOTION */
+	uint32_t len;
+	uint64_t ts_mach;
+	uint8_t bytes[88];
+};
+_Static_assert(sizeof(struct motion_devmotion) == 104, "motion_devmotion size");
 
 struct motion_want {
 	uint32_t version;		/* 1 */

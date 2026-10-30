@@ -15,6 +15,7 @@
 #include <sys/ioctl.h>
 #include "sensor.h"
 #include "sns_run.h"
+#include "dm_fusion.h"
 
 enum { M_NONE, M_LIST, M_STREAM, M_MOTION };
 static int mode, secs, delay_s = 10, dump, done, tries, one_port, unregistered;
@@ -37,15 +38,54 @@ static uint64_t written, write_errors;
 static int dark_token = -1, dark, dark_off;
 static struct sensor ss[8];
 static int nss;
+/*
+ * B46 (kernel 0243): SNS_DEVMOTION=1 runs dm_fusion on accel + gyro and writes one type-3 device-motion report per
+ * ~10 ms for the {0xff0c, 4} service (sweetmotion bit 0x80). Accel and gyro then stream at DM_HZ while that service
+ * exists and the screen is not blanked; samples iOS did not ask for are not posted (dm_only). Default off.
+ */
+#define DM_HZ 100.0f
+static int dm_env, dm_want, dm_only[8];
+static struct dm_fusion dm;
+static uint64_t dm_last_report, dm_written;
 
 #define ORIENT_HZ 15.0f		/* sensd: accel rate when it runs for orientation only */
 #define MAX_TRIES 5		/* lookups that found nothing: again every 10 s (the sensors PD may still load) */
+
+/* B46: feed the fusion; after a gyro sample, a report once >= 10 ms since the last one. */
+static void dm_feed(const struct motion_sample *m)
+{
+	uint64_t ts = m->ts_mach ? m->ts_mach : mach_absolute_time();
+	if (m->type == MOTION_TYPE_ACCEL) {
+		dm_accel(&dm, m->v);
+		return;
+	}
+	dm_gyro(&dm, m->v, ts, 19200000.0);	/* SEE stamps: the 19.2 MHz QTimer (= mach time) */
+	if (!dm.have_acc || ts - dm_last_report < 19200000ull / 100)
+		return;
+	dm_last_report = ts;
+	struct motion_devmotion d;
+	struct dm_report3 r;
+	memset(&d, 0, sizeof(d));
+	dm_report3(&dm, ts, &r);
+	d.type = MOTION_TYPE_DEVMOTION;
+	d.len = sizeof(r);
+	d.ts_mach = ts;
+	memcpy(d.bytes, &r, sizeof(r));
+	if (write(motion_fd, &d, sizeof(d)) == (ssize_t)sizeof(d))
+		dm_written++;
+	else if (write_errors++ < 5)
+		printf("sns: %s devmotion write: %s\n", motion_dev, strerror(errno));
+}
 
 static void out(void *ctx, struct sensor *s, const struct motion_sample *m)
 {
 	(void)ctx;
 	if (mode != M_MOTION || motion_fd < 0)
 		return;
+	if (dm_want && (m->type == MOTION_TYPE_ACCEL || m->type == MOTION_TYPE_GYRO))
+		dm_feed(m);
+	if (dm_only[s - ss] && !(s->orient_only && m->type == MOTION_TYPE_ORIENTATION))
+		return;		/* B46: streamed only for the fusion */
 	if (s->orient_only && m->type != MOTION_TYPE_ORIENTATION)
 		return;
 	struct motion_sample t;
@@ -205,6 +245,11 @@ static int start(void)
 	printf("sns: motion: %d sensors\n", nss);
 	env.orient = 1;
 	last_want = 0;
+	const char *e = getenv("SNS_DEVMOTION");
+	dm_env = e && !strcmp(e, "1");
+	dm_init(&dm, 0.04f);
+	if (dm_env)
+		printf("sns: SNS_DEVMOTION=1: fusion reports for the devmotion service\n");
 	return nss ? 0 : -1;
 }
 
@@ -226,6 +271,13 @@ static int follow(void)
 		printf("sns: orientation %s\n", orient_want ? "has clients: on" : "has no clients: off");
 	}
 	orient_clients_seen = orient_want;
+	int dm_now = dm_env && have && (w.present & (1u << MOTION_DEVMOTION)) && !dark;	/* B46; o12: idle while blanked */
+	if (dm_now != dm_want) {
+		printf("sns: devmotion fusion %s\n", dm_now ? "on" : "off");
+		if (dm_now)
+			dm_init(&dm, 0.04f);
+	}
+	dm_want = dm_now;
 	for (int i = 0; i < nss; i++) {
 		struct sensor *s = &ss[i];
 		int idx = s->k->motion_index, on = 1, orient_only = 0;
@@ -247,6 +299,16 @@ static int follow(void)
 			on = orient_only = 1;
 			hz = ORIENT_HZ;
 		}
+		int dmo = 0;
+		if (dm_want && (idx == MOTION_ACCEL || idx == MOTION_GYRO)) {	/* B46: the fusion needs both at DM_HZ */
+			dmo = !on || orient_only;
+			on = 1;
+			hz = hz < DM_HZ ? DM_HZ : hz;
+		}
+		if (dm_only[i] != dmo)
+			printf("sns: %s: %s\n", s->k->alias, dmo ? "kept for devmotion fusion (samples not posted)" :
+			    "devmotion fusion: back to normal");
+		dm_only[i] = dmo;
 		if (s->orient_only != orient_only)	/* as redfin's sensd */
 			printf("sns: %s: %s\n", s->k->alias, orient_only ?
 			    "iOS wants none: kept for orientation only (samples not posted)" : "posting samples again");
@@ -355,7 +417,10 @@ void sns_tick(const struct sns_link_ops *ops)
 		printf("sns: motion:");
 		for (int i = 0; i < nss; i++)
 			printf(" %s %llu%s", ss[i].k->alias, (unsigned long long)ss[i].count, ss[i].active ? "" : "(off)");
-		printf(", written %llu\n", (unsigned long long)written);
+		printf(", written %llu", (unsigned long long)written);
+		if (dm_env)
+			printf(", devmotion %llu", (unsigned long long)dm_written);
+		printf("\n");
 		last_print = now;
 	}
 	if (secs && now - t0 >= secs * 1000L) {	/* --sns-secs 0 = no limit (launchd job) */
