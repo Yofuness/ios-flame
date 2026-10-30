@@ -48,6 +48,13 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:00 tx1 + round 4: texture-upload census; row pitch is not the cause; B44 parked
+- tx1 (kernel126, bridge a77f0f7 with /var/local/mtl2-b44log, backboardd restarted): 234 B44 lines (backboardd: linearTexture 121, texture 78, iosurface 9, replaceRegion 8, blitTexToTex 3, iosurfacePlanar 2, getBytes 1; SpringBoard: texture 7, replaceRegion 3, layoutUpload 2). Log: work/tx1-mtl2.log. Garbled areas as in gm0 (shots work/shots/tx1-*.png); sizes ~115x70 (CC glyph), ~90x70 (lock glyph), ~235x210 (VM icon), ~1030x680 (Tips banner).
+- "linearTexture" = Apple SPI newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage: (NativeBridgeMetalFrontend.mm:321), same route as buffer textures: alias (DRM_FORMAT_MOD_LINEAR with Metal's exact row pitch) or, when Turnip refuses the pitch, the B29 shadow (optimal image + vkCmdCopyBufferToImage, bufferRowLength = row/bpp).
+- Census of 384 B29 lines: every row%64 == 0 texture is an alias, every row%64 != 0 one is a shadow, without exception. Shadowed A8 (49, glyph atlas) render fine; shadowed RGBA8/BGRA8/RG8 (19) include the garbled art. So Turnip never picks its own pitch; my 64-B pitch guess is refuted.
+- Left (not tested): misaligned buffer offsets (offset % texel size -> staging() path, buffer_texture.rs:1227), bytesPerImage ignored for slices (buffer_texture.rs:308-320). UBWC was already ruled out (round 2).
+- Parked (about half a day over 4 rounds without a visible fix): backlog B44 has the next step (log offset % texel bytes for shadowed 4-byte textures; one screen per run to tie textures to items).
+
 ### 2026-10-30 18:20 gm0-gm2: Turnip `sysmem` and `flushall,syncdraw` don't fix the garbled images; `sysmem` brings back the Control Center blur
 - Knob /var/local/mtl2-tu-debug (read once per process at launch, SweetMetal2.mm:213; was absent, removed again), backboardd restarted per run, kernel125, flame-shot of CC, Voice Memos, Tips, lock screen (work/shots/gm{0,1,2}-*.png).
 - gm0 baseline: 6 CC tiles garbled (2 top-left circles, 3 bottom tiles, right tile of the flashlight row), Voice Memos welcome icon garbled, Tips banner garbled with black bands, both lock-screen buttons garbled; CC background flat blue (no blur).
