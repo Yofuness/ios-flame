@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure (cam40), autofocus on open and on tap, sharp photos (af5-af7) work; open: shutter ignored after some reopens (B48), slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure (cam40), autofocus on open and on tap, sharp photos (af5-af7) work; Live Photo off by default (it filled mediaserverd until a kill); open: slow camera switch, front colour cast, preview CPU. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 23:45 mem1/lp1: LIVE PHOTO was filling mediaserverd; off by default now: 4 of 4 shutter presses save
+- mem1 (kernel128, footprint tool): Camera closed/background/screen off: mediaserverd rss 38-43 MB, flat. Rear preview with Live Photo on: rss 1.7 GB, footprint 33 GB (MALLOC_LARGE, 937 regions, ~35 MB each), killed ~33 s after the stream starts ("low swap ... size 49 GB"). Kills per boot today: 155135: 2, 161539: 2, 164250: 1, 170558: 7, 173029: 2, 173818: 6, 175437: 11, 183748: 7.
+- lp1: tap on the Live Photo button: footprint 14 GB -> 136 MB at once, then flat (MALLOC_LARGE 68-94 MB, 36 s). Shutter x4, 12 s apart: IMG_0008..0011 all saved, 0 new kills. tools/sunfish-camera-prefs.sh writes com.apple.camera.plist: CAMUserPreferenceDesiredIrisMode 0, CAMUserPreferencePreserveLivePhoto true (backup .bak-lp, cfprefsd restarted). After a relaunch: footprint 136-159 MB, button crossed out, preview sharp (work/shots/lp1-s.png).
+- What leaks in Live Photo mode is not known (Apple's Iris path + our software HEVC encoder inject is a guess; the allocations are not ours). Live Photo itself stays unsupported (O15).
+- CPU: mediaserverd still takes ~5 cores while previewing (64 CPU-s per 13 s, probably our software ISP; not profiled): a likely battery cost (O14).
 
 ### 2026-10-30 23:15 B48 analysis (work/af7/af7a.log): the kernel keeps killing mediaserverd (low swap); a stale START then blocks recovery
 - af7a.log: 14.991 photo made; 17.720 "low swap: killing largest compressed process with pid 571 (mediaserverd) and size 49502 MB" (jetsam low-swap, vm_compressor.c:619 -> kern_proc.c:4469/4521); Camera gets AVAudioSessionMediaServicesWereLost, 20.623 session runtime error -11819, "startRunning succeeded (took 9.006 seconds)", 31.083 "START -> 0 after 12058 ms", "opened after stop: closed at once". No stream-start timeout. Kills recur in recent boots (20261030-175437: 11, about every 53 s; 183748: 6; first in 155135, the show1 boot).
