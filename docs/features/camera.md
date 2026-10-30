@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 05:35 Camera.app prerequisites built (43bff35): kernel111, mkadt --camera, camera_avtest
+- xnu 0234 (redfin 0925: DisplayPipePlaneBaseAlignment = {PlaneBaseAlignmentLinear = 64}; `sweetclcdalign=0` = old number) + 0235 (redfin 0927: plane bytes per row also at +0x10 of the IOSurface lock result; `sweetplanebpr=0` off). kernel111 = kernel110 + 0234 + 0235 (37 s).
+- tools/mkadt.py `--camera`: /arm-io/isp (camera-rear 1, camera-front 1) + /product/camera flash 1; boot with `CAMERA=1 tools/sunfish-boot.sh ...` (work/boot/sunfish-hi-camera.adt), `ADT=PATH` for any tree; default unchanged.
+- Our inject_media.c already has the portrait-prewarm no-op and the filter-thumbnail fix. camera_avtest (lists AVCaptureDevices + formats only, no session) built.
+- Caution from redfin (r15a/b): camera ADT flags + a rebuilt MobileGestalt cache without a working capture device at mediaserverd start = SpringBoard stuck at the boot logo. So camd (launchd), the gate, StartRecorderServer and the MG cache move go in together: tools/sunfish-install-camera.sh (with --undo/--check) being written.
+
 ### 2026-10-31 05:20 Camera.app prerequisites gap check (read-only, research/notes/camera-stage-f-gaps.md)
 - Have: 0924's tccd camera sandbox extension (our 0219). Missing: (1) ADT /arm-io/isp + /product/camera nodes (redfin mkadt.py --camera) + a MobileGestalt cache made on them; (2) MediaToolbox SubServerConfiguration.plist StartRecorderServer = true (tools/sweet-root-tweaks.py sets it false); (4) 0925 DisplayPipePlaneBaseAlignment dictionary; (5) 0927 IOSurface plane bytes-per-row at +0x10; (6) SweetMetal2 YCbCr 420_2P / RGB10A8_2P textures for the preview (1-2 d); small: front camera rotation, filter-thumbnail hook, alerts, Live Photo off. Order: 0925+0927 -> ADT camera -> StartRecorderServer -> driver hooks -> SweetMetal2 YCbCr.
 - Being written: 0234/0235 (kernel111), mkadt --camera, camera_avtest (list devices only).
