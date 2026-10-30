@@ -1,7 +1,7 @@
 /*
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
- *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S] [--exposure L] [--gain C]]
+ *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure L] [--gain C]]
  * --stream FILE (camera stage b, rear only): after the ID read, write FILE's registers (`0xADDR 0xVAL DELAY_US` a
  * line, `#` comments; from tools/sunfish-camtab.py; at most 2000), read back 0x0136/0x0137/0x0112/0x0114, stream
  * on (0x0100 = 1), sample the frame counter 0x0005 every 100 ms for 1 s, read 0x0100, stream off. Any CCI error
@@ -11,6 +11,9 @@
  * on, in group hold (0x0104 = 1 .. 0): coarse integration 0x0202/0x0203 (clamped to 4 .. frame_length 0x0340/0x0341
  * - 40, redfin 0923 EXPOSURE_MARGIN), analog gain code 0x0204/0x0205 (clamped to 448 = 8x, Sony 512 - 512/g, redfin
  * gain max 8x for the IMX363); printed with their read-back.
+ * --ctl (camera f1, camd; with --stream): stream until stdin ends, "Q" or SIGINT/SIGTERM (then stream off), instead of
+ * --hold; stdin lines "E LINES CODE" (-1 = keep) apply exposure/gain as --exposure/--gain do, between frames in
+ * group hold; replies on fd 3: "S FL LINES CODE" at stream on, "E FL LINES CODE" (read back) or "X" per command.
  * --mclk-asis: leave the MCLK RCG as it is (e.g. 24 MHz from `camclk mclk 0 24`) instead of setting it to XO.
  * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
  * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
@@ -19,6 +22,7 @@
  * Hazard rule: no CAMCC register but GDSC/GDSC_CLK before the GDSC is on, no CCI register before the GDSC and
  * the cci_0 branch are on (enforced in mrd/mwr). Needs SE9 clocks + pins (boot with sweetse9=2).
  */
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,6 +66,9 @@ static int dry, keep, front, mclk_asis;
 static const char *stream_file;
 static int hold = 1, exp_lines = -1, gain_code = -1;	/* e1/e2: --hold, --exposure, --gain */
 static int gdsc_on, cci_clk_on, in_pd;
+static int ctl;	/* f1: --ctl */
+static volatile sig_atomic_t ctl_quit;
+static int rb_fl = -1, rb_lines = -1, rb_code = -1;	/* f1: last read back */
 
 /* --- MMIO with the hazard rule --- */
 static int allowed(uint64_t pa)
@@ -231,6 +238,10 @@ static void die(const char *msg)
 static void on_sig(int s)
 {
 	printf("camid: signal %d\n", s);
+	if (ctl) {	/* f1: the stream loop ends and turns the stream off */
+		ctl_quit = 1;
+		return;
+	}
 	power_down();
 	_exit(1);
 }
@@ -399,6 +410,7 @@ static int exposure(unsigned a)
 	if (dry)
 		fl = 0xffff;
 	printf("camid: frame_length 0x0340 = %d lines\n", fl);
+	rb_fl = fl;
 	unsigned lines = 0, code = 0;
 	if (exp_lines >= 0) {
 		int mx = fl - EXP_MARGIN < 4 ? 4 : fl - EXP_MARGIN;
@@ -425,11 +437,64 @@ static int exposure(unsigned a)
 	if (rl < 0 || rg < 0)
 		return -1;
 	printf("camid: readback coarse_integration 0x0202 = %d, analog_gain 0x0204 = %d\n", rl, rg);
+	rb_lines = rl, rb_code = rg;
 	return 0;
 }
 
 #define MAX_WRITES 2000
 static struct sw { unsigned addr, val, us, line; } sws[MAX_WRITES];
+
+/* f1 (--ctl): commands from camd on stdin while streaming, replies on fd 3; 0 = ended cleanly */
+static int ctl_loop(unsigned a)
+{
+	char buf[256];
+	size_t n = 0;
+	rb_fl = read_u16(a, 0x0340), rb_lines = read_u16(a, 0x0202), rb_code = read_u16(a, 0x0204);
+	dprintf(3, "S %d %d %d\n", rb_fl, rb_lines, rb_code);
+	for (int t = 0; !ctl_quit; t++) {
+		struct pollfd p = { .fd = 0, .events = POLLIN };
+		int r = poll(&p, 1, 100);
+		if (r > 0) {
+			ssize_t k = read(0, buf + n, sizeof buf - 1 - n);
+			if (k <= 0) {
+				printf("camid: ctl: stdin closed\n");
+				break;
+			}
+			n += (size_t)k;
+			buf[n] = 0;
+			char *nl;
+			while ((nl = strchr(buf, '\n'))) {
+				*nl = 0;
+				int l, c;
+				if (buf[0] == 'Q') {
+					printf("camid: ctl: Q\n");
+					return 0;
+				}
+				if (sscanf(buf, "E %d %d", &l, &c) == 2 && l <= 0xffff && c <= 0xffff) {
+					exp_lines = l, gain_code = c;
+					if (exposure(a))
+						dprintf(3, "X\n");
+					else
+						dprintf(3, "E %d %d %d\n", rb_fl, rb_lines, rb_code);
+				} else {
+					printf("camid: ctl: bad line \"%s\"\n", buf);
+					dprintf(3, "X\n");
+				}
+				n -= (size_t)(nl + 1 - buf);
+				memmove(buf, nl + 1, n + 1);
+			}
+			if (n >= sizeof buf - 1)
+				n = 0, buf[0] = 0;
+		}
+		if (t % 100 == 99) {	/* every 10 s */
+			int v = read_u8(a, 0x0005);
+			if (v < 0)
+				return -1;
+			printf("camid: ctl t=%d s frame_count 0x0005 = %d\n", (t + 1) / 10, v);
+		}
+	}
+	return 0;
+}
 
 static int stream(unsigned a)
 {
@@ -484,6 +549,10 @@ static int stream(unsigned a)
 	}
 	on = 1;
 	printf("camid: stream on\n");
+	if (ctl) {
+		rc = ctl_loop(a);
+		goto off;
+	}
 	for (int t = 1; hold > 1 && t <= hold; t++) {	/* e1 */
 		sleep(1);
 		int v = read_u8(a, 0x0005);
@@ -543,6 +612,8 @@ int main(int argc, char **argv)
 			mclk_asis = 1;
 		else if (!strcmp(argv[i], "--stream") && i + 1 < argc)
 			stream_file = argv[++i];
+		else if (!strcmp(argv[i], "--ctl"))
+			ctl = 1;
 		else if (!strcmp(argv[i], "--hold") && i + 1 < argc)
 			hold = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--exposure") && i + 1 < argc)
@@ -552,12 +623,12 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S] [--exposure LINES] [--gain CODE]]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure LINES] [--gain CODE]]\n");
 			return 2;
 		}
 	}
 	if (hold < 1 || hold > 900 || exp_lines > 0xffff || gain_code > 0xffff ||
-	    (!stream_file && (hold != 1 || exp_lines >= 0 || gain_code >= 0))) {
+	    (!stream_file && (hold != 1 || ctl || exp_lines >= 0 || gain_code >= 0))) {
 		fprintf(stderr, "camid: --hold 1-900, --exposure, --gain need --stream\n");
 		return 2;
 	}
