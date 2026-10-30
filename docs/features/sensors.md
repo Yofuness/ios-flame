@@ -16,6 +16,13 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:10 dm1: CoreMotion accepts our DeviceMotion reports; Compass draws its dial but has no north yet (kernel124)
+- Boot: kernel124 (xnu 0243), everyday recipe + sweetmotion=0xbf, /var/local/sensors.devmotion (SNS_DEVMOTION=1), adspboot 13:49 (backup adspboot.pre-dm). Battery 4455 mV; SSH 17 s; no resets.
+- Kernel: backboardd opens devmotion at 24.6 s (setProperties DeviceOpenedByEventSystem, MotionEventRestricted=false, PreserveTimestamp=true, ReportInterval=0). Compass sets ReportInterval=16667 at 102 s; type-3 52-byte reports flow from 106 s (#1000 at 124 s), 0 rejects. sensors.log: devmotion 562 -> 1101 -> 1639, accel ~3424, gyro ~3413, compass 1479.
+- Compass (cl2 log): "Starting device motion, mode=0x22, useGyro=1, useCompass=0, fUseNorthRef=1", then a decoded [CLSensorFusionService] q/userAccel/rotationRate sample; the old "{65292, 4} not ready" / "Could not set all properties" lines from Compass are gone. Screen (work/shots/dm1-compass.png): full dial N/E/S/W, needle at 0, grey centre, no heading number or coordinates.
+- Guess: fUseNorthRef needs the 9-axis report (type 2, with magnetometer + bias + accuracy); type 3 marks the field "none", so no heading. Next: type-2 reports with a hard-iron bias estimate (dm2).
+- locationd separately waits for {0xFF0C,1} and {0xFF0C,8} ("not ready", "Failed to configure motion coprocessor"; MotionOdometer/activity services) and sets {0xFF00,10} ReportInterval 25000: later.
+
 ### 2026-10-30 16:35 cs4: DeviceMotion report layout decoded; fake service being written (xnu 0243)
 - RE (research/notes/devicemotion.md "Report layout"): payload size must match a table at 0x191cd3cb8: type 2 = 88 bytes, types 3/4 = 52 bytes; little-endian float32; timestamp from the HID event (mach time). Type 3/4: q[x,y,z,w] @0x0c, rotationRate @0x1c, userAccel @0x28. Type 2 adds raw magnetometer, bias and accuracy. Units (g, rad/s, uT) and which class wants which type: not confirmed; type 3 is the first try.
 - Implementation started: SweetHID service {0xFF0C,4} behind a new sweetmotion bit 0x40 (default off), raw-report write path in /dev/redwood-motion, Madgwick fusion in phone/sensors (SNS_DEVMOTION=1).
