@@ -2747,7 +2747,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 					return 1;	/* --rpc: keep serving until the watch ends or a crash */
 			}
 		}
-		usleep(2000);
+		usleep(sns_dark() ? 20000 : 2000);	/* o12: 20 ms while the screen is blanked (SNS_DARK=0: off) */
 	}
 	return 0;
 }

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mach/mach_time.h>
+#include <notify.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "sensor.h"
@@ -28,6 +29,12 @@ static int have_orient;
 static long last_orient_ms;
 static unsigned long reposts;
 static uint64_t written, write_errors;
+/*
+ * o12: screen blanked (backboardd's notify_set_state on "com.apple.springboard.hasBlankedScreen", 1 = blanked):
+ * --sns-rot alone no longer keeps the accelerometer on, and adspboot's loop sleeps 20 ms instead of 2.
+ * SNS_DARK=0 turns it off.
+ */
+static int dark_token = -1, dark, dark_off;
 static struct sensor ss[8];
 static int nss;
 
@@ -212,7 +219,7 @@ static int follow(void)
 {
 	struct motion_want w;
 	int have = motion_fd >= 0 && ioctl(motion_fd, MOTION_GET_WANT, &w) == 0;
-	int orient_want = (have && (w.present & (1u << MOTION_ORIENT)) && w.clients[MOTION_ORIENT] > 0) || sns_rot;	/* u10f: --sns-rot needs orientation without an iOS client (sweetmotion=0x37) */
+	int orient_want = (have && (w.present & (1u << MOTION_ORIENT)) && w.clients[MOTION_ORIENT] > 0) || (sns_rot && !dark);	/* o12: not while blanked; u10f: --sns-rot needs orientation without an iOS client (sweetmotion=0x37) */
 	if (orient_want != orient_clients_seen) {
 		if (orient_want)
 			env.orient_cur = env.orient_cand = 0;	/* a new client: post the current orientation again */
@@ -259,6 +266,35 @@ static int follow(void)
 	return 0;
 }
 
+/* o12: poll the blanked state (a shared-memory check); 1 on a change. */
+static int dark_check(void)
+{
+	int changed = 0;
+	uint64_t st = 0;
+	if (dark_off)
+		return 0;
+	if (dark_token < 0) {
+		const char *e = getenv("SNS_DARK");
+		if ((e && !strcmp(e, "0")) || notify_register_check("com.apple.springboard.hasBlankedScreen", &dark_token) !=
+		    NOTIFY_STATUS_OK) {
+			dark_off = 1;
+			return 0;
+		}
+		changed = 1;
+	} else if (notify_check(dark_token, &changed) != NOTIFY_STATUS_OK)
+		return 0;
+	if (!changed || notify_get_state(dark_token, &st) != NOTIFY_STATUS_OK || (st != 0) == dark)
+		return 0;
+	dark = st != 0;
+	printf("sns: %s\n", dark ? "screen blanked: sensors idle" : "screen on: sensors back");
+	return 1;
+}
+
+int sns_dark(void)
+{
+	return mode == M_MOTION && t0 && dark;
+}
+
 void sns_tick(const struct sns_link_ops *ops)
 {
 	static int linked;
@@ -301,6 +337,8 @@ void sns_tick(const struct sns_link_ops *ops)
 				printf("sns: acc %.2f %.2f %.2f orient %d (cand %d)\n", ss[i].v[0], ss[i].v[1], ss[i].v[2],
 				    env.orient_cur, env.orient_cand);
 	}
+	if (mode == M_MOTION && dark_check())
+		last_want = 0;	/* o12: follow now; un-blank re-posts the orientation as for a new client */
 	if (mode == M_MOTION && now - last_want >= 2000) {
 		last_want = now;
 		follow();

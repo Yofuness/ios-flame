@@ -23,5 +23,7 @@ void sns_service(uint32_t node, uint32_t port);
 /* adspboot: called from its edge loop (never from inside a packet handler); ops is installed on the first call. */
 void sns_tick(const struct sns_link_ops *ops);
 void sns_summary(void);
+/* o12: 1 while --sns-motion runs and the screen is blanked (adspboot then polls every 20 ms). */
+int sns_dark(void);
 
 #endif
