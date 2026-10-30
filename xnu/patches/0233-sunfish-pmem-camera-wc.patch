@@ -1,0 +1,78 @@
+From b7382567e08c6e70fa8534ec63e833dd2aa78ea8 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 00:08:11 -0400
+Subject: [PATCH] sunfish: pmem reads/writes of the camera ring (carveout
+ 0x9cb00000 + 11 MB) through one write-combined mapping (0233)
+
+---
+ bsd/dev/sweet_pmem.c | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/bsd/dev/sweet_pmem.c b/bsd/dev/sweet_pmem.c
+index 3df0da0..bfca9cc 100644
+--- a/bsd/dev/sweet_pmem.c
++++ b/bsd/dev/sweet_pmem.c
+@@ -80,6 +80,8 @@ struct pmem_rpmh {
+ extern int sweet_rpmh_write(const char *res, unsigned n, const uint32_t *offsets, const uint32_t *values);
+ 
+ #define PMEM_MAPS       16              /* 2 MB device windows, round robin */
++#define PM_CAM_PA       0x9cb00000ULL   /* 0233: camera ring, see pm_rw */
++#define PM_CAM_LEN      0xb00000ULL
+ #define PMEM_WIN        0x200000ULL
+ 
+ static struct {
+@@ -111,6 +113,9 @@ pm_io(uint64_t pa)
+ 			return (volatile uint32_t *)(pm_map[i].va + (pa - win));
+ 		}
+ 	}
++	if (pa >= PM_CAM_PA && pa < PM_CAM_PA + PM_CAM_LEN) {
++		return NULL;    /* 0233: the camera ring is mapped write-combined (pm_rw); both mappings are uncached */
++	}
+ 	unsigned i = pm_map_next++ % PMEM_MAPS;
+ 	if (pm_map[i].va) {
+ 		ml_io_unmap(pm_map[i].va, PMEM_WIN);
+@@ -120,6 +125,16 @@ pm_io(uint64_t pa)
+ 	return pm_map[i].va ? (volatile uint32_t *)(pm_map[i].va + (pa - win)) : NULL;
+ }
+ 
++/*
++ * 0233 (camera f1: camd's copy of a 3.8 MB frame out of the carveout took ~276 ms
++ * through pm_io's device windows and 32-bit loads): the camera ring in the
++ * splash carveout (zero-copy slot1, unused without sweetfb_zerocopy) gets one
++ * write-combined (normal non-cacheable) mapping, so uiomove's bcopy can use
++ * wide loads. Not cached, so DMA from the IFE needs no cache maintenance; the
++ * range is never also mapped as device (pm_io refuses it below).
++ */
++static vm_offset_t pm_cam_va;
++
+ static int
+ pm_rw(struct uio *uio, bool write)
+ {
+@@ -136,6 +151,24 @@ pm_rw(struct uio *uio, bool write)
+ 			flush_dcache64((addr64_t)pa, n, TRUE);
+ 			continue;
+ 		}
++		if (pa >= PM_CAM_PA && pa + n <= PM_CAM_PA + PM_CAM_LEN) {
++			if (!pm_cam_va) {
++				pm_cam_va = ml_io_map_unmappable((vm_offset_t)PM_CAM_PA, PM_CAM_LEN, VM_WIMG_WCOMB);
++				if (!pm_cam_va) {
++					err = ENOMEM;
++					break;
++				}
++			}
++			caddr_t va = (caddr_t)(pm_cam_va + (pa - PM_CAM_PA));
++			if (write) {
++				err = uiomove(va, (int)n, uio);
++				__asm__ volatile ("dsb osh" ::: "memory");
++			} else {
++				__asm__ volatile ("dmb oshld" ::: "memory");
++				err = uiomove(va, (int)n, uio);
++			}
++			continue;
++		}
+ 		if ((pa | n) & 3) {
+ 			err = EINVAL;
+ 			break;
+-- 
+2.56.0
+

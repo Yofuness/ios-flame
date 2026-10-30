@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:25 xnu 0233 + kernel110: the camera ring gets a write-combined pmem mapping
+- sweet_pmem.c pm_rw: reads/writes of 0x9cb00000..+0xB00000 go through one ml_io_map_unmappable(..., VM_WIMG_WCOMB) mapping with uiomove (wide loads) instead of 2 MB device windows + 32-bit loads; pm_io refuses that range. Both mappings are uncached, so IFE DMA needs no cache maintenance. kernel110 = kernel109 + 0233 (built 40 s). To test: camd copy_us (was ~276 ms) and client fps (was 4.0).
+
 ### 2026-10-31 04:10 cam23 (kernel109, cam20r boot): f1 DONE, camd + camclient work end to end (9acd78a)
 - A (split camrx regression): `--stream 5` 60.00 fps (301 SOF / 300 done), 0 faults, past ring 0, restored: same as cam22.
 - B camd (started `(/var/local/bin/camd --log /var/local/camd.log ... &)`; the phone has no nohup/pgrep/timeout): /var/run/sunfish-camera.shm 12587008 B (3 x 4 MB slots, 2016x1512 RAW10) + .sock. `camclient -n 120`: START reply after 6.67 s, 120 frames read, seq 1..219, 0 torn, published 120, dropped 6, **client 4.0 fps (sensor 60.1): copy_us ~276 ms per frame through /dev/pmem pread (~14 MB/s)**; header 2016x1512 stride 2520 fmt 1 exp 1592 lines (16.47 ms) gain 256 frame_length 1608; mean byte 23.4. `camclient -n 60 -e 800 512`: exposure change while streaming took effect (headers: exp 1592 -> 800 lines, gain 256 -> 512; mean byte 24.6 -> 28.8). Teardown on last client: camid power-down, SMMU restored, "powered down"; SIGTERM exit clean. 3 min stable; camd.raw 3810240 B, 0 zero 1 KB blocks.
