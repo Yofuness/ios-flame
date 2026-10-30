@@ -1263,7 +1263,7 @@ static void swr_mbhc_run(void)
 		return;
 	}
 	uint32_t bg = (e16 == 2 || e17 > 9) ? (e29 & 0x0f) : 0x0e;
-	CDC_RMW(0x3103, 0x0e, (bg << 1) & 0x0e);
+	CDC_RMW(0x3103, 0x0e, bg & 0x0e);	/* Linux wcd937x_io_init: update_bits(SLEEP_CTL, 0x0E, e29 & 0x0F), no shift */
 	CDC_RMW(0x3103, 0, 0x80);
 	usleep(1000);
 	CDC_RMW(0x3103, 0, 0x40);
