@@ -209,8 +209,12 @@ static bool listed(void)
 		}
 		/* debugging: Turnip options for this process from /var/local/mtl2-tu-debug (TU_DEBUG), its log to /var/local/turnip-<proc>.log (or /var/local/turnip/<proc>-<pid>.log) */
 		{
-			char opts[128] = { 0 };
-			FILE *f = fopen("/var/local/mtl2-tu-debug", "r");
+			char opts[128] = { 0 }, knob[128];
+			/* /var/local/mtl2-tu-debug.<proc> (one process, e.g. backboardd; B47) wins over the global file */
+			snprintf(knob, sizeof(knob), "/var/local/mtl2-tu-debug.%s", getprogname());
+			FILE *f = fopen(knob, "r");
+			if (!f)
+				f = fopen("/var/local/mtl2-tu-debug", "r");
 			if (f) {
 				if (fgets(opts, sizeof(opts), f))
 					opts[strcspn(opts, "\r\n")] = 0;
