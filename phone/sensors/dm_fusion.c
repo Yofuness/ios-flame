@@ -10,6 +10,9 @@ void dm_init(struct dm_fusion *f, float beta)
 {
 	struct dm_magcal cal = f->cal;	/* dm7: the fit (and its ring) survives a restart of the fusion */
 	float smb[3], sgb[3];	/* dm5: and SEE's biases (on-change: they may not come again) */
+	float gb[3];		/* dm9: and our gyro bias */
+	int gbh = f->beta != 0 && f->gbias_have;
+	memcpy(gb, f->gbias, sizeof(gb));
 	int init = f->beta != 0, sms = f->see_mag_st, sgs = f->see_gyro_st;
 	memcpy(smb, f->see_mag_bias, sizeof(smb)), memcpy(sgb, f->see_gyro_bias, sizeof(sgb));
 	memset(f, 0, sizeof(*f));
@@ -19,6 +22,8 @@ void dm_init(struct dm_fusion *f, float beta)
 		f->cal.heading_tc = DM_HEADING_TC;
 	f->see_mag_st = init ? sms : -1, f->see_gyro_st = init ? sgs : -1;
 	memcpy(f->see_mag_bias, smb, sizeof(smb)), memcpy(f->see_gyro_bias, sgb, sizeof(sgb));
+	if (gbh)
+		memcpy(f->gbias, gb, sizeof(gb)), f->gbias_have = 1;
 	f->q[0] = 1.0f;
 	f->beta = beta;
 }
@@ -265,6 +270,9 @@ int dm_mag_ts(struct dm_fusion *f, const float m[3], uint64_t ts)
 	if (dm_mag_gate(f, m)) {	/* dm8 */
 		memcpy(f->mag_use, m, sizeof(f->mag_use));
 		f->have_mag_use = 1, f->mag_use_ts = ts;
+		f->mag_rej = 0;
+	} else {
+		f->mag_rej = 1;	/* dm9 */
 	}
 	if (!f->mag_seeded && f->have_acc)
 		dm_seed_mag(f);
@@ -341,11 +349,98 @@ int dm_magcal_save(const struct dm_fusion *f, const char *path)
 	return rename(tmp, path);
 }
 
+/* dm9: the still detector, and the gyro bias while still */
+static void dm_still_step(struct dm_fusion *f, const float gr[3], float dt)
+{
+	float an = sqrtf(f->acc[0] * f->acc[0] + f->acc[1] * f->acc[1] + f->acc[2] * f->acc[2]);
+	int calm = f->have_acc && an > 1e-3f && fabsf(gr[0]) < DM_STILL_GYRO && fabsf(gr[1]) < DM_STILL_GYRO &&
+	    fabsf(gr[2]) < DM_STILL_GYRO;
+	if (calm && f->still_t > 0 && fabsf(an - f->still_acc / f->still_t) > DM_STILL_ACC * f->still_acc / f->still_t)
+		calm = 0;
+	if (!calm) {
+		f->still = 0, f->still_t = 0, f->still_acc = 0;
+		memset(f->still_sum, 0, sizeof(f->still_sum));
+		return;
+	}
+	f->still_t += dt, f->still_acc += an * dt;
+	for (int i = 0; i < 3; i++)
+		f->still_sum[i] += gr[i] * dt;
+	if (f->still_t < DM_STILL_S)
+		return;
+	f->still = 1;
+	if (f->cal.gbias_off)
+		return;
+	float a = 1.0f - expf(-dt / DM_GBIAS_TC);
+	for (int i = 0; i < 3; i++)
+		f->gbias[i] = f->gbias_have ? f->gbias[i] + a * (gr[i] - f->gbias[i]) : f->still_sum[i] / f->still_t;
+	f->gbias_have = 1;
+	if (f->still_t > 1e4f)	/* keep the float sums precise; the mean of |accel| restarts from itself */
+		f->still_acc *= 0.5f, f->still_t *= 0.5f;
+}
+
+/* dm9: up in the device frame: low-passed accel, or q's while |accel| is far from 1 g */
+static void dm_grav_step(struct dm_fusion *f, float dt)
+{
+	float q0 = f->q[0], q1 = f->q[1], q2 = f->q[2], q3 = f->q[3];
+	float s[3] = { 2 * (q1 * q3 - q0 * q2), 2 * (q0 * q1 + q2 * q3), q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3 };
+	float an = sqrtf(f->acc[0] * f->acc[0] + f->acc[1] * f->acc[1] + f->acc[2] * f->acc[2]);
+	if (f->have_acc && fabsf(an - G_MS2) <= DM_GRAV_DEV * G_MS2) {
+		float a = f->grav_have ? 1.0f - expf(-dt / DM_GRAV_TC) : 1.0f;
+		for (int i = 0; i < 3; i++)
+			s[i] = f->grav[i] + a * (f->acc[i] / an - f->grav[i]);
+	}
+	float n = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+	if (n < 1e-3f || !isfinite(n))
+		return;
+	f->grav[0] = s[0] / n, f->grav[1] = s[1] / n, f->grav[2] = s[2] / n;
+	f->grav_have = 1;
+}
+
+int dm_heading_mag(const float u[3], const float m[3], float *deg)
+{
+	float w[3], n[3];
+	w[0] = u[1] * m[2] - u[2] * m[1], w[1] = u[2] * m[0] - u[0] * m[2], w[2] = u[0] * m[1] - u[1] * m[0];	/* west = up x m */
+	if (sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]) < 1e-3f)
+		return -1;
+	n[0] = w[1] * u[2] - w[2] * u[1], n[1] = w[2] * u[0] - w[0] * u[2], n[2] = w[0] * u[1] - w[1] * u[0];	/* north = west x up */
+	/* the device top (y), or the back (-z) when the top is near vertical; same convention as dm_heading_deg */
+	int top = fabsf(u[1]) < cosf(DM_HC_UPRIGHT * (float)M_PI / 180.0f);
+	float h = atan2f(top ? -w[1] : w[2], top ? n[1] : -n[2]) * 180.0f / (float)M_PI;
+	*deg = h < 0 ? h + 360 : h;
+	return 0;
+}
+
+/* dm9: one complementary-filter step: gyro about world z (clockwise from above raises the heading), then the mag */
+static void dm_heading_step(struct dm_fusion *f, float dt, int stale)
+{
+	float m[3], hm;
+	dm_grav_step(f, dt);
+	if (!f->grav_have)
+		return;
+	const float *u = f->grav, *g = f->gyro;
+	if (f->hc_have)
+		f->hc_h -= (u[0] * g[0] + u[1] * g[1] + u[2] * g[2]) * dt * 180.0f / (float)M_PI;
+	f->hc_hmag_ok = 0;
+	if (!stale && !f->mag_rej && dm_mag_cal(f, m) && !dm_heading_mag(u, m, &hm)) {
+		f->hc_hmag = hm, f->hc_hmag_ok = 1;
+		if (!f->hc_have) {
+			f->hc_h = hm, f->hc_have = 1;
+		} else {
+			int fast = fabsf(g[0]) >= DM_HC_FAST || fabsf(g[1]) >= DM_HC_FAST || fabsf(g[2]) >= DM_HC_FAST;
+			float d = fmodf(fmodf(hm - f->hc_h, 360.0f) + 540.0f, 360.0f) - 180.0f;
+			f->hc_h += (fast ? DM_HC_K_FAST : DM_HC_K_SLOW) * d * dt;
+		}
+	}
+	f->hc_h = fmodf(fmodf(f->hc_h, 360.0f) + 360.0f, 360.0f);
+	if (!isfinite(f->hc_h))
+		f->hc_have = 0;
+}
+
 void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_per_s)
 {
-	float g[3];	/* dm5: minus SEE's gyro_cal bias once it has one (status >= 1) */
+	float g[3];	/* dm5: minus SEE's gyro_cal bias once it has one (status >= 1); dm9: else our own */
 	for (int i = 0; i < 3; i++)
-		g[i] = gr[i] - (f->see_gyro_st >= 1 ? f->see_gyro_bias[i] : 0);
+		g[i] = gr[i] - (f->see_gyro_st >= 1 ? f->see_gyro_bias[i] : f->gbias[i]);
 	memcpy(f->gyro, g, sizeof(f->gyro));
 	f->have_gyro = 1;
 	if (!f->mag_seeded && f->have_acc && f->have_mag)
@@ -358,6 +453,8 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 	f->last_ts = ts;
 	if (dt > 0.1f)
 		dt = 0.1f;	/* a gap (sensor restarted): integrate at most 100 ms */
+	dm_still_step(f, gr, dt);	/* dm9 */
+	float beta = f->still && !f->cal.hc_off ? DM_BETA_STILL : f->beta;
 	float q0 = f->q[0], q1 = f->q[1], q2 = f->q[2], q3 = f->q[3];
 	float gx = g[0], gy = g[1], gz = g[2];
 	float qd0 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
@@ -395,10 +492,10 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 		float s3 = _2q1 * ea + _2q2 * eb + (-_4bx * q3 + _2bz * q1) * ex + (-_2bx * q0 + _2bz * q2) * ey + _2bx * q1 * ez;
 		float sn = sqrtf(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
 		if (sn > 1e-9f) {
-			qd0 -= f->beta * s0 / sn;
-			qd1 -= f->beta * s1 / sn;
-			qd2 -= f->beta * s2 / sn;
-			qd3 -= f->beta * s3 / sn;
+			qd0 -= beta * s0 / sn;
+			qd1 -= beta * s1 / sn;
+			qd2 -= beta * s2 / sn;
+			qd3 -= beta * s3 / sn;
 		}
 	} else if (f->have_acc && an > 1e-3f) {
 		ax /= an, ay /= an, az /= an;
@@ -411,10 +508,10 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 		float s3 = 4 * q1q1 * q3 - _2q1 * ax + 4 * q2q2 * q3 - _2q2 * ay;
 		float sn = sqrtf(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
 		if (sn > 1e-9f) {
-			qd0 -= f->beta * s0 / sn;
-			qd1 -= f->beta * s1 / sn;
-			qd2 -= f->beta * s2 / sn;
-			qd3 -= f->beta * s3 / sn;
+			qd0 -= beta * s0 / sn;
+			qd1 -= beta * s1 / sn;
+			qd2 -= beta * s2 / sn;
+			qd3 -= beta * s3 / sn;
 		}
 	}
 	q0 += qd0 * dt, q1 += qd1 * dt, q2 += qd2 * dt, q3 += qd3 * dt;
@@ -424,6 +521,8 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 		return;
 	}
 	f->q[0] = q0 / n, f->q[1] = q1 / n, f->q[2] = q2 / n, f->q[3] = q3 / n;
+	if (!f->cal.hc_off)
+		dm_heading_step(f, dt, stale);	/* dm9 */
 }
 
 /* q_out = qz(-yaw) * q: the device turns by +yaw about earth z as seen from the reference, heading += yaw */
@@ -488,7 +587,9 @@ void dm_report2(struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_repor
 	memcpy(r->mag_bias, b, sizeof(b));
 	/* dm3: locationd takes the heading ready-made from @0x44/@0x48 and needs status bit 8 */
 	float h = dm_heading_deg(q), dt = f->hd_have ? (float)((double)(ts - f->hd_ts) / 19200000.0) : 0;
-	if (f->cal.heading_tc > 0 && f->hd_have && ts > f->hd_ts && dt < 1.0f) {	/* dm7: wrap-aware low-pass */
+	if (f->hc_have && !f->cal.hc_off) {	/* dm9: smooth already; the 0.3 s low-pass would lag a turn by ~13 deg at 45 deg/s */
+		h = fmodf(fmodf(f->hc_h + yaw_deg, 360.0f) + 360.0f, 360.0f);
+	} else if (f->cal.heading_tc > 0 && f->hd_have && ts > f->hd_ts && dt < 1.0f) {	/* dm7: wrap-aware low-pass */
 		float d = fmodf(h - f->hd_out + 540.0f, 360.0f) - 180.0f;
 		h = fmodf(f->hd_out + d * (1.0f - expf(-dt / f->cal.heading_tc)) + 360.0f, 360.0f);
 	}

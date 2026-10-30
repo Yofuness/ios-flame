@@ -124,7 +124,8 @@ static void dm_feed(const struct motion_sample *m)
 			float h, a;
 			memcpy(&h, (const char *)&r + offsetof(struct dm_report2, heading), sizeof(h));
 			memcpy(&a, (const char *)&r + offsetof(struct dm_report2, heading_acc), sizeof(a));
-			printf("sns: hdg %.2f %.1f %.0f %.0f\n", (double)ts / 19200000.0, h, a,
+			printf("sns: hdg %.2f %.1f %.1f %.0f %.0f\n", (double)ts / 19200000.0, h,	/* dm9: hmag, -1 none */
+			    dm.hc_hmag_ok ? dm.hc_hmag : -1.0f, a,
 			    dm.mag_raw_ts ? (double)(ts - dm.mag_raw_ts) / 19200.0 : -1.0);
 			dm_trace_last = ts;
 		}
@@ -336,6 +337,10 @@ static int start(void)
 	dm.cal.hold_off = e && !strcmp(e, "0");
 	e = getenv("SNS_MAG_GATE");
 	dm.cal.gate_off = e && !strcmp(e, "0");
+	e = getenv("SNS_DM_GBIAS");	/* dm9: own gyro bias, 0 = off */
+	dm.cal.gbias_off = e && !strcmp(e, "0");
+	e = getenv("SNS_HEADING_CF");	/* dm9: complementary heading and still beta, 0 = off */
+	dm.cal.hc_off = e && !strcmp(e, "0");
 	e = getenv("SNS_HEADING_TRACE");
 	dm_trace = e && !strcmp(e, "1");
 	e = getenv("SNS_DM_TYPE");
@@ -572,6 +577,7 @@ void sns_tick(const struct sns_link_ops *ops)
 			printf(", mag gaps >200ms %u >1s %u max %llu ms, gate rej r %u dip %u", dm_gap_200, dm_gap_1s,
 			    (unsigned long long)(dm_gap_max / 19200), dm.rej_r, dm.rej_dip);	/* dm8 */
 			dm_gap_200 = dm_gap_1s = 0, dm_gap_max = 0;
+			printf(", gbias %.4f,%.4f,%.4f still %d", dm.gbias[0], dm.gbias[1], dm.gbias[2], dm.still);	/* dm9 */
 		}
 		printf("\n");
 		last_print = now;

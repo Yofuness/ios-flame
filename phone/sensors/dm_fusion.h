@@ -82,6 +82,24 @@ _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bi
 #define DM_MAG_DIP_N 15		/* dips in the running median */
 #define DM_MAG_GATE_STREAK 50	/* this many rejects in a row: accept anyway (the field really changed) */
 
+/*
+ * dm9: gyro bias and published heading. Still = every raw gyro axis < DM_STILL_GYRO and |accel| within DM_STILL_ACC of
+ * its mean, for DM_STILL_S: the window's average seeds the bias, then a DM_GBIAS_TC low-pass (SNS_DM_GBIAS=0: off; SEE
+ * gyro_cal wins with status >= 1). @0x44 comes from a complementary filter (SNS_HEADING_CF=0: q's yaw and beta fixed):
+ * gyro about world z plus DM_HC_K_* toward the tilt-compensated mag heading; beta is DM_BETA_STILL while still.
+ */
+#define DM_STILL_GYRO 0.03f	/* rad/s */
+#define DM_STILL_ACC 0.02f
+#define DM_STILL_S 2.0f
+#define DM_GBIAS_TC 5.0f	/* s */
+#define DM_GRAV_TC 0.2f		/* s: low-pass of the accel used as gravity */
+#define DM_GRAV_DEV 0.10f	/* |accel| further than this from 1 g: gravity from q */
+#define DM_HC_K_SLOW 0.7f	/* 1/s */
+#define DM_HC_K_FAST 0.2f	/* 1/s, |gyro| >= DM_HC_FAST */
+#define DM_HC_FAST 0.5f		/* rad/s */
+#define DM_HC_UPRIGHT 20.0f	/* deg: top this close to vertical: the back of the device gives the heading */
+#define DM_BETA_STILL 0.2f
+
 struct dm_fusion {
 	float q[4];		/* w x y z: device -> earth (z up) */
 	float beta;
@@ -101,10 +119,11 @@ struct dm_fusion {
 		float pend[3];
 		float heading_tc;		/* s, 0 = no heading low-pass */
 		int hold_off, gate_off;		/* dm8: env switches (SNS_MAG_HOLD=0, SNS_MAG_GATE=0) */
+		int gbias_off, hc_off;		/* dm9: env switches (SNS_DM_GBIAS=0, SNS_HEADING_CF=0) */
 	} cal;
 	/* dm8: mag used for the correction (gated), its time and the raw sample's time (ticks; 0 = untimed) */
 	float mag_use[3];
-	int have_mag_use;
+	int have_mag_use, mag_rej;	/* dm9: mag_rej: the newest sample failed the gate */
 	uint64_t mag_use_ts, mag_raw_ts;
 	float dip[DM_MAG_DIP_N];
 	int dip_n, dip_i, rej_streak;
@@ -115,6 +134,13 @@ struct dm_fusion {
 	/* dm5: SEE's own mag_cal/gyro_cal biases (survive dm_init); the mag one replaces the box while status >= 1 */
 	float see_mag_bias[3], see_gyro_bias[3];
 	int see_mag_st, see_gyro_st;	/* -1 none yet (set by dm_init), else SEE status 0-3 */
+	/* dm9: own gyro bias (survives dm_init, memory only), the still window and the complementary heading */
+	float gbias[3], still_sum[3], still_acc, still_t;
+	int gbias_have, still;
+	float grav[3];			/* unit, device frame, up */
+	int grav_have;
+	float hc_h, hc_hmag;		/* deg, 0..360 */
+	int hc_have, hc_hmag_ok;
 };
 
 void dm_init(struct dm_fusion *f, float beta);
@@ -140,6 +166,8 @@ int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: 
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
 float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */
+/* dm9: tilt-compensated heading of mag m (any scale) with up u (unit), device frame. 0 ok, -1 m along u */
+int dm_heading_mag(const float u[3], const float m[3], float *deg);
 #define DM_STATUS_HEADING 0x0100
 void dm_report2(struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r);
 

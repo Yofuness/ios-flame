@@ -44,6 +44,170 @@ static float run(const float earth_dev[3], float yaw, struct dm_report2 *r)
 	return heading(r);
 }
 
+/* dm9: field 20 uT north, 40 uT down + hard iron; top at heading th (deg), rolled by roll deg about the top axis */
+static const float t9_bias[3] = { 12, -30, 5 };
+static void t9_sense(float th, float roll, float m[3], float a[3], float noise)
+{
+	float t = th * (float)M_PI / 180, r = roll * (float)M_PI / 180, c = cosf(r), s = sinf(r);
+	float x0 = -20 * sinf(t), y0 = 20 * cosf(t), z0 = -40;
+	static unsigned seed = 9;
+	m[0] = x0 * c + z0 * s + t9_bias[0], m[1] = y0 + t9_bias[1], m[2] = -x0 * s + z0 * c + t9_bias[2];
+	for (int i = 0; i < 3; i++) {
+		seed = seed * 1103515245u + 12345u;
+		m[i] += noise * ((seed >> 8 & 0xffff) / 32768.0f - 1);
+	}
+	a[0] = 9.81f * s, a[1] = 0, a[2] = 9.81f * c;
+}
+
+static void t9_init(struct dm_fusion *f)
+{
+	memset(f, 0, sizeof(*f));
+	dm_init(f, 0.04f);
+	f->cal.have_cal = 1, f->cal.acc = 2, f->cal.r = 45;
+	memcpy(f->cal.c, t9_bias, sizeof(f->cal.c));
+}
+
+/* secs at 100 Hz gyro, 50 Hz mag, turning at rate deg/s (heading up); gb = gyro bias. Returns the largest heading
+ * step; *worst = the worst error from second "from" on */
+static float t9_run(struct dm_fusion *f, uint64_t *ts, float *th, float rate, float secs, float roll, const float gb[3],
+    float noise, float from, float *worst)
+{
+	float m[3], a[3], w = 0, step = 0, last = -1;
+	struct dm_report2 r;
+	float rc = cosf(roll * (float)M_PI / 180), rs = sinf(roll * (float)M_PI / 180), wz = -rate * (float)M_PI / 180;
+	int n = (int)(secs * 100);
+	for (int i = 0; i < n; i++, *ts += 192000) {
+		*th += rate * 0.01f;
+		t9_sense(*th, roll, m, a, noise);
+		float g[3] = { gb[0] + wz * rs, gb[1], gb[2] + wz * rc };	/* world z in the device frame */
+		dm_accel(f, a);
+		if (i % 2 == 0)
+			dm_mag_ts(f, m, *ts);
+		dm_gyro(f, g, *ts, 19200000.0);
+		dm_report2(f, *ts, 0, &r);
+		float h = r.heading, d = fabsf(fmodf(h - *th + 3600 + 180, 360) - 180);
+		if (last >= 0) {
+			float e = fabsf(fmodf(h - last + 540, 360) - 180);
+			step = e > step ? e : step;
+		}
+		last = h;
+		if (i * 0.01f >= from && d > w)
+			w = d;
+	}
+	if (worst)
+		*worst = w;
+	return step;
+}
+
+static float t9_err(float got, float want)
+{
+	float d = fabsf(fmodf(got - want + 3600, 360));
+	return d > 180 ? 360 - d : d;
+}
+
+static void t9_tests(void)
+{
+	struct dm_fusion f;
+	struct dm_report2 r;
+	float th, worst, q[4], m[3], a[3], h;
+	uint64_t ts;
+	const float none[3] = { 0, 0, 0 };
+#define T9_INIT(h0) (t9_init(&f), th = (h0), ts = 19200000, t9_sense(th, 0, m, a, 0), dm_accel(&f, a))
+#define T9_OK(c, ...) do { int o_ = (c); printf("%s ", o_ ? "ok  " : "FAIL"); printf(__VA_ARGS__); printf("\n"); fails += !o_; } while (0)
+	/* (a) a 0.5 deg/s bias, still, 60 s */
+	const float gb[3] = { 0.003f, -0.005f, 0.5f * (float)M_PI / 180 };
+	T9_INIT(40);
+	float st = t9_run(&f, &ts, &th, 0, 60, 0, gb, 0.5f, 0, &worst);
+	dm_report2(&f, ts, 0, &r);
+	memcpy(q, r.q, sizeof(q));
+	T9_OK(worst < 3, "dm9a bias 0.5 deg/s, 60 s: worst heading error %.2f, largest step %.3f", worst, st);
+	T9_OK(fabsf(f.gbias[2] - gb[2]) < 2e-4f && fabsf(f.gbias[0] - gb[0]) < 2e-4f && f.still,
+	    "dm9a gbias %.5f,%.5f,%.5f (true %.5f,%.5f,%.5f) still %d", f.gbias[0], f.gbias[1], f.gbias[2], gb[0], gb[1], gb[2], f.still);
+	T9_OK(t9_err(dm_heading_deg(q), th) < 3, "dm9a q yaw error %.2f", t9_err(dm_heading_deg(q), th));
+	/* the reinit keeps the bias; rotRate is unbiased */
+	float rr[3];
+	memcpy(rr, r.rot_rate, sizeof(rr));
+	T9_OK(fabsf(rr[2]) < 2e-4f, "dm9a rotRate z %.5f", rr[2]);
+	dm_init(&f, 0.04f);
+	T9_OK(f.gbias_have && fabsf(f.gbias[2] - gb[2]) < 2e-4f, "dm9 gbias survives dm_init");
+	/* SEE gyro_cal wins */
+	const float sb[3] = { 0.001f, 0.002f, 0.003f };
+	dm_gyro_cal_bias(&f, sb, 1);
+	dm_gyro(&f, sb, 0, 19200000.0);
+	T9_OK(f.gyro[0] == 0 && f.gyro[1] == 0 && f.gyro[2] == 0, "dm9 SEE gyro_cal status 1 wins over gbias");
+	/* (b) start 50 deg wrong, still; q is put wrong too */
+	T9_INIT(100);
+	t9_run(&f, &ts, &th, 0, 3, 0, none, 0, 0, NULL);
+	f.hc_h = 150;
+	float qz = 25 * (float)M_PI / 180, cz = cosf(qz), sz = sinf(qz), *fq = f.q;
+	float w0 = fq[0], x0 = fq[1], y0 = fq[2], z0 = fq[3];
+	fq[0] = cz * w0 - sz * z0, fq[1] = cz * x0 - sz * y0, fq[2] = cz * y0 + sz * x0, fq[3] = cz * z0 + sz * w0;
+	t9_run(&f, &ts, &th, 0, 5, 0, none, 0, 0, NULL);
+	dm_report2(&f, ts, 0, &r);
+	memcpy(q, r.q, sizeof(q));
+	h = r.heading;
+	T9_OK(t9_err(h, th) < 5, "dm9b 50 deg wrong, 5 s later error %.2f; q yaw error %.2f", t9_err(h, th),
+	    t9_err(dm_heading_deg(q), th));
+	/* (c) a 90 deg turn at 45 deg/s, across north */
+	T9_INIT(320);
+	t9_run(&f, &ts, &th, 0, 3, 0, none, 0, 0, NULL);
+	t9_run(&f, &ts, &th, 45, 2, 0, none, 0, 0, &worst);
+	dm_report2(&f, ts, 0, &r);
+	h = r.heading;
+	T9_OK(worst < 5 && t9_err(h, th) < 2, "dm9c turn 90 deg at 45 deg/s: worst %.2f, end %.2f (heading %.1f want %.1f)",
+	    worst, t9_err(h, th), h, th);
+	/* (d) 30 deg roll, still and turning */
+	T9_INIT(70);
+	t9_sense(th, 30, m, a, 0), dm_accel(&f, a);
+	t9_run(&f, &ts, &th, 0, 5, 30, none, 0, 0, &worst);
+	T9_OK(worst < 3, "dm9d roll 30 deg: worst %.2f", worst);
+	t9_run(&f, &ts, &th, 45, 2, 30, none, 0, 0, &worst);
+	T9_OK(worst < 5, "dm9d roll 30 deg, turn 90 deg: worst %.2f", worst);
+	/* (e) a single 30 uT spike */
+	T9_INIT(200);
+	t9_run(&f, &ts, &th, 0, 5, 0, none, 0, 0, NULL);
+	dm_report2(&f, ts, 0, &r);
+	float h0 = r.heading, big = 0;
+	t9_sense(th, 0, m, a, 0);
+	float spk[3] = { m[0] + 30, m[1], m[2] };
+	unsigned rj = f.rej_r + f.rej_dip;
+	dm_mag_ts(&f, spk, ts);
+	for (int i = 0; i < 100; i++, ts += 192000) {
+		if (i == 2)
+			dm_mag_ts(&f, m, ts);
+		dm_gyro(&f, none, ts, 19200000.0);
+		dm_report2(&f, ts, 0, &r);
+		big = t9_err(r.heading, h0) > big ? t9_err(r.heading, h0) : big;
+	}
+	T9_OK(big < 2 && f.rej_r + f.rej_dip == rj + 1, "dm9e 30 uT spike: heading moved %.3f", big);
+	/* convention and the upright fallback */
+	const float up[3] = { 0, 0, 1 }, upr[3] = { 0, 1, 0 };
+	const float mn[3] = { 0, 20, -40 }, me[3] = { -20, 0, -40 }, mw[3] = { 20, 0, -40 };
+	const float bn[3] = { 0, -40, -20 }, be[3] = { -20, -40, 0 };	/* upright: the back points north / east */
+	float hn, he, hw, hbn, hbe;
+	dm_heading_mag(up, mn, &hn), dm_heading_mag(up, me, &he), dm_heading_mag(up, mw, &hw);
+	dm_heading_mag(upr, bn, &hbn), dm_heading_mag(upr, be, &hbe);
+	T9_OK(t9_err(hn, 0) < 0.01f && t9_err(he, 90) < 0.01f && t9_err(hw, 270) < 0.01f && t9_err(hbn, 0) < 0.01f &&
+	    t9_err(hbe, 90) < 0.01f, "dm9 h_mag flat n/e/w %.1f %.1f %.1f, upright back n/e %.1f %.1f", hn, he, hw, hbn, hbe);
+	/* a bump: gravity comes from q, the heading stays; SNS_HEADING_CF=0: q's yaw */
+	T9_INIT(30);
+	t9_run(&f, &ts, &th, 0, 3, 0, none, 0, 0, NULL);
+	const float bump[3] = { 6, 0, 14 };
+	dm_accel(&f, bump);
+	t9_sense(th, 0, m, a, 0);
+	for (int i = 0; i < 30; i++, ts += 192000) {
+		dm_mag_ts(&f, m, ts);
+		dm_gyro(&f, none, ts, 19200000.0);
+	}
+	dm_report2(&f, ts, 0, &r);
+	h = r.heading;
+	T9_OK(t9_err(h, th) < 3, "dm9 accel bump 0.3 s: error %.2f", t9_err(h, th));
+	T9_INIT(30);
+	f.cal.hc_off = 1, f.cal.gbias_off = 1;
+	t9_run(&f, &ts, &th, 0, 3, 0, none, 0, 0, NULL);
+	T9_OK(!f.hc_have && !f.gbias_have && f.still, "dm9 switches off: no filter, no gbias");
+}
+
 int main(void)
 {
 	struct dm_report2 r;
@@ -252,6 +416,7 @@ int main(void)
 		printf("%s 6 s without mag: status 0x%x acc %.0f\n", ok ? "ok  " : "FAIL", r.status, r.heading_acc);
 		fails += !ok;
 	}
+	t9_tests();
 	/* O13: interest from the status text (devmotion8) and the 5 s hold */
 	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
 	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"
