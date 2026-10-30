@@ -1,18 +1,18 @@
-From 8f54e6fa4b09d4e29c0cd11ee1231a36dd9ad9f8 Mon Sep 17 00:00:00 2001
+From c31c9c6d76eeb1b1e71ef7f96075c55511e3cb5e Mon Sep 17 00:00:00 2001
 From: Yofuness <compiledchickennuggets@gmail.com>
 Date: Fri, 30 Oct 2026 15:06:04 -0400
 Subject: [PATCH] 0246 sunfish: reboot/sync sync in a helper thread with a 3 s
  limit; reboot! resets without sync
 
 ---
- bsd/dev/sweet_usb.c | 56 +++++++++++++++++++++++++++++++++++++++++----
- 1 file changed, 51 insertions(+), 5 deletions(-)
+ bsd/dev/sweet_usb.c | 55 ++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 50 insertions(+), 5 deletions(-)
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index ef04b62..18db92b 100644
+index ef04b62..4cad94d 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -1020,11 +1020,52 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1020,11 +1020,51 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
   * (to test the panic path); "reboot" resets
   * the phone with PSCI (the shim already set the PMIC reason to
   * bootloader, so it lands in fastboot). tools/flame-cmd.py sends them.
@@ -34,7 +34,6 @@ index ef04b62..18db92b 100644
 +	int32_t rv = 0;
 +	(void)sync(kernproc, NULL, &rv);
 +	__atomic_store_n(&ud_sync_state, 2, __ATOMIC_RELEASE);
-+	thread_terminate(current_thread());
 +}
 +
 +/* 0246: returns true if the sync finished within 3 s */
@@ -65,7 +64,7 @@ index ef04b62..18db92b 100644
  /*
   * Synthetic touches through the touchscreen's own path (SweetHID), in panel
   * pixels (0..1079, 0..2279): "tap X Y", "swipe X1 Y1 X2 Y2 MS" (finger 9,
-@@ -1105,11 +1146,14 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1105,11 +1145,14 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
  		}
  		cmd[got] = 0;
  		printf("SWEET CMD: %u bytes: %.60s\n", (unsigned)got, cmd);
@@ -84,7 +83,7 @@ index ef04b62..18db92b 100644
  			if (cmd[0] == 's') {
  				continue;
  			}
-@@ -1163,7 +1207,9 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1163,7 +1206,9 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
  			panic("SWEET CMD: panic requested over USB");
  		}
  		if (strncmp(cmd, "reboot", 6) == 0) {
