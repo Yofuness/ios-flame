@@ -35,6 +35,8 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:58 The user: the camera can't focus on far things (range 400..725 inferred; backlog Later). Compass on dm12: more consistent, 20-30 deg off the Pixel 8 Pro, still jumps; both saved for later at the user's request.
+
 ### 2026-10-30 23:55 s1: first camera session after a boot can ignore the shutter (B48)
 - dm12 boot, Live Photo off, 0 kills: shutter in the first session after the boot saved nothing (like af6, af7 A). Same boot, Camera reopened (H, openapp x2, 15 s): IMG_0012.HEIC. Log of that good try still has captureSession_captureStillImageNow "Timed out ... waiting" and "Can't cancel deferred graph setup" (cause unknown; a slow first graph start is a guess).
 
