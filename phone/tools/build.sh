@@ -36,5 +36,6 @@ build netsvc netsvc.m -fobjc-arc -framework Foundation -framework SystemConfigur
 build vtdecode vtdecode.m -fobjc-arc -framework Foundation -framework AVFoundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 build memwarn memwarn.c
 build pmem pmem.c
+build pinsample pinsample.c	# sp15: fast read-only register sampler
 build a2s a2s.c
 ls -l out
