@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:00 dm11 live: the user: still jumps; ~20 deg off the Pixel 8 Pro at worst, after turning a couple of times
+- Status after the session: "cal fit r 31.4 res 3.05 n 260 bias -33.0,-49.0,-82.7, gate rej r 115 dip 247, gbias -0.0101,-0.0062,0.0096". r fell 43.5 -> 33.6 -> 31.4 while z drifted -64 -> -83: the sphere fit degenerates on flat turning. "cal fit" on all 263 status lines: the gyro-aided fit never took over live, though it does in replay, also in arrival order (DM_REPLAY_ORDER=file). Not understood yet. Trace off in this build (0 hdg lines).
+- dm12 in progress: sphere guard, gyro-aided counters in the status line, jump reduction checked on rec1. After that Compass gets parked (half-day rule long passed): usable, not accurate.
+
 ### 2026-10-30 20:15 cam39/cam40: a sensor stall fixed: the ADSP's big message needs a big intent (port 96b6ecb)
 - cam39 (kernel127, dm11): with Compass open "accel: no response to request 513 (txn N)" repeated, gyro and compass stayed off, thousands of "IPCRTR asks for an intent of 8880 bytes": our answer always offered a 4096 B intent (give_intents(c, 1, 4096)), so the message never came and everything behind it on IPCRTR stalled. Not known why this message appeared in this boot and not before (dm11 itself didn't touch the link).
 - Fix: grant the size asked for (up to rxbuf, 16384 B); log the first 8 asks per channel. cam40: no-response 0, asks 8, none >= 1000 B; accel 2998, gyro 2972, compass ~1000, devmotion rising; Compass 120 deg SE on the desk. Compass heading itself on dm11: not re-tested by hand.
