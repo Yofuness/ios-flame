@@ -23,6 +23,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:05 3 Mbaud: firmware in 3.7 s (bt11, kernel108; btbridge b5b6b95)
+- After power-on + version at 115200: RFR not ready, QCA 0xfc48 code 14 (3000000, Linux btqca.h qca_baudrate), 10 ms, SE3 RCG to 96 MHz (GPLL0 even 8/25, Linux gcc-sm7150.c ftbl_gcc_qupv3_wrap0_s0_clk_src) at 32 samples/bit, RFR auto: "uart: baud 3000000: version ok (code 0xe, se clock 96000000 Hz)". The NVM baud byte now carries the code, so HCI_Reset keeps 3M.
+- Patch 210348 B in 3.7 s (was 20 s, 52 s at boot), NVM 0.1 s, HCI_Reset OK, ready; bluetoothd connected at 72 s (two earlier connects before the bridge was ready, harmless) and stayed up; stats: 0 dropped, 0 overruns. `-B 0` = old 115200.
+
 ### 2026-10-30 20:00 AIRPODS CONNECT (bt10, kernel108; btbridge 297af9f)
 - Automatic RX flow control (SE_UART_MANUAL_RFR 0x2ac = 0, RX RFR watermark = FIFO depth - 2 = 30 words of 32), RX drained during TX, a 64 KB ring, per-packet logging off (-v), priority -10. Bring-up 1 failed once at boot, bring-up 2 worked (cause open).
 - The user: AirPods Pro 2 connect, noise control (transparency / noise cancelling) switches from Settings, and the Find My owner notice shows. No bluetoothd crash.
