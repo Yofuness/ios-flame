@@ -718,8 +718,16 @@ int rx_arm(void)
 	if (csid_reset())
 		return 1;
 	stage("csid rx from csiphy0 (4 lanes)");
-	cw(RX_CFG0, (PHY_LANES - 1) | PHY_LANE_MAP << 4 | cam->phy << 20,	/* cam-f1: phy 2 for the front */
-	   cam->phy ? "RX_CFG0 4 lanes, lane map, phy 2" : "RX_CFG0 4 lanes, lane map, phy 0");
+	/* cam29: CSIPHY2 sees the front sensor's lanes (status like the rear's) but CSID-lite got 0 packets with
+	 * PHY_NUM_SEL 2: CAMRX_PHY_SEL=N (0..3) overrides the select to find the encoding */
+	unsigned sel = cam->phy;
+	const char *ps = getenv("CAMRX_PHY_SEL");
+	if (ps != NULL && ps[0] >= '0' && ps[0] <= '3' && ps[1] == 0) {
+		sel = (unsigned)(ps[0] - '0');
+		printf("camrx: RX_CFG0 PHY_NUM_SEL %u from CAMRX_PHY_SEL (path phy %u)\n", sel, cam->phy);
+	}
+	cw(RX_CFG0, (PHY_LANES - 1) | PHY_LANE_MAP << 4 | sel << 20,	/* cam-f1: phy 2 for the front */
+	   sel ? "RX_CFG0 4 lanes, lane map, phy sel != 0" : "RX_CFG0 4 lanes, lane map, phy 0");
 	cw(RX_CFG1, 1u << 6 | 1u, "RX_CFG1 ECC correction + MISR (0x41)");
 	rdi0_config(0);
 	printf("camrx: armed; RX_PKTS %u. Start the sensor stream now, then 'camrx rx report'\n", cr(RX_PKTS));
