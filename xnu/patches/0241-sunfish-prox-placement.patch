@@ -1,0 +1,28 @@
+From ffcc8b2ed4efd95de20e45dd52636eda11c48a14 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 10:52:12 -0400
+Subject: [PATCH] 0241 sunfish: prox service Placement = 1 (backboardd's
+ discrete prox wrapper; the NSNull applyUIMode crash loop)
+
+---
+ iokit/Kernel/arm/hid/SweetHID.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 296a837..b36412b 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -836,6 +836,10 @@ SweetHIDSensor::start(IOService *provider)
+ 		setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 		setProperty("ProtectedAccess", kOSBooleanFalse);
+ 		setProperty("SensorPropertySupported", kOSBooleanTrue);
++		/* 0241: backboardd's prox wrapper factory (+[BKHIDUISensorConfiguratorFactory _proximityServiceWrapper],
++		   block 0x100047134) returns nil without Placement == 1 ("not top placement"), which became NSNull and
++		   crash-looped backboardd in -[NSNull applyUIMode:] (px1). 1 = top; no NeedsHostState = the discrete wrapper. */
++		setProperty("Placement", 1ULL, 32);
+ 	}
+ 	setProperty(kIOHIDBatchIntervalKey, 0ULL, 32);
+ 	setProperty(kIOHIDSensorPropertySampleIntervalKey, (unsigned long long)info->interval, 32);
+-- 
+2.56.0
+
