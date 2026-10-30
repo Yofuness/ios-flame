@@ -23,6 +23,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:05 bt12 (kernel111, CAMERA=1 boots): first bring-up fixed: BT up on 4 of 4 boots (e8dc3b7)
+- Cause (research/notes/bt-boot-failures.md, 18 boots 20:07-01:18): 2 failed (11 %), both "wifi: rails up after 0 s": wait_wifi() found the LAST boot's "modem ready" in /var/local/wland.log (wland renames it to .prev only when it starts), so btbridge powered the chip before this boot's wland had it up: UART RX low ("gpio: ... rx 0"), "version reply (0 bytes)", 3 tries in ~45 s, "no controller, stop", Bluetooth gone for the boot (bluetoothd looping "no bridge yet").
+- Fix: only a wland.log with mtime >= kern.boottime counts; after 3 failed tries, 5 more rounds 30 s apart instead of exiting.
+- bt12-1..4: battery 4439-4440 mV, Wi-Fi wait 10 / 6 / 9 / 21 s, no failed bring-up, "baud 3000000: version ok", "ready, pumping", btbridge + bluetoothd running (4 min after the last boot). Installed: /var/local/bin/btbridge (tools/sunfish-install-btbridge.sh path).
+
 ### 2026-10-30 21:05 3 Mbaud: firmware in 3.7 s (bt11, kernel108; btbridge b5b6b95)
 - After power-on + version at 115200: RFR not ready, QCA 0xfc48 code 14 (3000000, Linux btqca.h qca_baudrate), 10 ms, SE3 RCG to 96 MHz (GPLL0 even 8/25, Linux gcc-sm7150.c ftbl_gcc_qupv3_wrap0_s0_clk_src) at 32 samples/bit, RFR auto: "uart: baud 3000000: version ok (code 0xe, se clock 96000000 Hz)". The NVM baud byte now carries the code, so HCI_Reset keeps 3M.
 - Patch 210348 B in 3.7 s (was 20 s, 52 s at boot), NVM 0.1 s, HCI_Reset OK, ready; bluetoothd connected at 72 s (two earlier connects before the bridge was ready, harmless) and stayed up; stats: 0 dropped, 0 overruns. `-B 0` = old 115200.

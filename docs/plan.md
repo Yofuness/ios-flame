@@ -8,7 +8,7 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
 1. **Speaker** (B16): PARKED 2026-10-30 after ~15 runs (all silent; amp, DSP, routing, memory proven); next: prove
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
 2. **Bluetooth follow-ups** (B15): Xbox controller + AirPods pair and connect (auto RFR flow control), 3 Mbaud
-   (firmware 3.7 s). Open: btbridge first bring-up sometimes fails at boot; AirPods audio = U11. (bluetooth.md)
+   (firmware 3.7 s). Boot bring-up fixed (bt12: 4/4). Open: AirPods audio = U11. (bluetooth.md)
 3. ▶ **iOS sound path**: SunfishAudio.driver (null sink, from redfin) + VirtualAudio installed, mediaserverd stable (au1).
    Next: AirPods playback test (user, daytime); later feed /dev/sunfish-audio to the ADSP. (audio.md)
 4. **Sensors -> auto-rotate** (B12): WORKS (adspboot --sns-rot writes R N; sweetmotion=0x37; the user confirmed).

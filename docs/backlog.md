@@ -18,7 +18,7 @@ history in the feature Logs.
 - B12 Sensors: [MOSTLY DONE 2026-10-30] auto-rotate works via the ADSP SNS client (sensors.md); open: proximity/light into iOS.
 - B13 Battery % while discharging unchecked (U3).
 - B14 Charging drain under load = the USB source's budget; optional read-only TYPEC/APSD check (U4).
-- B15 Bluetooth: [MOSTLY DONE 2026-10-30] pairing + AirPods connect, 3 Mbaud (bluetooth.md); open: first bring-up sometimes fails at boot, AirPods audio (U11).
+- B15 Bluetooth: [MOSTLY DONE 2026-10-30] pairing + AirPods connect, 3 Mbaud (bluetooth.md); first bring-up fixed 2026-10-30 (bt12); open: AirPods audio (U11).
 - B16 Audio: see priority 1; then APR + CS35L41 for a beep (U5).
 - B17 Camera frames: [DONE 2026-10-31] both cameras stream into RAM (rear 60 fps, front 30 fps), camd + camera_device in SunfishAudio.driver; iOS lists both (camera.md).
 - B19 Respawn loops: lskdd, fairplayd.H2, wifip2pd dropped 2026-10-29; bluetoothd (10 s) kept until B15.
