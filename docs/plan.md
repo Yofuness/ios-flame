@@ -16,7 +16,7 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
 6. ▶ **Camera** (B17): plan research/notes/camera-port.md (6 stages); a2 + b DONE (MCLK 24 MHz, IMX363 streams ~62 fps;
-   boot sweetse9=2 sweetcampmic=2, `camid --addr 0x1a --stream`). iOS lists the Back Camera (cam26, kernel111 CAMERA=1). Next: worker reopen fix, then Camera.app (U12), SweetMetal2 YCbCr preview. (camera.md)
+   boot sweetse9=2 sweetcampmic=2, `camid --addr 0x1a --stream`). iOS lists the Back Camera (cam26-27, kernel111 CAMERA=1; no unwanted stream). Next: Camera.app (U12), SweetMetal2 YCbCr preview. (camera.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
 IMX363/IMX355 sensors; 3-5 days).
 
@@ -34,7 +34,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
 - U9 [DONE 2026-10-30: Xbox controller pairs; AirPods crash bluetoothd] Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
-- U12 Camera app (when you're up): Claude turns the camera gate on and starts camd; you open Camera (Utilities folder) and say what you see (preview? photo?). ~2 min.
+- U12 Camera app (when you're up): ready now (kernel111, camera on, camd idle): open Camera (Utilities folder), say what you see (preview may be black: SweetMetal2 YCbCr not done), try one photo, check Photos. ~2 min.
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).

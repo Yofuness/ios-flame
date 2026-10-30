@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 06:20 cam27 (kernel111, CAMERA=1): the worker fix holds, no unwanted stream; camd enabled + idle
+- 7de5516 + ebf31dd installed (SunfishAudio.driver), camd re-enabled. Battery 4455 mV, boot OK, lock screen at +60 s.
+- camdev.log: the boot prewarm "stream: frames begin (format 0, a photo mode)" -> socket not there yet -> "device: streams given back (1)" -> **"reopen skipped: stream given back (1)"** -> "stream: stop (0 frames, 0 pictures given)". camd.log: only its start; no START/STOP; no camid child. camd CPU 0.06 / 0.11 / 0.13 / 0.19 s over ~4 min (idle polling). camera_avtest: "Back Camera", 16 formats; still idle after it. 2 min stable.
+- State left for the user's Camera.app test (U12): kernel111 CAMERA=1 boot, camera setup installed, camd enabled and idle.
+- The lock-screen clock digits turned to noise again later in this boot with the camera never streaming: B29, not the camera.
+
 ### 2026-10-31 05:55 cam26 (kernel111, CAMERA=1 ADT): iOS LISTS THE BACK CAMERA; a stream kept running unwanted (fixed by hand, bug being fixed)
 - `tools/sunfish-install-camera.sh` (ffe92d6): 7 tools + table; launchd job org.iosonpixel.camd (backup launchd.plist.pre-camera); camdev.on + camdev.log 0666; StartRecorderServer = true in MediaToolbox D22/D221/Default (backups .before-camera); MobileGestalt cache moved aside (copy .pre-camera). Battery 4440 mV. `CAMERA=1 tools/sunfish-boot.sh cam26 work/kernel111/... sweetse9=2 sweetcampmic=2`: SSH ~10 s, **SpringBoard up at ~60 s** (no boot-logo hang), lock screen at +60/+120/+240 s; no new mediaserverd crash.
 - camdev.log: "plug-in loaded in mediaserverd (pid 29)" (at boot), "gate: camera on", swizzles replaced, "the camera's device vendor made", "the device made: 1 streams". **camera_avtest: 1 video device "Back Camera" (built-in_video:0), position 1 (back), 16 formats (420v/420f, 960x540 .. 4032x3024, up to 60 fps), active 1920x1080.** Front camera not listed (by design).
