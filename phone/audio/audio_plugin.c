@@ -797,6 +797,24 @@ unknown_call(AudioObjectID object, const AudioObjectPropertyAddress *address, co
 	    (int)(c >> 24 & 0xff), (int)(c >> 16 & 0xff), (int)(c >> 8 & 0xff), (int)(c & 0xff), (unsigned)address->mElement, call);
 }
 
+/* sunfish S4: every 'jack' call, answered or not (VirtualAudio checks HasProperty('jack') once per process) */
+static void
+jack_call(AudioObjectID object, const AudioObjectPropertyAddress *address, pid_t client, const char *call, long answer)
+{
+	UInt32 c;
+
+	if (!jack_enabled || address == NULL || address->mSelector != kAudioDevicePropertyJackIsConnected) {
+		return;
+	}
+	if (__atomic_fetch_add(&jack_asked, 1, __ATOMIC_RELAXED) >= JACK_ASKED) {
+		return;
+	}
+	c = address->mScope;
+	say("sunfish: audio: jack call obj %u '%c%c%c%c' %u from pid %d: %s -> %ld\n", (unsigned)object,
+	    (int)(c >> 24 & 0xff), (int)(c >> 16 & 0xff), (int)(c >> 8 & 0xff), (int)(c & 0xff), (unsigned)address->mElement,
+	    (int)client, call, answer);
+}
+
 /* Whether the object has the property, without telling (has_property() tells). */
 static Boolean
 known(AudioObjectID object, const AudioObjectPropertyAddress *address)
@@ -814,11 +832,12 @@ known(AudioObjectID object, const AudioObjectPropertyAddress *address)
 }
 
 static Boolean
-has_property(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
+has_property(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
     const AudioObjectPropertyAddress *address)
 {
 	Boolean has = known(object, address);
 
+	jack_call(object, address, client, "Has", has);
 	if (!has) {
 		unknown_call(object, address, "Has");
 	}
@@ -853,9 +872,10 @@ is_property_settable(__unused AudioServerPlugInDriverRef driver, AudioObjectID o
 }
 
 static OSStatus
-get_property_data_size(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
+get_property_data_size(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
     const AudioObjectPropertyAddress *address, UInt32 qualifier_size, const void *qualifier, UInt32 *size)
 {
+	jack_call(object, address, client, "Size", address != NULL && known(object, address));
 	if (address == NULL || size == NULL || !known(object, address)) {
 		if (object >= OBJECT_PLUGIN && object <= OBJECT_LAST) {
 			unknown_call(object, address, "Size");
@@ -867,12 +887,13 @@ get_property_data_size(__unused AudioServerPlugInDriverRef driver, AudioObjectID
 }
 
 static OSStatus
-get_property_data(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
+get_property_data(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
     const AudioObjectPropertyAddress *address, UInt32 qualifier_size, const void *qualifier, UInt32 room, UInt32 *size,
     void *data)
 {
 	struct value v;
 
+	jack_call(object, address, client, "Get", address != NULL && known(object, address) ? (long)jack_state : -1);
 	if (address == NULL || size == NULL || data == NULL || !known(object, address)) {
 		if (object >= OBJECT_PLUGIN && object <= OBJECT_LAST) {
 			unknown_call(object, address, "Get");
