@@ -50,6 +50,7 @@ build camclient camclient.c	# camera f1: camd test client
 build a2s a2s.c
 build jackset jackset.c	# headphone jack S4: org.iosonpixel.jack state + post
 build mgq mgq.c -framework CoreFoundation	# MobileGestalt answers (ambient light)
+build sbcont sbcont.c	# sandbox container path for a pid (xnu 0240 test)
 build autobright autobright.m -fobjc-arc -framework Foundation	# Auto-Brightness via CoreBrightness's client
 build shot shot.m -fobjc-arc -framework Foundation -framework CoreGraphics -framework ImageIO -framework IOSurface	# D7: render-server screenshot (iOSPlus10)
 build fpfix.dylib fpfix.m -dynamiclib -fobjc-arc -framework Foundation	# B37: FPDVolume APFS checks off in fileproviderd
