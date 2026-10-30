@@ -107,6 +107,24 @@ int main(void)
 	printf("%s SEE status 0 -> accuracy 0x%x, gyro_cal rotRate %.4f,%.4f,%.4f\n", ok ? "ok  " : "FAIL",
 	    r.mag_accuracy, rr[0], rr[1], rr[2]);
 	fails += !ok;
+	/* O13: interest from the status text (devmotion8) and the 5 s hold */
+	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
+	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"
+	    "device: 1 writes, 0 samples, 0 rejected, last pid 1\n";
+	const char *st0 = "devmotion8  page 0xff0c usage 0x08 clients 1 ReportInterval 25000 us (default) events 0\n";
+	ok = dm_status_interval(stx, "devmotion8") == 20000 && dm_status_interval(stx, "devmotion") == 0 &&
+	    dm_status_interval(st0, "devmotion8") == 0 && dm_status_interval("", "devmotion8") == 0 &&
+	    dm_status_interval("devmotion8  not registered (sweetmotion=0x1ff)\n", "devmotion8") == 0;
+	printf("%s status text: devmotion8 interval parsed, default/missing = 0\n", ok ? "ok  " : "FAIL");
+	fails += !ok;
+	struct dm_gate g = { 0, 0 };
+	int s0 = dm_gate_step(&g, 0, 1000), s1 = dm_gate_step(&g, 1, 2000), s2 = dm_gate_step(&g, 0, 4000),
+	    s3 = dm_gate_step(&g, 0, 8999), s4 = dm_gate_step(&g, 1, 9000), s5 = dm_gate_step(&g, 0, 10000),
+	    s6 = dm_gate_step(&g, 0, 14999), s7 = dm_gate_step(&g, 0, 15000);
+	ok = !s0 && s1 && s2 && s3 && s4 && s5 && s6 && !s7;
+	printf("%s gate: off, on at once, held 5 s, re-armed, off after 5 s (%d%d%d%d%d%d%d%d)\n", ok ? "ok  " : "FAIL",
+	    s0, s1, s2, s3, s4, s5, s6, s7);
+	fails += !ok;
 	printf("%s\n", fails ? "dm: FAILED" : "dm: all ok");
 	return !!fails;
 }

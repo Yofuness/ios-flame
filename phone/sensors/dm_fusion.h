@@ -93,4 +93,18 @@ float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0.
 #define DM_STATUS_HEADING 0x0100
 void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r);
 
+/*
+ * O13: run the fusion only while a client wants device motion (backboardd keeps the services open at
+ * ReportInterval 0). dm_status_interval: the ReportInterval iOS set for service NAME in /dev/redwood-motion's
+ * read() text (devmotion8 has no motion_want slot), 0 when unset/default or not found.
+ * dm_gate_step: on at once when interest appears, off DM_GATE_HOLD_MS after it is gone.
+ */
+#define DM_GATE_HOLD_MS 5000
+struct dm_gate {
+	int on;
+	long idle_since;	/* ms; 0 = interest seen on the last step */
+};
+unsigned dm_status_interval(const char *text, const char *name);
+int dm_gate_step(struct dm_gate *g, int interest, long now_ms);
+
 #endif

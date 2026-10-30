@@ -45,6 +45,9 @@ static int nss;
  */
 #define DM_HZ 100.0f
 static int dm_env, dm_want, dm_only[8];
+static int dm_gate_env = 1;	/* O13: SNS_DM_GATE=0 = old behaviour (fusion whenever the service exists) */
+static struct dm_gate dm_gate;
+static const char *dm_why = "no service";
 static struct dm_fusion dm;
 static uint64_t dm_last_report, dm_written;
 /*
@@ -297,6 +300,8 @@ static int start(void)
 		printf("sns: %s: %s (samples not posted)\n", motion_dev, strerror(errno));
 	const char *e = getenv("SNS_DEVMOTION");
 	dm_env = e && !strcmp(e, "1");
+	e = getenv("SNS_DM_GATE");
+	dm_gate_env = !(e && !strcmp(e, "0"));
 	e = getenv("SNS_SEE_CAL");
 	see_cal = dm_env && !(e && !strcmp(e, "0"));
 	nss = sensor_setup_motion(ss, (int)(sizeof(ss) / sizeof(ss[0])), see_cal, setup_cb, NULL);	/* dm5b */
@@ -331,10 +336,26 @@ static int follow(void)
 	}
 	orient_clients_seen = orient_want;
 	int dm_now = dm_env && have && (w.present & (1u << MOTION_DEVMOTION)) && !dark;	/* B46; o12: idle while blanked */
+	dm_why = !dm_env ? "SNS_DEVMOTION off" : !have || !(w.present & (1u << MOTION_DEVMOTION)) ? "no service" :
+	    dark ? "blanked" : "service";
+	if (dm_now && dm_gate_env) {	/* O13: only while CoreMotion (devmotion) or locationd (devmotion8) asks */
+		char st[2048];
+		ssize_t n = pread(motion_fd, st, sizeof(st) - 1, 0);
+		st[n > 0 ? n : 0] = 0;
+		unsigned i4 = w.interval_set[MOTION_DEVMOTION] ? w.interval_us[MOTION_DEVMOTION] : 0;
+		unsigned i8 = dm_status_interval(st, "devmotion8");
+		dm_now = dm_gate_step(&dm_gate, i4 || i8, sensor_now_ms());
+		dm_why = i4 && i8 ? "devmotion+devmotion8" : i4 ? "devmotion" : i8 ? "devmotion8" :
+		    dm_now ? "idle, stopping" : "no client";
+	} else {
+		dm_gate.on = 0, dm_gate.idle_since = 0;
+	}
 	if (dm_now != dm_want) {
-		printf("sns: devmotion fusion %s\n", dm_now ? "on" : "off");
+		printf("sns: devmotion fusion %s (%s)\n", dm_now ? "on" : "off", dm_why);
 		if (dm_now)
-			dm_init(&dm, 0.04f);
+			dm_init(&dm, 0.04f);	/* keeps the box and the SEE biases */
+		else if (dm.have_cal && dm_magcal_save(&dm, MAGCAL_PATH))	/* O13: save on stop */
+			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
 	}
 	dm_want = dm_now;
 	for (int i = 0; i < nss; i++) {
@@ -509,6 +530,8 @@ void sns_tick(const struct sns_link_ops *ops)
 		for (int i = 0; i < nss; i++)
 			printf(" %s %llu%s", ss[i].k->alias, (unsigned long long)ss[i].count, ss[i].active ? "" : "(off)");
 		printf(", written %llu", (unsigned long long)written);
+		if (dm_env)
+			printf(", dm %s (%s)", dm_want ? "on" : "off", dm_why);	/* O13 */
 		if (dm_env) {
 			float b[3], sp[3];
 			dm_mag_bias(&dm, b, sp);

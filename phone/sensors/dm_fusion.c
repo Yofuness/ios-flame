@@ -348,3 +348,35 @@ void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm
 	r->heading_acc = acc >= 2 ? 10.0f : acc == 1 ? 20.0f : acc == 0 ? 35.0f : -1.0f;
 	r->status = acc >= 0 ? DM_STATUS_HEADING : 0;
 }
+
+/* O13: "devmotion8  page 0xff0c usage 0x08 clients 1 ReportInterval 20000 us (set by iOS) ..." (SweetHID status) */
+unsigned dm_status_interval(const char *text, const char *name)
+{
+	size_t n = strlen(name);
+	for (const char *l = text; l && *l; l = strchr(l, '\n'), l = l ? l + 1 : NULL) {
+		unsigned us;
+		const char *ri, *nl = strchr(l, '\n');
+		if (strncmp(l, name, n) || l[n] != ' ')
+			continue;
+		ri = strstr(l, "ReportInterval ");
+		if (!ri || (nl && ri > nl) || sscanf(ri, "ReportInterval %u us", &us) != 1)
+			return 0;
+		const char *set = strstr(ri, "(set by iOS)");
+		return set && (!nl || set < nl) ? us : 0;
+	}
+	return 0;
+}
+
+int dm_gate_step(struct dm_gate *g, int interest, long now_ms)
+{
+	if (interest) {
+		g->on = 1;
+		g->idle_since = 0;
+	} else if (g->on) {
+		if (!g->idle_since)
+			g->idle_since = now_ms ? now_ms : 1;
+		else if (now_ms - g->idle_since >= DM_GATE_HOLD_MS)
+			g->on = 0, g->idle_since = 0;
+	}
+	return g->on;
+}
