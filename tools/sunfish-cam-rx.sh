@@ -16,6 +16,7 @@
 # CSIPHY2 (camrx --front), MCLK2 (camclk mclk 2 24), camid --front, table /var/local/cam/imx355-mode2.txt
 # (tools/sunfish-camtab.py research/notes/camx/com.qti.sensormodule.primax_imx355.bin -> work/cam/imx355-mode2.txt).
 # Everything is powered down at the end, also after a failed step.
+# SE9 is shared with haptics: touch /var/local/haptics.off and stop hapticd (launchctl stop org.iosonpixel.hapticd) first.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 S=tools/sunfish-ssh

@@ -77,6 +77,7 @@ tools/sunfish-install-bt.sh            # Bluetooth firmware (crbtfw21.tlv, crnv2
 tools/sunfish-install-sensors.sh       # auto-rotate: adspboot sensor feed at boot, job org.iosonpixel.sensors (kernel107+, sweetmotion=0x37 default; after step 8's config push)
 tools/sunfish-install-btbridge.sh      # Bluetooth for iOS: btbridge + BlueTool stand-in + bluetoothd transport (kernel105+, boot-arg btbridge=1, default)
 tools/sunfish-install-camera.sh        # camera for iOS (unfinished): camd job, camdev.on, StartRecorderServer, MobileGestalt rebuild; after sunfish-install-audio.sh; boot with CAMERA=1 (kernel111+)
+tools/sunfish-install-haptics.sh       # haptics for iOS: hapticd + drvbuzz, job org.iosonpixel.hapticd (off: /var/local/haptics.off), MobileGestalt rebuild; after sunfish-install-audio.sh; boot with HAPTICS=1
 ```
 Reboot after these (launchd reads its job list at boot).
 

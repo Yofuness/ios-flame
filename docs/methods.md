@@ -24,6 +24,9 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
   `sunfish-install-ssh.sh`, `sunfish-install-wifi.sh`, `sunfish-livelog.sh` (log → logs/usb-live.log).
 - Screen capture: `flame-shot` (framebuffer read) is broken on CAMERA boots; `tools/sunfish-shot.sh [NAME]` (phone/tools/shot, render-server picture -> work/shots/) replaces it once verified on the phone.
 
+## SE9 tools (adspboot amp, camid, i2cprobe, sunfish-cam-rx.sh)
+SE9 is shared with haptics: touch /var/local/haptics.off and stop hapticd (`launchctl stop org.iosonpixel.hapticd`) before SE9 tools.
+
 ## Building
 - Kernel: edit `work/src/xnu`, commit there, save the diff as `xnu/patches/NNNN-sunfish-*.patch`. Build it with tools/vm-build-xnu.sh (below); CI fallback: `gh workflow run xnu.yml --ref main`, `gh run watch ID`, `gh run download ID -n xnu-kernel -D work/kernelNN`.
 - Incremental xnu CI skips new files (b5cb57f); `git add -A` in work/src/xnu once committed the whole untracked tree into a patch (2026-10-24): add paths only.

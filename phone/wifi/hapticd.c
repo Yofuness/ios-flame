@@ -13,7 +13,8 @@
  * RTP <= 0x60). Each event is one line on stdout: "hapticd: tap|vibration|cut ... ms ... level ...".
  * SE9 is shared (cs35l41, camid, i2cprobe, kern.sweet_camprobe): hapticd only touches it while playing, but a
  * play during another SE9 user's transfer can corrupt both; don't run those while haptics are expected.
- * Needs sweetse9=2 and the ADT /product/haptics (sunfish-boot.sh HAPTICS=1). Off: don't run it.
+ * Needs sweetse9=2 and the ADT /product/haptics (sunfish-boot.sh HAPTICS=1). Off: /var/local/haptics.off makes it
+ * exit 0 at start (launchd job org.iosonpixel.hapticd then leaves it stopped; tools/sunfish-install-haptics.sh).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -126,6 +127,10 @@ int main(void)
 	size_t carry = 0;	/* a sample's first byte left over from the last read */
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
+	if (access("/var/local/haptics.off", F_OK) == 0) {	/* off switch: leave SE9 to other users */
+		printf("hapticd: /var/local/haptics.off, not starting\n");
+		return 0;
+	}
 	drv_tag = "hapticd";
 	drv_verbose = 0;
 	drv_rtp_max = TAP_LEVEL;
