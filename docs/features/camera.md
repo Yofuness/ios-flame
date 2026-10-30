@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:30 cam14 (kernel109, same boot): trap capture finds the IFE-lite write SID = 0x8c0
+- `sunfish-cam-rx.sh --install --capture` (CAPMODE --trap): SMR15 0x900/0x460, SMR16 0x880/0x460, SMR17 0x820/0x440 -> CB14 (SCTLR 0x21 M|CFRE, TCR EPD0|EPD1); every write read back as written.
+- Stream ~1060 ms, buf done at ~210 ms, CSID 3810240/3810240. **CB14 FSR 0x402 (TF), FAR 0x9cb00000 (= our IMAGE_ADDR), FSYNR0 0x00400010 (write), CBFRSYNRA 0x8c0 -> SID 0x8c0** (in the DT list, 0x8c0/0x460). sGFSR 0. Buffer/guard nonzero 0/0.
+- Restore: 17 lines OK (SMRs invalid, S2CR 0x000200ff, CB14, camnoc back to XO); `camrx smmu` afterwards: only SMR0-14 valid. **No reset in 3+ min** (cam12's ~1 min reset came after unmatched-stream faults, sGFSR 0: the hypervisor likely handles those; context faults in our bank are harmless).
+- Next (cam15): `CAPMODE="--bypass --sid 0x8c0"`: one SMR (mask 0) -> bypass bank -> the frame should land at 0x9cb00000.
+
 ### 2026-10-31 00:15 cam13 (kernel109, cam12r boot): read-only SMMU dump explains cam12's empty frame
 - `camrx smmu` (88dde8e, no writes): sCR0 0x00280406 (CLIENTPD 0, GFRE/GFIE 1, USFCFG 1 = unmatched streams fault and are terminated, SMCFCFG 1); 79 SMRs, 61 banks; sGFSR 0.
 - Valid SMRs 0-14, all translate-type S2CRs: 0x340/0xf, 0x2a0/0xf, 0x2c0/0xf -> CB0; 0x540 -> CB1; 0x300/0xf -> CB2; 0x800/0x440 -> CB3; 0x240/0x1 -> CB5; 0x1b21/24/25/26/27/28/2f -> CB6-12; 0x1b23 -> CB13. All banks bypass (SCTLR 0xe0, CBAR 0x1f000) except CB13 (SCTLR 0x127, M=1, CBAR 0x1f300, TTBR0 set).
