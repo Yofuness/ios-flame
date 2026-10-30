@@ -16,6 +16,7 @@
 #   jackset  0|1|3: headphone jack state for SunfishAudio.driver (bit 0 plugged, bit 1 mic)
 #   mgq      KEY...: MobileGestalt answers                    autobright [0|1]: Auto-Brightness (CoreBrightness)
 #   shot     [OUT.png]: render-server screenshot (default /var/local/shot.png; tools/sunfish-shot.sh)
+#   fpdump   [--enable ID]: FileProvider domains + flags as Files sees them; --enable sets enabled, unhides
 #   expt, exq, runmigrator: one-off probes of ExtensionFoundation and DataMigration (runmigrator needs
 #   com.apple.migrationpluginwrapper's entitlements, not in git)
 set -euo pipefail
@@ -33,7 +34,7 @@ build() {	# NAME SOURCE [FLAGS...]
 	fi
 }
 for c in membw pstack psx vcopy sctl sysq fcopy oslog; do build $c $c.c; done
-for m in expt exq nettest openapp oslogls prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
+for m in expt exq fpdump nettest openapp oslogls prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
 build imgtest imgtest.m -fobjc-arc -framework Foundation -framework ImageIO -framework CoreGraphics
 build lsreg lsreg.m -fobjc-arc -framework Foundation -framework MobileCoreServices
 build netsvc netsvc.m -fobjc-arc -framework Foundation -framework SystemConfiguration

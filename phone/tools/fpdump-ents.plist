@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>platform-application</key>
+	<true/>
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.fileprovider.enumerate</key>
+	<true/>
+	<key>com.apple.fileprovider.acl-read</key>
+	<true/>
+	<key>com.apple.fileprovider.acl-write</key>
+	<true/>
+	<key>com.apple.fileprovider.read-write</key>
+	<true/>
+	<key>com.apple.fileprovider.fetch-url</key>
+	<true/>
+	<key>com.apple.fileprovider.share</key>
+	<true/>
+	<key>com.apple.fileprovider.testing-harness</key>
+	<true/>
+</dict>
+</plist>
