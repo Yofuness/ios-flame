@@ -102,6 +102,8 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
 - **Night** (`work/night` exists: the user sleeps, the phone is in their bedroom): keep the iOS brightness slider at
   its minimum (DCS 32; iOS keeps it across reboots), no brightness raises or tests. Never `tools/sunfish-dim.sh`: it
   stacks on the iOS brightness and the webcam can't see the screen (`sunfish-dim.sh 100` clears a leftover dim).
+  No fake-lux tests (`m fake als`) at night; once the backlight nits range is in (auto-brightness live), turn
+  Auto-Brightness off with `/var/local/bin/autobright 0` when setting the flag and back on (`1`) when removing it.
   Remove the flag when the user is up.
 - **Quiet hours** (the user, 2026-10-30): no speaker tests (sound from the phone) between 9:30 pm and 5:00 am EST;
   the USB measurement mic (EM-01) is fine to use outside those hours.
