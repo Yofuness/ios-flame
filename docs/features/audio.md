@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:50 S4 corrected: iOS learns about wired headphones from kAudioDevicePropertyJackIsConnected on the "Codec" HAL device (VirtualAudio RE)
+- VirtualAudio.plugin (copied read-only from the IPSW; research/re/va/va.s): HALJackStateHandler (listener 0x212c30) watches 'jack' on a real HAL device (the code sits in Device_Codec_Aspen.cpp: very likely UID "Codec") and reads {'jack','outp',0} and {'jack','inpt',0} (0x21385c/0x2139ac): output only -> descriptor 'jdhp' (headphones), output + input -> 'jdhs' (headset) (0x213fe8-0x21402c); optional {'head','glob'} skipped when absent; creates a Port_HeadphonesWired_Aspen ("Wired Headphones") port (0x23fa60). MediaExperience _vaemHeadphoneJackIsConnected checks the VAD port type. The earlier 'hdpn'/'ssrc' draft was wrong.
+- Design: the "Codec" device answers {'jack','outp',0} (0/1) and {'jack','inpt',0} (mic detected), PropertiesChanged on change; behind a flag file. Open: Codec is input-only today (the headphone port is an output: may need an output stream); what sets the handler's flags at +0x60/+0x61.
+
 ### 2026-10-30 06:30 Headphone jack S4 design (read-only, research/notes/headphone-jack.md "S4")
 - SunfishAudio.driver has no route/jack handling (transport 'bltn', terminal types 'spkr'/'micr' only, one PropertiesChanged for volume). Draft (guess): an output data source on "Speaker" ('ssrc': 'ispk'/'hdpn', like the Codec 'imic' control) + kAudioDevicePropertyJackIsConnected; PropertiesChanged on plug changes; the plug poller notifies via notify_post("com.sunfish.jack") + notify_set_state; behind /var/local/sunfish-jack-enable. Unknown: what VirtualAudio maps to AVAudioSessionPortHeadphones: checking its strings/disassembly next. Sound through the jack is separate (WCD RX path).
 
