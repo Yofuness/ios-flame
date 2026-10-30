@@ -4,6 +4,8 @@
 # "Hawking" devices, research/notes/ios-audio-device.md). mediaserverd loads HAL plug-ins once: reboot to apply.
 #   tools/sunfish-install-audio.sh [--undo] [DIR]   DIR holds SunfishAudio.driver (default phone/audio/out)
 #   --undo: VirtualAudio.plugin back to HAL.disabled, SunfishAudio.driver removed.
+# The driver also carries the camera (stage f2, phone/camera): off in mediaserverd unless /var/local/camdev.on exists
+# (or boot-arg sweetcamdev=1); its log is /var/local/camdev.log. Frames come from camd.
 # Only file moves and a new directory, nothing to back up. Files over flame-files, moves and checks over SSH.
 set -euo pipefail
 cd "$(dirname "$0")/.."
