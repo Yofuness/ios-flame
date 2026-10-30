@@ -759,8 +759,16 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 	uint32_t ty = h[1], sz = h[5];
 	const uint8_t *body = p + 32;
 	size_t blen = n - 32 < sz ? n - 32 : sz;
-	printf("adsp: qrtr rx v%u %s %u:%x -> %u:%x size %u confirm %u", h[0], qrtr_type(ty), h[2], h[3], h[6], h[7],
-	       sz, h[4]);
+	/* DATA packets (type 1) arrive ~100/s while sensors stream: logged only with ADSP_QRTR_LOG=1 (20 MB in 40 min) */
+	static int log_data = -1;
+	if (log_data < 0) {
+		const char *e = getenv("ADSP_QRTR_LOG");
+		log_data = e && *e == '1';
+	}
+	int quiet = ty == 1 && !log_data;
+	if (!quiet)
+		printf("adsp: qrtr rx v%u %s %u:%x -> %u:%x size %u confirm %u", h[0], qrtr_type(ty), h[2], h[3], h[6],
+		       h[7], sz, h[4]);
 	if (ty != 1 && blen >= 20) {
 		uint32_t k[5];
 		memcpy(k, body, 20);
@@ -773,7 +781,8 @@ static void qrtr_rx(struct chan *c, const uint8_t *p, size_t n)
 		else
 			printf(" raw %x %x %x %x %x", k[0], k[1], k[2], k[3], k[4]);
 	}
-	printf("\n");
+	if (!quiet)
+		printf("\n");
 	if (h[0] != 1)
 		return;
 	ipcrtr = c;

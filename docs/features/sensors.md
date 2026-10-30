@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:15 the user's Compass test vs a Pixel 8 Pro: backwards / jumpy; the phone faced EAST, not west
+- Correction to 19:25/cw1: the phone lay facing east, so the "west" seed made the heading ~180 deg off ("sometimes completely backwards"); "other times it jumps around".
+- sensors.log after the session: SEE mag_cal/gyro_cal sent only 2 events each, all zero (bias 0,0,0, field 4 = 0): the DSP calibration never produced a bias, even while the phone was turned. The min/max box grew from the bad seed: min -110.5 -115.0 -187.3 max 24.5 1.8 -11.2 (spans 135/117/176 uT; a clean span is ~2 x 50 uT), bias -43.0,-56.6,-99.2: polluted, cannot shrink. Status: accel 123169, gyro 122925, compass 46957, devmotion 54415, acc 2.
+- Fix in progress: least-squares sphere fit over recent samples (old min/max files ignored), bias changes only when two fits agree, heading low-pass.
+
 ### 2026-10-30 20:15 dm6: SEE mag_cal/gyro_cal stream next to the motion sensors (e226cad); they report bias 0 while the phone lies still
 - kernel126, adspboot e226cad, magcal.txt.cw1 restored; SSH 22 s. Startup tries 1-2 found 0 motion sensors, try 3 found 8 (6 + 2 cal). Status after opening Compass: accel 2061, gyro 2042, compass 748, als 755, magcal 1, gyrocal 1, written 4407, devmotion 881, "cal box st 0 bias -65.5,-43.2,-69.7 ... gcal st 0 0,0,0".
 - Raw cal events (msgid 1022, 16 bytes): magcal `[1/2 len 12: 0 0 0] [4/0 0]`, gyrocal the same: bias 0,0,0 and field 4 = 0 (no field 3 seen, so the status field number is still open). accel and gyro also send 1022 events of 54 bytes (their own cal/comp-matrix events; not parsed).
