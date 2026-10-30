@@ -34,6 +34,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U4 one boot on the TB4 port + 240 W cable, to read the charger status on both sources (optional). (B14)
 - U9 [DONE 2026-10-30: Xbox controller pairs; AirPods crash bluetoothd] Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
+- U12 Camera app (when you're up): Claude turns the camera gate on and starts camd; you open Camera (Utilities folder) and say what you see (preview? photo?). ~2 min.
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).

@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 05:05 cam25 (kernel110): camera code in SunfishAudio.driver installed; gate off/on harmless; Camera.app not opened yet
+- `phone/audio/build.sh` + `tools/sunfish-install-audio.sh` (41a11d4: camera_device.c + inject_media.c over camera_client.c, gate /var/local/camdev.on). Gate off: mediaserverd restarted (pid 29 -> 471), no crash report in 80 s. Gate on (camd running, mediaserverd restarted 471 -> 490): running, no crash report.
+- **/var/local/camdev.log (0666) stayed empty in both cases**: no "gate:" line, so there's no sign the plug-in's camera constructor ran. mediaserverd runs as uid 501 (psx), so permissions aren't it. Guess: the HAL plug-in (and so inject_media's constructor) loads only when CoreAudio first initialises in mediaserverd, not at process start; or the constructor isn't reached. To check by day: open Camera.app with the gate on and read camdev.log/camd.log.
+- Opening Camera.app at night was declined (the tap into the Utilities folder was denied by the auto-mode safety check; the phone is in the user's bedroom): left for the user (U12).
+- End state: gate OFF (camdev.on removed), camd stopped ("powered down"), mediaserverd restarted (pid 512); the new driver stays installed (audio only while the gate is off). The phone has no killall/pgrep/ps: use /var/local/bin/psx + kill.
+
 ### 2026-10-31 04:45 cam24 (kernel110, sweetse9=2 sweetcampmic=2): 0233 makes camd ~6x faster
 - Battery 4440 mV; boot OK. `camclient -n 300`: first frame 6.26 s after START, **22.91 fps read** (was 4.0), seq 1..480 (180 gaps), 0 torn, published 300, dropped 3; copy_us bimodal ~4 ms / 34-43 ms (was ~276 ms); mean byte ~24. Teardown clean. Regression on kernel110: `--stream 5` 60.00 fps 0 faults; `--capture` full frame (0 zero 1 KB blocks). 3 min stable, no reset.
 - The capture script didn't fetch the frame: camrx failed the run on the ~12 KB "guard" writes (the ~4.8 extra lines the WM always writes). Fixed: only guard writes beyond +16 KB fail a capture.
