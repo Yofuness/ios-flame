@@ -48,6 +48,10 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 10:05 Cause of the extension deaths: our kernel's Sandbox op 4 (container path) always says ENOENT
+- research/notes/files-on-my-iphone.md "extension sandbox container": PlugInKit -[PKService checkEnvironment:] (0x1aaf39c94, unconditional from _prepareToRun) calls sandbox_container_path_for_pid(getpid()) = __sandbox_ms("Sandbox", 4, {pid,0,buf,len,0}); on failure "Bootstrapping; failed to get my own sandbox container" + NSInternalInconsistencyException. Our permissive policy (sweet_amfi.c:425, patch 0050) returns ENOENT for op 4.
+- On a real phone Sandbox.kext keeps the container from the spawn's sandbox attributes (+0x50). Fix being written: xnu 0240 remembers it at exec (mpo hook with macpolicyattr) and answers op 4; it should fix every PlugInKit extension (LocalStorage, PhotosFileProvider B8, likely widgets/share/keyboards).
+
 ### 2026-10-30 09:55 fp2/fp3: the LocalStorage extension starts and dies: "failed to get my own sandbox container"
 - Filtered captures (`oslog -l -t 35 -n fileproviderd / -n LocalStorage / -n Files`; the unfiltered oslog dies with SIGSEGV on the PhotosFileProvider crash backtrace) while opening On My iPhone and tapping Try Again: LocalStorageFileProvider[751] "Hello, I'm launching as euid = 501, uid = 501, personaid = 1000", "Bootstrapping; failed to get my own sandbox container", "*** Terminating app due to uncaught exception 'NSInternalInconsistencyException', reason: 'plugin has invalid sandbox or container: error 2 path ?'". fileproviderd: "Plugin ... must have pid! Extension request will fail", "Failed to aquire assertion for plugin: ... pid: 0", NSCocoaErrorDomain 4097. PhotosFileProvider dies the same way (the long-known B8 crash).
 - So the remaining Files blocker is generic: app extensions can't learn their own sandbox container (probably also B8 and other extensions). Investigator on the container lookup path.
