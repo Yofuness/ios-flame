@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 10:40 sb2 (kernel118, 0240 v2): the HOME fallback finds every container; op 4 still says ENOENT -> v3
+- sb2: spawn blobs of the extensions (LocalStorageFileProvider 307/308/310, PhotosFileProvider 309/311, all ppid 1): "len 1104 profile yes container no", no strings past "plugin" @0x10 (the profile name): xpcproxy passes no container there. "HOME container" lines: LocalStorage -> .../PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965, Photos -> .../PluginKitPlugin/A9E8417C-..., apps (Files 309A017E-...) -> Data/Application/<UUID>. op4: 23 lines, all early boot (xpcproxy/keybagd queries, ENOENT); none from the extensions; extensions still die, Files "Content Unavailable".
+- By hand (new phone tool phone/tools/sbcont.c: sandbox_container_path_for_pid): self, Files (276) and Weather (247) -> ENOENT, and no op4 log line (the 32-line cap was likely used up by an early burst whose printf lines were partly lost). Reading: the lookup compared the uniqueid recorded at exec with the running proc's, which differs.
+- v3: lookup by pid only (entries cleared at exit and at the next exec of the pid), "op4 pid N uniqueid A, stored B" logged on a mismatch, op-4 calls after 60 s logged too. kernel119 (first build skipped 0240: the regenerated patch had kern_exec.c as a new file; fixed).
+
 ### 2026-10-30 10:20 sb1 (kernel117 = + xnu 0240): no reset, but no spawn carried a container; extensions still die
 - Boot kernel117 sweetse9=2 sweetcampmic=2 (4454 mV), SSH 17 s, UI up. "SWEET Sandbox: spawn blob" 16 lines, all "(launchd) len 1104 profile yes container no" (pids 222-261: the 16-line cap was used up by launchd's early spawns); "container for pid" 0.
 - LocalStorageFileProvider[309] and PhotosFileProvider[313] still "Bootstrapping; failed to get my own sandbox container" + "invalid sandbox or container: error 2"; Files: "Content Unavailable"; fileproviderd "must have pid" x5.
