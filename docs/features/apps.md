@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:30 fpfix (2f74fc1): launchd drops DYLD_* from the job env; a sh exec wrapper instead
+- hp4: with EnvironmentVariables DYLD_INSERT_LIBRARIES on com.apple.FileProvider, fileproviderd (pid 396) still logs "Volume /dev/ufsroot1 not eligible to store FP library, skipping", no "fpfix" line; fpdump: LocalStorage isEnabled=0, --enable -> NSCocoaErrorDomain Code=4. Files Browse: no Locations at all.
+- By hand: DYLD_INSERT_LIBRARIES works for our tools and for fileproviderd started from a shell (DYLD_PRINT_LIBRARIES shows /private/var/local/lib/fpfix.dylib loaded right after the main image). So launchd strips DYLD_* from the job's environment.
+- tools/sunfish-install-fpfix.sh now sets ProgramArguments ['/bin/sh','-c','DYLD_INSERT_LIBRARIES=/var/local/lib/fpfix.dylib exec .../fileproviderd'] (exec keeps the pid for the MachServices check-in); installed, takes effect at the next boot.
+
 ### 2026-10-30 08:05 phone/tools/shot (iOSPlus10 negroni-shot port, 52ad05b): wrong image
 - hp1: `tools/sunfish-shot.sh hp1` -> "1125x2436" (the fallback size: CADisplay mainDisplay bounds not read) and a PNG with a blue gradient block (~710x368) on white, not the lock screen. D7 stays open; webcam meanwhile.
 

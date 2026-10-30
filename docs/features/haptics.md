@@ -1,5 +1,5 @@
 # Haptics
-**State:** 🟡 iOS haptics work (switch taps pulse the motor) with hapticd started by hand; no launchd job yet. **Updated:** 2026-10-30.
+**State:** ✅ iOS haptics work (switch taps pulse the motor); hapticd starts at boot (tools/sunfish-install-haptics.sh, boot with HAPTICS=1); the user's feel check (U16) open. **Updated:** 2026-10-30.
 
 ## How to use
 - Boot with `sweetse9=2`. `/var/local/bin/drvbuzz --gpio` (read-only), `--probe` (ID + register dump, no writes),
@@ -31,6 +31,10 @@
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 09:30 hp4: hapticd starts at boot (launchd job installed), taps work; SE9 lock in (0ed877c)
+- tools/sunfish-install-camera.sh (tools with the SE9 lock) + tools/sunfish-install-haptics.sh (job org.iosonpixel.hapticd) + reboot (kernel115 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetblnew=0): hapticd pid 72 under launchd; 3 switch taps -> "tap: 18 ms level 0x2e (peak 15750)", "ID 0x03 STATUS 0000", "chip in reset (2 s idle)", no faults. A mediaserverd restart during taps: no SE9 errors (no new camera open happened in the window, so the lock wasn't exercised against camid).
+- Mic at 155 Hz heard nothing this time (18 ms taps at level 0x2e are short; hp3 saw small bumps): the feel check stays with the user (U16).
 
 ### 2026-10-30 09:00 Install script written (037da8f, 81d0fbb); NOT installed until SE9 has a lock
 - tools/sunfish-install-haptics.sh: launchd job org.iosonpixel.hapticd (wrapper hapticd-start.sh, log /var/local/hapticd.log), MG cache aside once, --undo/--check; /var/local/haptics.off keeps hapticd off (touch it, kill hapticd: launchd restarts it, it exits 0).
