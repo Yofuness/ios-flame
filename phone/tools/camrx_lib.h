@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#define REAR_FRAME_BYTES 3810240u	/* 2016 x 1512 RAW10 packed = CSID bytes ping/pong in cam8 */
-#define FRONT_FRAME_BYTES 1894200u	/* cam-f1: IMX355 mode 2, 1640 x 924 RAW10 packed (stride 2050) */
+/* cam34: the WM writes RAW10 lines padded to 16 B (rear 2520 -> 2528, front 2050 -> 2064); CAM_STRIDE=N overrides */
+#define RAW10_STRIDE(w)	((((w) * 10u / 8u) + 15u) & ~15u)
+#define REAR_FRAME_BYTES (1512u * RAW10_STRIDE(2016u))	/* 3822336: 2016 x 1512 RAW10, stride 2528 (CSID counts 3810240) */
+#define FRONT_FRAME_BYTES (924u * RAW10_STRIDE(1640u))	/* 1907136: IMX355 mode 2, 1640 x 924 RAW10, stride 2064 */
 #define FRAME_BYTES_MAX	REAR_FRAME_BYTES
 #define CAP_CO_PA	0x9cb00000ull	/* display carveout zero-copy slot 1 (SweetSurface SWEET_ZC_SLOT_PA(1)) */
 #define CAP_CO_LEN	0xB00000u	/* frame + guard */

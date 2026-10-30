@@ -4,7 +4,7 @@
  * Connects, START (waits for its reply: frames flowing), optionally EXPOSURE (GAIN 256 = 1x), reads FRAMES (default
  * 120) new frames from the shared slots (polls latest_seq every 1 ms, 1 s timeout a frame), prints seq, the header
  * and the mean byte for the first and every 30th, then fps, seq gaps and torn copies; -o: the last frame as a
- * camisp input (bare 2016x1512 RAW10, stride 2520); STOP.
+ * camisp input (bare 2016x1512 RAW10, stride 2528); STOP.
  */
 #include <errno.h>
 #include <fcntl.h>

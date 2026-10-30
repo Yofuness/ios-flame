@@ -1,7 +1,8 @@
 /*
- * camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N]
+ * camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N] [--stride N]
  *
- * Camera stage e3: one saved frame (camrx capture/stream: 2016x1512 MIPI RAW10, stride 2520, no header)
+ * Camera stage e3: one saved frame (camrx capture/stream: 2016x1512 MIPI RAW10, stride 2528 = 16 B lines (cam34; --stride N, e.g. 2520 for
+ * files saved before cam34), no header)
  * through ios-redfin's camera_isp.c: a redwood_camera_frame header is made for it in memory, then
  * isp_measure + isp_awb + isp_ae, and a picture: binned 2x2 preview (1008x756) by default, every pixel
  * (2016x1512, bilinear demosaic) with --full. OUT: ppm (from BGRA), raw bgra or raw nv12.
@@ -16,7 +17,7 @@
 
 #define W       2016
 #define H       1512
-#define STRIDE  2520
+#define STRIDE  ((((W) * 10 / 8) + 15) & ~15)	/* cam34: 2528, the WM pads lines to 16 B */
 
 static double
 now_ms(void)
@@ -30,7 +31,7 @@ now_ms(void)
 static int
 usage(void)
 {
-	fprintf(stderr, "usage: camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N]\n");
+	fprintf(stderr, "usage: camisp IN.raw OUT [--bayer RGGB|GRBG|GBRG|BGGR] [--full] [--fmt bgra|nv12|ppm] [--frames N] [--black B] [--threads N] [--stride N]\n");
 	return 2;
 }
 
@@ -39,7 +40,7 @@ main(int argc, char **argv)
 {
 	static const char *orders[4] = { "RGGB", "GRBG", "GBRG", "BGGR" };
 	const char *fmt = "ppm";
-	int bayer = 0, full = 0, frames = 5, black = 64;
+	int bayer = 0, full = 0, frames = 5, black = 64, stride = STRIDE;
 
 	if (argc < 3)
 		return usage();
@@ -60,6 +61,10 @@ main(int argc, char **argv)
 			frames = atoi(argv[++i]);
 		} else if (i + 1 < argc && !strcmp(argv[i], "--black")) {
 			black = atoi(argv[++i]);
+		} else if (i + 1 < argc && !strcmp(argv[i], "--stride")) {
+			stride = atoi(argv[++i]);
+			if (stride < W * 10 / 8)
+				return usage();
 		} else if (i + 1 < argc && !strcmp(argv[i], "--threads")) {
 			isp_threads = atoi(argv[++i]);
 		} else {
@@ -71,7 +76,7 @@ main(int argc, char **argv)
 	if (strcmp(fmt, "ppm") && strcmp(fmt, "bgra") && strcmp(fmt, "nv12"))
 		return usage();
 
-	size_t rawn = (size_t)STRIDE * H;
+	size_t rawn = (size_t)stride * H;
 	uint8_t *raw = malloc(rawn);
 	FILE *fp = fopen(argv[1], "rb");
 	if (!fp || !raw || fread(raw, 1, rawn, fp) != rawn) {
@@ -87,7 +92,7 @@ main(int argc, char **argv)
 	f.header_bytes = sizeof(f);
 	f.width = W;
 	f.height = H;
-	f.stride = STRIDE;
+	f.stride = (uint32_t)stride;
 	f.format = 1;
 	f.bayer = (uint32_t)bayer;
 	f.black = (uint32_t)black;

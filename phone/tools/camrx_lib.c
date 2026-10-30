@@ -157,26 +157,35 @@ int dry;
 volatile sig_atomic_t stop;
 
 /* cam-f1: rear (default) and front paths; see camrx_lib.h */
-static const struct cam_sensor cam_rear = {
-	"rear IMX363 mode 8", 1, 2016, 1512, 2520, REAR_FRAME_BYTES, 12096u /* cam21: ~4.8 lines */, 304, 0,
+static struct cam_sensor cam_rear = {	/* (not const: cam34 CAM_STRIDE override) */
+	"rear IMX363 mode 8", 1, 2016, 1512, RAW10_STRIDE(2016u), REAR_FRAME_BYTES,
+	12096u /* cam21's ~4.8 lines past the frame were the cam34 line padding; kept as margin */, 304, 0,
 	CSIPHY0, PHYTIMER0_RCG, PHYTIMER0_CBCR, CSIPHY0_CBCR,
 	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt",
 };
-static const struct cam_sensor cam_front = {
-	"front IMX355 mode 2", 2, 1640, 924, 2050, FRONT_FRAME_BYTES, 5 * 2050u /* guess, as the rear's ~5 lines */,
+static struct cam_sensor cam_front = {
+	"front IMX355 mode 2", 2, 1640, 924, RAW10_STRIDE(1640u), FRONT_FRAME_BYTES, 5 * 2064u /* guess, margin */,
 	360, 2, CSIPHY2, PHYTIMER2_RCG, PHYTIMER2_CBCR, CSIPHY2_CBCR,
 	"/var/local/bin/camid --front --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx355-mode2.txt",
 };
-_Static_assert(REAR_FRAME_BYTES == 2016 * 1512 * 10 / 8 && FRONT_FRAME_BYTES == 1640 * 924 * 10 / 8, "RAW10");
+_Static_assert(REAR_FRAME_BYTES == 1512 * 2528 && FRONT_FRAME_BYTES == 924 * 2064, "RAW10, 16 B lines");
 _Static_assert(RING_N * ((REAR_FRAME_BYTES + 12096u + 0xffffu) & ~0xffffu) <= CAP_CO_LEN, "rear ring");
-_Static_assert(RING_N * ((FRONT_FRAME_BYTES + 5 * 2050u + 0xffffu) & ~0xffffu) <= CAP_CO_LEN, "front ring");
+_Static_assert(RING_N * ((FRONT_FRAME_BYTES + 5 * 2064u + 0xffffu) & ~0xffffu) <= CAP_CO_LEN, "front ring");
 const struct cam_sensor *cam = &cam_rear;
 
 void cam_select(int front)
 {
-	cam = front ? &cam_front : &cam_rear;
-	printf("camrx: path %s: CSIPHY%u %#x, %ux%u RAW10 (%u B), %u Mb/s/lane\n", cam->name, cam->phy, cam->phy_base,
-	       cam->w, cam->h, cam->bytes, cam->mbps);
+	struct cam_sensor *c = front ? &cam_front : &cam_rear;
+	/* cam34: CAM_STRIDE=N (bytes per line, >= the data, <= the 16 B-aligned stride: the ring and camd's slots are
+	 * sized for that) overrides the selected path's stride; CAM_STRIDE=0 or unset = RAW10_STRIDE */
+	const char *e = getenv("CAM_STRIDE");
+	unsigned st = e ? (unsigned)strtoul(e, NULL, 0) : 0, lo = c->w * 10u / 8u, hi = RAW10_STRIDE(c->w);
+	if (st && (st < lo || st > hi))
+		printf("camrx: CAM_STRIDE %u outside %u..%u, ignored\n", st, lo, hi), st = 0;
+	c->stride = st ? st : hi, c->bytes = c->h * c->stride;
+	cam = c;
+	printf("camrx: path %s: CSIPHY%u %#x, %ux%u RAW10 stride %u (%u B), %u Mb/s/lane\n", cam->name, cam->phy,
+	       cam->phy_base, cam->w, cam->h, cam->stride, cam->bytes, cam->mbps);
 }
 
 static int allowed(uint32_t pa)

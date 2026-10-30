@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Camera stage d: a MIPI RAW10 frame from `camrx capture` -> PNGs (stdlib only).
 
-  python3 -I tools/sunfish-raw2png.py FRAME.raw [--width 2016] [--height 1512] [--stride 2520] [--bayer RGGB]
+  python3 -I tools/sunfish-raw2png.py FRAME.raw [--width 2016] [--height 1512] [--stride 2528] [--bayer RGGB]
                                      [--gamma 2.2] [--out PREFIX]
 
 RAW10 packed: 5 bytes = 4 pixels, bytes 0-3 the 8 high bits, byte 4 the 4 x 2 low bits (only the high 8 bits are
@@ -50,13 +50,13 @@ def main():
     ap.add_argument("raw")
     ap.add_argument("--width", type=int, default=2016)
     ap.add_argument("--height", type=int, default=1512)
-    ap.add_argument("--stride", type=int, default=0, help="bytes per line (default width*10/8)")
+    ap.add_argument("--stride", type=int, default=0, help="bytes per line (default width*10/8 rounded up to 16: cam34; 2520 for older rear files)")
     ap.add_argument("--bayer", default="RGGB", choices=sorted(ORDERS))
     ap.add_argument("--gamma", type=float, default=2.2)
     ap.add_argument("--out", default=None, help="output prefix (default: the input without .raw)")
     a = ap.parse_args()
     w, h = a.width & ~3, a.height & ~1
-    stride = a.stride or a.width * 10 // 8
+    stride = a.stride or (a.width * 10 // 8 + 15) & ~15
     data = open(a.raw, "rb").read()
     if len(data) < stride * (h - 1) + w * 5 // 4:
         h = len(data) // stride & ~1

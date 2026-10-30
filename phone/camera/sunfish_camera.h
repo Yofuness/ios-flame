@@ -6,11 +6,11 @@
  *   the camera up (once per connection; the reply comes when frames flow or bring-up failed), _STOP or closing the
  *   connection drops it; when no connection has it started, everything goes down. EXPOSURE a lines, b gain (256 =
  *   1x, linear; 0 = keep); c, d ignored (frame length stays the mode's). SENSOR a 1 rear (default),
- *   2 front (IMX355 1640x924, stride 2050; a running stream restarts on it; data_bytes and the frame header follow),
+ *   2 front (IMX355 1640x924, stride 2064; a running stream restarts on it; data_bytes and the frame header follow),
  *   others -EINVAL. FOCUS, FLASH, KEEP accepted, ignored.
  * /var/run/sunfish-camera.shm (0666, mmap read-only): struct sunfish_camera_shm, then SUNFISH_CAMERA_SLOTS slots of
  *   slot_bytes at shm + head_bytes: struct sunfish_camera_slot (gen + the frame header), the RAW10 bytes at
- *   slot + data_offset (2016x1512, stride 2520: the ~12 KB of extra lines past 1512 are cut off).
+ *   slot + data_offset (2016x1512, stride 2528: cam34, the WM pads RAW10 lines to 16 B; data_bytes = height * stride).
  * A new frame: latest_seq goes up (written after the slot). Wait by polling latest_seq (1 ms steps; camd has no
  * other notification), copy slot latest_slot, then check its gen is even and unchanged (else camd rewrote it
  * while you copied: take the newer one).

@@ -479,7 +479,7 @@ static const struct camera {
 	bool            lens_motor;     /* focus can move (where the kernel says so: the frames' focus) */
 } cameras[3] = {
 	{ 1, "Back Camera", "com.apple.avfoundation.avcapturedevice.built-in_video:0", false, 4.38, 1.7, 1.4, 65.6,
-	/* sunfish (f2): camd has one mode (8: 2016x1512 RAW10 @60, stride 2520), so both formats ask for it (PHOTO, 4:3: no
+	/* sunfish (f2): camd has one mode (8: 2016x1512 RAW10 @60, stride 2528), so both formats ask for it (PHOTO, 4:3: no
 	 * SENSOR mode change); the sizes stay the plist's keys, the pictures are scaled from 2016x1512 (previews binned,
 	 * the still demosaiced from the whole frame) */
 	  { { 4032, 3024, 30, REDWOOD_CAMERA_MODE_PHOTO }, { 4224, 2376, 60, REDWOOD_CAMERA_MODE_PHOTO } }, true },  /* "Photo", "Video-60" */

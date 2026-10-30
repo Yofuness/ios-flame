@@ -13,3 +13,8 @@ if command -v cc >/dev/null; then
 	mkdir -p ../../work/cam
 	cc -O2 -Wall -o ../../work/cam/camisp-host camisp.c camera_isp.c -lm -pthread
 fi
+# cam34: the 16 B line padding (stride 2528) unpack test
+if command -v cc >/dev/null; then
+	cc -O2 -Wall -o ../../work/cam/test-raw10-stride test_raw10_stride.c -lm -pthread
+	../../work/cam/test-raw10-stride
+fi
