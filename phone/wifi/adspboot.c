@@ -29,6 +29,7 @@
  *                     hj3: + rx clocks 0x30e/0x30f; --swr-clk-first reads each group only if its own clocks are on
  *                     hj4: --swr-init a|b|c|d: S2 staged TX SoundWire bring-up (macro+pins, codec reset, master init,
  *                     DevID), teardown after; implies --swr-clk-first, refused unless 0x30c/0x30d acked
+ *                     hj5: --swr-mbhc SECONDS [--swr-mbhc-unmask]: S3 WCD937x mech plug poll on top of --swr-init d
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -1097,7 +1098,7 @@ static int swr_stage;	/* hj4: 0 off, 'a'..'d' */
 static int swr_allowed(uint64_t pa)
 {
 	static const uint32_t m[] = { 0x00, 0x04, 0x08, 0x88, 0x90 };
-	static const uint32_t s[] = { 0x04, 0x14, 0x100, 0x200, 0x204, 0x208, 0x304, 0x30c, 0x314, 0x318, 0x500, 0x530,
+	static const uint32_t s[] = { 0x04, 0x14, 0x100, 0x200, 0x204, 0x208, 0x300, 0x304, 0x308, 0x30c, 0x314, 0x318, 0x500, 0x530,
 				      0x534, 0x101c, 0x1044, 0x1048, 0x1090 };
 	for (unsigned i = 0; i < sizeof(m) / sizeof(m[0]); i++)
 		if (pa == SWR_TXM + m[i])
@@ -1112,6 +1113,7 @@ static int swr_allowed(uint64_t pa)
 }
 
 static int swr_refused;
+static int swr_mbhc, swr_mbhc_unmask;	/* hj5: --swr-mbhc SECONDS (S3 plug poll), --swr-mbhc-unmask (0x346B = 0xEF) */
 static uint32_t swr_r(const char *what, uint64_t pa)	/* logged read, whitelist only */
 {
 	if (!swr_allowed(pa)) {
@@ -1161,6 +1163,165 @@ static void swr_poll(const char *what, uint64_t pa, int n, unsigned us, uint32_t
 		}
 	}
 	swr_log("swr: poll %s end %#010x%s\n", what, last, mask ? " (mask never set)" : "");
+}
+
+/* hj5: --swr-mbhc (headphone jack S3, research/notes/headphone-jack.md "S3"): WCD937x register access over the TX
+ * swrm command FIFO (dev 1), codec whitelist only; every access logged with old/new values. */
+static const uint16_t cdc_ok[] = { 0x34cd, 0x34c0, 0x34c1, 0x3103, 0x312a, 0x3029, 0x3001, 0x31b1, 0x3014, 0x3122,
+				   0x3120, 0x3015, 0x346e, 0x3471, 0x346b, 0x3019, 0x3125 };
+static uint32_t cdc_wid, cdc_rid;	/* rolling cmd ids 0..14 */
+
+static int cdc_allowed(uint32_t reg, int wr)
+{
+	if (wr && (reg == 0x3023 || reg == 0x3009 || reg == 0x3008))	/* micbias / HPH PA / RX supplies: never */
+		return 0;
+	for (unsigned i = 0; i < sizeof(cdc_ok) / sizeof(cdc_ok[0]); i++)
+		if (reg == cdc_ok[i])
+			return 1;
+	return 0;
+}
+
+static int cdc_rd1(uint32_t reg, uint32_t *v)	/* one read attempt: 0 ok */
+{
+	uint32_t id = cdc_rid, st = 0;
+	cdc_rid = (cdc_rid + 1) % 15;
+	wr32(SWR_TXS + 0x304, reg | id << 16 | 1u << 20 | 1u << 24);
+	usleep(250);
+	for (int i = 0; i < 20 && !((st >> 16) & 0x1f); i++) {
+		st = swr_q(SWR_TXS + 0x30c);
+		if (!((st >> 16) & 0x1f))
+			usleep(250);
+	}
+	if (!((st >> 16) & 0x1f))
+		return -1;
+	uint32_t r = swr_q(SWR_TXS + 0x318);
+	if (((r >> 8) & 0xf) != id)
+		return -2;
+	*v = r & 0xff;
+	return 0;
+}
+
+static int cdc_r(uint32_t reg, uint32_t *v, int quiet)	/* 0 ok; mismatch/no data: flush + retry once */
+{
+	if (!cdc_allowed(reg, 0)) {
+		swr_log("swr: cdc REFUSED read %#x (not whitelisted)\n", reg);
+		swr_refused = 1;
+		return -1;
+	}
+	int e = cdc_rd1(reg, v);
+	if (e) {
+		swr_log("swr: cdc read %#x failed (%s), flush + retry\n", reg, e == -1 ? "no data" : "id mismatch");
+		wr32(SWR_TXS + 0x308, 1);
+		usleep(500);
+		e = cdc_rd1(reg, v);
+	}
+	if (e)
+		swr_log("swr: cdc read %#x FAILED\n", reg);
+	else if (!quiet)
+		swr_log("swr: cdc rd %#x = %#04x\n", reg, *v);
+	return e;
+}
+
+static void cdc_w(uint32_t reg, uint32_t v)
+{
+	uint32_t old = 0, st = 0, now = 0;
+	if (!cdc_allowed(reg, 1)) {
+		swr_log("swr: cdc REFUSED wr %#x = %#x (not whitelisted / forbidden)\n", reg, v);
+		swr_refused = 1;
+		return;
+	}
+	int oe = cdc_r(reg, &old, 1);
+	uint32_t id = cdc_wid;
+	cdc_wid = (cdc_wid + 1) % 15;
+	wr32(SWR_TXS + 0x300, reg | id << 16 | 1u << 20 | (v & 0xff) << 24);
+	int i = 0;
+	for (; i < 20; i++) {
+		st = swr_q(SWR_TXS + 0x30c);
+		if (!((st >> 8) & 0x1f))
+			break;
+		usleep(500);
+	}
+	usleep(150);
+	int ne = cdc_r(reg, &now, 1);
+	swr_log("swr: cdc wr %#x %s%#04x -> %#04x, reads %s%#04x%s\n", reg, oe ? "?" : "", old, v & 0xff, ne ? "?" : "",
+		now, i == 20 ? " (WR FIFO never drained)" : "");
+}
+
+/* hj5: S3 init, poll, restore. Saved old values are restored in reverse write order. */
+static void swr_mbhc_run(void)
+{
+	uint32_t sreg[24], sval[24], e29 = 0, e16 = 0, e17 = 0, v = 0;
+	int n = 0;
+#define CDC_SET(reg, val) do { uint32_t o_ = 0; if (!cdc_r(reg, &o_, 0) && n < 24) { int k_ = 0;		\
+	for (; k_ < n && sreg[k_] != (reg); k_++) ;							\
+	if (k_ == n) sreg[n] = (reg), sval[n++] = o_; } cdc_w(reg, val); } while (0)
+#define CDC_RMW(reg, clr, set) do { uint32_t c_ = 0; if (!cdc_r(reg, &c_, 1)) CDC_SET(reg, (c_ & ~(uint32_t)(clr)) | (set)); } while (0)
+	swr_log("swr: --- mbhc S3 (%d s%s) ---\n", swr_mbhc, swr_mbhc_unmask ? ", unmask" : "");
+	cdc_wid = cdc_rid = 0;
+	if (cdc_r(0x34cd, &e29, 0) || cdc_r(0x34c0, &e16, 0) || cdc_r(0x34c1, &e17, 0)) {
+		swr_log("swr: mbhc: efuse reads failed, stop\n");
+		return;
+	}
+	uint32_t bg = (e16 == 2 || e17 > 9) ? (e29 & 0x0f) : 0x0e;
+	CDC_RMW(0x3103, 0x0e, (bg << 1) & 0x0e);
+	CDC_RMW(0x3103, 0, 0x80);
+	usleep(1000);
+	CDC_RMW(0x3103, 0, 0x40);
+	usleep(1000);
+	CDC_RMW(0x312a, 0x10, 0);
+	CDC_RMW(0x3029, 0xf0, (e16 == 1 || e16 == 2) ? 0xb0 : 0x80);
+	CDC_RMW(0x3001, 0, 0x80);
+	CDC_RMW(0x3001, 0, 0x40);
+	usleep(10000);
+	CDC_RMW(0x3001, 0x40, 0);
+	CDC_RMW(0x31b1, 0x1f, 0x08);	/* Linux HS_PULLUP_I_DEFAULT (-1) -> forced to HS_PULLUP_I_2P0_UA = 0x08 */
+	CDC_SET(0x3014, 0xff);
+	CDC_RMW(0x3122, 0x0f, 0x06);
+	CDC_RMW(0x3120, 0x03, 0x02);
+	CDC_RMW(0x3015, 0, 0x01);
+	CDC_RMW(0x3120, 0, 0x80);
+	if (swr_mbhc_unmask)
+		CDC_SET(0x346b, 0xef);
+	if (!swr_refused) {
+		static const uint16_t pr[4] = { 0x346e, 0x3019, 0x3125, 0x3014 };
+		uint32_t last[4] = { 0x100, 0x100, 0x100, 0x100 };
+		uint64_t t0 = now_ms();
+		while (now_ms() - t0 < (uint64_t)swr_mbhc * 1000) {
+			for (int k = 0; k < 4; k++)
+				if (!cdc_r(pr[k], &v, 1) && v != last[k]) {
+					swr_log("swr: mbhc t=%llu ms %#x %#04x -> %#04x\n", (unsigned long long)(now_ms() - t0),
+						pr[k], last[k] & 0xff, v);
+					last[k] = v;
+				}
+			if (last[0] != 0x100 && (last[0] & 0x10)) {
+				uint32_t m = 0;
+				cdc_r(0x3014, &m, 1);
+				swr_log("swr: mbhc t=%llu ms PLUG %s (mech %#04x)\n", (unsigned long long)(now_ms() - t0),
+					(m & 0x20) ? "INSERTED" : "REMOVED", m);
+				cdc_w(0x3471, 0x10);
+				cdc_w(0x3471, 0x00);
+				cdc_w(0x3014, m ^ 0x20);
+				last[0] = 0x100;
+			}
+			usleep(100000);
+		}
+	}
+	/* restore in reverse; the notes' teardown values where they differ from the saved one */
+	swr_log("swr: mbhc restore (%d regs)\n", n);
+	for (int k = n - 1; k >= 0; k--) {
+		int nv = -1;
+		switch (sreg[k]) {
+		case 0x3014: nv = 0x39; break;
+		case 0x3015: nv = 0x08; break;
+		case 0x346b: nv = 0xff; break;
+		case 0x3001: nv = 0x00; break;
+		}
+		if (nv >= 0 && (uint32_t)nv != sval[k])
+			swr_log("swr: mbhc %#x saved %#04x, notes teardown %#04x: using the notes value\n", sreg[k], sval[k], nv);
+		cdc_w(sreg[k], nv >= 0 ? (uint32_t)nv : sval[k]);
+	}
+#undef CDC_RMW
+#undef CDC_SET
 }
 
 static void swr_init(void)
@@ -1252,6 +1413,8 @@ static void swr_init(void)
 				((r >> 8) & 0xf) == id ? "" : " MISMATCH");
 		}
 	}
+	if (swr_mbhc && swr_stage >= 'd' && !swr_refused)	/* hj5: S3 plug poll with the bus up */
+		swr_mbhc_run();
 	/* teardown in reverse */
 	swr_log("swr: --- teardown ---\n");
 	if (mst_set) {
@@ -2676,6 +2839,10 @@ int main(int argc, char **argv)
 			swr_clk = swr_clk_first = 1;
 		else if (!strcmp(argv[i], "--swr-init") && i + 1 < argc && argv[i + 1][0] >= 'a' && argv[i + 1][0] <= 'd')
 			swr_stage = argv[++i][0], swr_clk = swr_clk_first = 1;	/* hj4: staged bring-up a-d; implies --swr-clk-first */
+		else if (!strcmp(argv[i], "--swr-mbhc") && i + 1 < argc)	/* hj5: S3 plug poll; implies --swr-init d */
+			swr_mbhc = atoi(argv[++i]), swr_stage = 'd', swr_clk = swr_clk_first = 1;
+		else if (!strcmp(argv[i], "--swr-mbhc-unmask"))	/* hj5: 0x346B = 0xEF before polling */
+			swr_mbhc_unmask = 1;
 		else if (!strcmp(argv[i], "--swr-newlog"))	/* hj2: truncate /var/local/swr-probe.log at start */
 			swr_newlog = 1;
 		else if (!strcmp(argv[i], "--swr-nohw"))	/* hj1: skip the hw vote; group 1 only */
@@ -2830,7 +2997,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
