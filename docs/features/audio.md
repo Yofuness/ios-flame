@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:40 jack8 (same boot as jack7; SunfishAudio.driver 834c2bd then 2a4c7f9): no query follows the plug; oslog drops lines
+- 834c2bd logs every HAL call for a property we don't have; /var/local/sunfish-jack-out gives "Codec" (object 9) a null-sink output stream (object 13).
+- jack8 A/B (runner, unfiltered oslog): 0 driver lines at all; `oslog -n mediaserverd` caught 1 of 3 jack lines. So 2a4c7f9: say() also writes /var/local/camdev.log, and the log cap (200) resets at each jack change.
+- With the file log, jack-out on, mediaserverd pid 635: startup asks (Has, unanswered) 'taps', 'auto', 'cstb', 'clok', 'cfsz', 'cust', 'accs', 'lmod', 'bcvl', and Get 'srnd' (Speaker outp, Codec/Hawking inpt). After `jackset 1` / `3` / `0`: the three jack lines and NO further unknown-property call. No 'unkn' error this time, no route change, no crash.
+- Reading: the 'unkn' of jack7 is not a property we lack. Next: trace in VirtualAudio how it picks the device it watches for 'jack' and what it needs to build the Wired Headphones port (investigator, in progress).
+- Phone tools note: the phone has no awk, killall, pgrep or `timeout`; `/var/local/bin/sync` (toybox) has no sync applet, so tools/sunfish-install-audio.sh ends with exit 127 after a complete install.
+
 ### 2026-10-30 06:20 jack7 (kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2; SunfishAudio.driver 95bacae + jackset, fake plug): iOS sees the jack property, no headphone route yet
 - `jackset 1` / `3` / `0` 15 s apart: mediaserverd logged "sunfish: audio: jack plugged, microphone no" (06:14:47.705), "... microphone yes" (06:15:02.727), "jack empty" (06:15:17.743).
 - Only at `jackset 1`: PickableRoutesDidChange x8 (06:14:47.520-.523), then "HALS_AHPPlugIn::ObjectGetPropertyData: got an error from the plug-in routine, Error: 1852797556" ('unkn') x3 (06:14:47.574-.577): iOS asks the plug-in for a property we don't answer. The active route stayed "Speaker" (IsHeadphones false). No 'jdhp'/'jdhs'/"wired-headphones" lines.
