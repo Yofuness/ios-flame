@@ -5,7 +5,7 @@
  * userland/src/audio_plugin.c (MIT, Copyright (c) 2026 OOSEX GANG, LICENSE.HackiOS).
  * Changed: names (Redwood -> Sunfish, /dev/sunfish-audio|-haptic|-mic, which do not exist yet:
  * the null sink below counts the frames as refused and I/O runs on), a fresh factory UUID, and
- * say() also goes to os_log (mediaserverd's stderr goes nowhere here). Device UIDs unchanged.
+ * say() also goes to os_log and /var/local/camdev.log (mediaserverd's stderr goes nowhere here). Device UIDs unchanged.
  *
  * Audio devices reach the audio server's hardware layer (the "HAL" of CoreAudio, inside
  * mediaserverd) in two ways: kernel drivers through IOAudio2 -- that is how an iPhone's own
@@ -76,6 +76,7 @@
 #include <unistd.h>
 
 #include "sunfish_audio.h"
+#include "../camera/camera_client.h"
 
 /* ---- the AudioServerPlugIn interface (macOS: CoreAudio/AudioServerPlugIn.h, AudioHardwareBase.h) ---- */
 
@@ -270,6 +271,7 @@ static bool jack_enabled;
  */
 #define JACK_OUT                "/var/local/sunfish-jack-out"
 static UInt32 jack_state;               /* under lock */
+static unsigned jack_asked;             /* unknown_call() lines so far (S4) */
 
 static void
 say(const char *format, ...)
@@ -285,8 +287,9 @@ say(const char *format, ...)
 		n = sizeof(line) - 1;
 	}
 	write(2, line, (size_t)n);
-	/* sunfish: also to the unified log (oslog), as the job's stderr is not kept */
-	os_log(OS_LOG_DEFAULT, "%{public}s", line);
+	/* sunfish: also to the unified log and /var/local/camdev.log, as the job's stderr is not kept and oslog drops
+	   lines (jack8: 1 of 3) */
+	camera_client_log(line);
 }
 
 /* The volume control's scale: a straight line of decibels over VOLUME_RANGE_DB. */
@@ -392,6 +395,7 @@ jack_changed(int token)
 		return;
 	}
 	say("sunfish: audio: jack %s, microphone %s\n", state & 1 ? "plugged" : "empty", state & 2 ? "yes" : "no");
+	__atomic_store_n(&jack_asked, 0, __ATOMIC_RELAXED);	/* S4: the queries that follow a change get logged too */
 	if (host != NULL) {
 		host->PropertiesChanged(host, OBJECT_CODEC, 2, changed);
 	}
@@ -769,10 +773,9 @@ unknown(AudioObjectID object, const AudioObjectPropertyAddress *address)
 
 /*
  * sunfish S4: with the jack on, every call that ends in "no such property" (the HAL's 'unkn' after a
- * jack change is one of them), the first JACK_ASKED lines of the process.
+ * jack change is one of them), the first JACK_ASKED lines of the process and after each jack change.
  */
 #define JACK_ASKED              200
-static unsigned jack_asked;
 
 static void
 unknown_call(AudioObjectID object, const AudioObjectPropertyAddress *address, const char *call)
