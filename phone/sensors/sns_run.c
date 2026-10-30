@@ -47,6 +47,18 @@ static int nss;
 static int dm_env, dm_want, dm_only[8];
 static struct dm_fusion dm;
 static uint64_t dm_last_report, dm_written;
+/*
+ * B46 dm2: type-2 (9-axis, x = magnetic north) reports for Compass (fUseNorthRef=1). The compass streams too while
+ * the fusion runs; hard-iron box in MAGCAL_PATH (saved every 30 s). SNS_DM_TYPE=3 turns this off (type 3 as dm1);
+ * default: type 2 while mag samples arrive (last one < 1 s ago), else 3. /var/local/dm-yaw: test yaw offset, deg.
+ */
+#define MAGCAL_PATH "/var/local/magcal.txt"
+#define DM_YAW_PATH "/var/local/dm-yaw"
+static int dm_type_env;		/* 0 auto, 2, 3 */
+static int dm_type_last = 3;
+static uint64_t dm_last_mag;
+static long dm_last_save, dm_last_yaw;
+static float dm_yaw;
 
 #define ORIENT_HZ 15.0f		/* sensd: accel rate when it runs for orientation only */
 #define MAX_TRIES 5		/* lookups that found nothing: again every 10 s (the sensors PD may still load) */
@@ -59,18 +71,34 @@ static void dm_feed(const struct motion_sample *m)
 		dm_accel(&dm, m->v);
 		return;
 	}
+	if (m->type == MOTION_TYPE_COMPASS) {	/* dm2: uT, same axes as the kernel's compass events */
+		if (dm_mag(&dm, m->v) == 0)
+			dm_last_mag = ts;
+		return;
+	}
 	dm_gyro(&dm, m->v, ts, 19200000.0);	/* SEE stamps: the 19.2 MHz QTimer (= mach time) */
 	if (!dm.have_acc || ts - dm_last_report < 19200000ull / 100)
 		return;
 	dm_last_report = ts;
 	struct motion_devmotion d;
-	struct dm_report3 r;
 	memset(&d, 0, sizeof(d));
-	dm_report3(&dm, ts, &r);
+	int t = dm_type_env ? dm_type_env : (dm_last_mag && ts - dm_last_mag < 19200000ull) ? 2 : 3;
+	if (t != dm_type_last)
+		printf("sns: devmotion report type %d\n", t);
+	dm_type_last = t;
+	if (t == 2) {
+		struct dm_report2 r;
+		dm_report2(&dm, ts, dm_yaw, &r);
+		d.len = sizeof(r);
+		memcpy(d.bytes, &r, sizeof(r));
+	} else {
+		struct dm_report3 r;
+		dm_report3(&dm, ts, dm_yaw, &r);
+		d.len = sizeof(r);
+		memcpy(d.bytes, &r, sizeof(r));
+	}
 	d.type = MOTION_TYPE_DEVMOTION;
-	d.len = sizeof(r);
 	d.ts_mach = ts;
-	memcpy(d.bytes, &r, sizeof(r));
 	if (write(motion_fd, &d, sizeof(d)) == (ssize_t)sizeof(d))
 		dm_written++;
 	else if (write_errors++ < 5)
@@ -82,7 +110,8 @@ static void out(void *ctx, struct sensor *s, const struct motion_sample *m)
 	(void)ctx;
 	if (mode != M_MOTION || motion_fd < 0)
 		return;
-	if (dm_want && (m->type == MOTION_TYPE_ACCEL || m->type == MOTION_TYPE_GYRO))
+	if (dm_want && (m->type == MOTION_TYPE_ACCEL || m->type == MOTION_TYPE_GYRO ||
+	    (m->type == MOTION_TYPE_COMPASS && dm_type_env != 3)))
 		dm_feed(m);
 	if (dm_only[s - ss] && !(s->orient_only && m->type == MOTION_TYPE_ORIENTATION))
 		return;		/* B46: streamed only for the fusion */
@@ -248,8 +277,11 @@ static int start(void)
 	const char *e = getenv("SNS_DEVMOTION");
 	dm_env = e && !strcmp(e, "1");
 	dm_init(&dm, 0.04f);
+	e = getenv("SNS_DM_TYPE");
+	dm_type_env = e && (!strcmp(e, "2") || !strcmp(e, "3")) ? atoi(e) : 0;
 	if (dm_env)
-		printf("sns: SNS_DEVMOTION=1: fusion reports for the devmotion service\n");
+		printf("sns: SNS_DEVMOTION=1: fusion reports for the devmotion service (type %s), magcal %s\n",
+		    dm_type_env ? e : "auto", dm_magcal_load(&dm, MAGCAL_PATH) ? "none" : "loaded");
 	return nss ? 0 : -1;
 }
 
@@ -304,6 +336,9 @@ static int follow(void)
 			dmo = !on || orient_only;
 			on = 1;
 			hz = hz < DM_HZ ? DM_HZ : hz;
+		} else if (dm_want && idx == MOTION_COMPASS && dm_type_env != 3) {	/* dm2: and the mag */
+			dmo = !on;
+			on = 1;
 		}
 		if (dm_only[i] != dmo)
 			printf("sns: %s: %s\n", s->k->alias, dmo ? "kept for devmotion fusion (samples not posted)" :
@@ -405,6 +440,22 @@ void sns_tick(const struct sns_link_ops *ops)
 		last_want = now;
 		follow();
 	}
+	if (dm_want && now - dm_last_yaw >= 1000) {	/* dm2: test knob, re-read every second */
+		FILE *fp = fopen(DM_YAW_PATH, "r");
+		float y = 0;
+		if (fp) {
+			if (fscanf(fp, "%f", &y) != 1 || !isfinite(y))
+				y = 0;
+			fclose(fp);
+		}
+		dm_yaw = y;
+		dm_last_yaw = now;
+	}
+	if (dm_env && dm.have_cal && now - dm_last_save >= 30000) {	/* dm2: keep the hard-iron box across reboots */
+		if (dm_last_save && dm_magcal_save(&dm, MAGCAL_PATH))
+			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
+		dm_last_save = now;
+	}
 	if (mode == M_STREAM && now - last_print >= 500) {
 		struct sensor *s = &ss[0];
 		float dt = (float)(now - last_print) / 1000.0f;
@@ -418,8 +469,13 @@ void sns_tick(const struct sns_link_ops *ops)
 		for (int i = 0; i < nss; i++)
 			printf(" %s %llu%s", ss[i].k->alias, (unsigned long long)ss[i].count, ss[i].active ? "" : "(off)");
 		printf(", written %llu", (unsigned long long)written);
-		if (dm_env)
-			printf(", devmotion %llu", (unsigned long long)dm_written);
+		if (dm_env) {
+			float b[3], sp[3];
+			dm_mag_bias(&dm, b, sp);
+			printf(", devmotion %llu, dm type %d acc %d bias %.1f,%.1f,%.1f span %.1f,%.1f,%.1f yaw %.1f",
+			    (unsigned long long)dm_written, dm_type_last, dm_mag_accuracy(&dm), b[0], b[1], b[2],
+			    sp[0], sp[1], sp[2], dm_yaw);
+		}
 		printf("\n");
 		last_print = now;
 	}
