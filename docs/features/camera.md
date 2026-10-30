@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:30 Camera static, read-only analysis: nobody has looked at a picture from this camera yet
+- Path (code): sensor 2016x1512 MIPI RAW10 packed, stride 2520 -> unpack camera_isp.c:853-862 -> camd copies frames from the carveout via /dev/pmem 64 KB at a time (camd.c:265) into a shared slot -> camera_client copies out (camera_client.c:256) -> camera_device announces 420f/420v/BGRA, render_into fills NV12 with CoreVideo's per-plane bytesPerRow (camera_device.c:1292-1298, 1453) -> backboardd planarFill converts 420f to RGBA (NativeBridgeMetalFrontend.mm:1964-2018). Formats agree on paper.
+- Every raw2png/camisp output since cam16 is logged "not viewed"; only mean, zero blocks and md5 were checked. Ranked: (1) the raw data is noise/stale (cam19 comb histogram, "exposure 0.0 ms", /dev/pmem reads of the DMA carveout without cache maintenance, RGGB/black level guessed); (2) backboardd reads the IOSurface planes wrongly (plane bytesPerRow, xnu 0235 offset); (3) torn slots (would give bands, least likely).
+- Next (when the phone is back on USB, daylight): dump one camd frame, raw2png on the host and LOOK at it; then dump plane 0 of one CVPixelBuffer after render_into. Notes: research/notes/camera-static.md.
+
 ### 2026-10-30 16:05 U12 (part): Camera.app shows static (the user, kernel127)
 - Camera opens and shows a moving static/noise picture: frames reach the preview, the pixel data or format is wrong. Pending: front camera, a photo in Photos.
 
