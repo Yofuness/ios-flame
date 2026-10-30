@@ -3,7 +3,7 @@
  * dm_replay [--cal FILE] dump.csv. Prints one row per 0.5 s, then a summary; gyro_yaw is independent of the fusion
  * (run-wide bias from the still windows, own gyro-propagated up), the short-term truth for heading CHANGES.
  * Env: SNS_HEADING_GRAVITY=lp|q, SNS_HC_K_SLOW, SNS_HC_K_FAST, SNS_DM_BETA, and the phone's switches SNS_HEADING_LP,
- * SNS_MAG_HOLD, SNS_MAG_GATE, SNS_DM_GBIAS, SNS_HEADING_CF (=0: off). SEE's own biases are not in the dump.
+ * SNS_MAG_HOLD, SNS_MAG_GATE, SNS_DM_GBIAS, SNS_HEADING_CF, SNS_MAG_GYROFIT (=0: off). SEE's own biases are not in the dump.
  * Yaw about vertical is path-dependent through a tilted tumble (the offset to h moves there, even with a perfect
  * calibration), so the summary also gives the RMS over the flat stretches, each with its own constant.
  */
@@ -14,6 +14,7 @@
 #include "dm_fusion.h"
 
 #define TICKS 19200000.0
+#define FLAT_SETTLE_ROWS 10	/* rows are 0.5 s apart */
 
 struct smp {
 	double t;
@@ -43,18 +44,27 @@ static float wrap180(float d)
 	return fmodf(fmodf(d, 360.0f) + 540.0f, 360.0f) - 180.0f;
 }
 
-/* dm10: squared error of one flat stretch about its own circular mean, added to the totals; empties the stretch */
-static void flat_end(const float *d, int *n, double *e2, int *tot)
+/* dm10: squared error of one flat stretch from row "from" on about its own circular mean, added to the totals */
+static void flat_add(const float *d, int from, int n, double *e2, int *tot)
 {
 	double sn = 0, cs = 0;
-	for (int i = 0; i < *n; i++)
+	for (int i = from; i < n; i++)
 		sn += sin(d[i] * M_PI / 180), cs += cos(d[i] * M_PI / 180);
 	float mean = (float)(atan2(sn, cs) * 180 / M_PI);
-	for (int i = 0; i < *n; i++) {
+	for (int i = from; i < n; i++) {
 		float x = wrap180(d[i] - mean);
 		*e2 += x * x;
 	}
-	*tot += *n;
+	*tot += n > from ? n - from : 0;
+}
+
+/* dm11: all rows, and without the first 5 s, where the heading is still catching up after a tumble; empties the stretch */
+static double flat_e2, flat_s_e2;
+static int flat_tot, flat_s_tot;
+static void flat_end(const float *d, int *n)
+{
+	flat_add(d, 0, *n, &flat_e2, &flat_tot);
+	flat_add(d, FLAT_SETTLE_ROWS, *n, &flat_s_e2, &flat_s_tot);
 	*n = 0;
 }
 
@@ -145,8 +155,9 @@ int main(int argc, char **argv)
 		f.cal.heading_tc = 0;
 	f.cal.hold_off = env_off("SNS_MAG_HOLD"), f.cal.gate_off = env_off("SNS_MAG_GATE");
 	f.cal.gbias_off = env_off("SNS_DM_GBIAS"), f.cal.hc_off = env_off("SNS_HEADING_CF");
+	f.cal.gm_off = env_off("SNS_MAG_GYROFIT");
 	e = getenv("SNS_HEADING_GRAVITY");
-	f.cal.grav_q = e && !strcmp(e, "q");
+	f.cal.grav_q = !(e && !strcmp(e, "lp"));
 	if ((e = getenv("SNS_HC_K_SLOW")))
 		f.cal.hc_k_slow = (float)atof(e);
 	if ((e = getenv("SNS_HC_K_FAST")))
@@ -164,9 +175,8 @@ int main(int argc, char **argv)
 	double sin_sum = 0, cos_sum = 0;
 	int row_prev = 0, prev_still = 0, nv = 0, capv = 0;
 	float *dv = NULL, *fl = NULL;
-	int nfl = 0, flat_tot = 0;
-	double flat_e2 = 0;
-	printf("T h hmag gyro_yaw fit acc r res still\n");
+	int nfl = 0;
+	printf("T h hmag gyro_yaw fit acc r res still flat\n");
 	for (size_t i = 0; i < n; i++) {
 		const struct smp *x = &s[i];
 		uint64_t ts = (uint64_t)((x->t - t0 + 1.0) * TICKS);
@@ -211,11 +221,11 @@ int main(int argc, char **argv)
 		if (x->t < next_row)
 			continue;
 		next_row += 0.5;
-		printf("%.2f %.1f %.1f %.1f %s %d %.1f %.2f %d\n", x->t - t0, h, f.hc_hmag_ok ? f.hc_hmag : -1.0f, yaw,
-		    dm_mag_cal_dsp(&f) ? "dsp" : f.cal.have_cal ? "fit" : "none", dm_mag_accuracy(&f), f.cal.r, f.cal.res, f.still);
+		printf("%.2f %.1f %.1f %.1f %s %d %.1f %.2f %d %d\n", x->t - t0, h, f.hc_hmag_ok ? f.hc_hmag : -1.0f, yaw,
+		    dm_mag_src(&f), dm_mag_accuracy(&f), f.cal.r, f.cal.res, f.still, fabsf(u[2]) >= cosf(15.0f * (float)M_PI / 180.0f));
 		if (!have_h) {
 			row_prev = 0;
-			flat_end(fl, &nfl, &flat_e2, &flat_tot);
+			flat_end(fl, &nfl);
 			continue;
 		}
 		float d = wrap180(h - yaw);
@@ -231,7 +241,7 @@ int main(int argc, char **argv)
 		if (fabsf(u[2]) >= cosf(15.0f * (float)M_PI / 180.0f))
 			fl[nfl++] = d;
 		else
-			flat_end(fl, &nfl, &flat_e2, &flat_tot);
+			flat_end(fl, &nfl);
 		if (row_prev) {
 			float st = fabsf(wrap180(h - h_prev)), sd = fabsf(wrap180(d - d_prev));
 			float *ps = f.still && prev_still ? &step_still : &step_move, *pd = f.still && prev_still ? &sdiff_still : &sdiff_move;
@@ -240,7 +250,7 @@ int main(int argc, char **argv)
 		}
 		h_prev = h, d_prev = d, row_prev = 1, prev_still = f.still;
 	}
-	flat_end(fl, &nfl, &flat_e2, &flat_tot);
+	flat_end(fl, &nfl);
 	double mean = atan2(sin_sum, cos_sum) * 180 / M_PI, e2 = 0;
 	for (int i = 0; i < nv; i++) {
 		float x = wrap180(dv[i] - (float)mean);
@@ -250,12 +260,18 @@ int main(int argc, char **argv)
 	printf("summary: samples %zu, %.1f s\n", n, n ? s[n - 1].t - t0 : 0.0);
 	printf("summary: fit %s c %.2f %.2f %.2f r %.2f res %.2f acc %d n %d, gate rej r %u dip %u\n",
 	    f.cal.have_cal ? "yes" : "no", f.cal.c[0], f.cal.c[1], f.cal.c[2], f.cal.r, f.cal.res, f.cal.acc, f.cal.n, f.rej_r, f.rej_dip);
+	float bu[3];
+	dm_mag_bias(&f, bu);
+	printf("summary: bias %s %.2f %.2f %.2f acc %d; gyro-aided pairs %u eig %.1f %.1f %.1f res %.2f, rej jump %u\n", dm_mag_src(&f), bu[0],
+	    bu[1], bu[2], dm_mag_accuracy(&f), f.cal.gm_pairs, f.cal.gm_eig[0], f.cal.gm_eig[1], f.cal.gm_eig[2], f.cal.gm_res, f.gm_rej_jump);
 	printf("summary: gyro bias fusion %.4f %.4f %.4f, run-wide %.4f %.4f %.4f (%.0f s still)\n", f.gbias[0], f.gbias[1],
 	    f.gbias[2], tb[0], tb[1], tb[2], still_s);
 	printf("summary: largest step per 0.5 s: still %.1f deg, moving %.1f deg; less the gyro's: still %.1f, moving %.1f\n",
 	    step_still, step_move, sdiff_still, sdiff_move);
 	printf("summary: rms(h - gyro_yaw - %.1f) = %.2f deg over %d rows\n", mean, rms, nv);
 	printf("summary: rms flat stretches (15 deg) = %.2f deg over %d rows\n", flat_tot ? sqrt(flat_e2 / flat_tot) : -1.0, flat_tot);
+	printf("summary: rms flat settled (first 5 s of each stretch out) = %.2f deg over %d rows\n",
+	    flat_s_tot ? sqrt(flat_s_e2 / flat_s_tot) : -1.0, flat_s_tot);
 	free(dv);
 	free(fl);
 	free(s);

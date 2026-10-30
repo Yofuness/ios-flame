@@ -208,6 +208,110 @@ static void t9_tests(void)
 	T9_OK(!f.hc_have && !f.gbias_have && f.still, "dm9 switches off: no filter, no gbias");
 }
 
+/* dm11: quaternion step by body rate w over dt, and the world vector v in the device frame (q: device -> world) */
+static void t11_step(float q[4], const float w[3], float dt)
+{
+	float h = 0.5f * dt, a = q[0], b = q[1], c = q[2], d = q[3];
+	q[0] = a - h * (b * w[0] + c * w[1] + d * w[2]);
+	q[1] = b + h * (a * w[0] + c * w[2] - d * w[1]);
+	q[2] = c + h * (a * w[1] - b * w[2] + d * w[0]);
+	q[3] = d + h * (a * w[2] + b * w[1] - c * w[0]);
+	float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+	for (int i = 0; i < 4; i++)
+		q[i] /= n;
+}
+
+static void t11_to_dev(const float q[4], const float v[3], float o[3])
+{
+	float a = q[0], b = q[1], c = q[2], d = q[3];
+	o[0] = (1 - 2 * (c * c + d * d)) * v[0] + 2 * (b * c + a * d) * v[1] + 2 * (b * d - a * c) * v[2];
+	o[1] = 2 * (b * c - a * d) * v[0] + (1 - 2 * (b * b + d * d)) * v[1] + 2 * (c * d + a * b) * v[2];
+	o[2] = 2 * (b * d + a * c) * v[0] + 2 * (c * d - a * b) * v[1] + (1 - 2 * (b * b + c * c)) * v[2];
+}
+
+/* secs at 100 Hz gyro, 50 Hz mag in the field fld; rate(t) as in the tumble or a flat turn. Biases as on the phone */
+static void t11_run(struct dm_fusion *f, float q[4], uint64_t *ts, float secs, const float fld[3], int mode)
+{
+	const float hb[3] = { -34, -41, -60 }, gb[3] = { 0.01f, -0.005f, 0.004f }, up[3] = { 0, 0, 9.81f };
+	static float t;
+	static unsigned seed = 11;
+	for (int i = 0; i < (int)(secs * 100); i++, *ts += 192000, t += 0.01f) {
+		float w[3] = { 0, 0, 0 }, a[3], m[3], g[3];
+		if (mode == 1)
+			w[0] = 1.3f * sinf(0.53f * t), w[1] = 1.1f * sinf(0.37f * t + 1), w[2] = 0.9f * sinf(0.23f * t + 2);
+		else if (mode == 2)
+			w[2] = 0.8f;
+		t11_step(q, w, 0.01f);
+		t11_to_dev(q, up, a);
+		t11_to_dev(q, fld, m);
+		for (int k = 0; k < 3; k++) {
+			seed = seed * 1103515245u + 12345u;
+			m[k] += hb[k] + 0.3f * ((seed >> 8 & 0xffff) / 32768.0f - 1);
+			g[k] = w[k] + gb[k];
+		}
+		dm_accel(f, a);
+		if (i % 2 == 0)
+			dm_mag_ts(f, m, *ts);
+		dm_gyro(f, g, *ts, 19200000.0);
+	}
+}
+
+/* dm11: the field strength differs between two places (as desk and room): the sphere is pulled off, the gyro fit is not */
+static void t11_tests(void)
+{
+	static struct dm_fusion f, f2;
+	const float room[3] = { 21, 0, -44 }, desk[3] = { 11, 0, -52 }, hb[3] = { -34, -41, -60 };
+	float q[4] = { 1, 0, 0, 0 }, b[3];
+	uint64_t ts = 19200000;
+	dm_init(&f, 0.04f);
+	t11_run(&f, q, &ts, 4, room, 0);	/* still: the gyro bias */
+	t11_run(&f, q, &ts, 90, room, 1);
+	t11_run(&f, q, &ts, 120, desk, 2);
+	float sph = sqrtf((f.cal.c[0] - hb[0]) * (f.cal.c[0] - hb[0]) + (f.cal.c[1] - hb[1]) * (f.cal.c[1] - hb[1]) +
+	    (f.cal.c[2] - hb[2]) * (f.cal.c[2] - hb[2]));	/* here the pull is in z: the flat turn is symmetric in x, y */
+	dm_mag_bias(&f, b);
+	float gm = hypotf(b[0] - hb[0], b[1] - hb[1]), gz = fabsf(b[2] - hb[2]);
+	int o = f.cal.gm_ok && !strcmp(dm_mag_src(&f), "gyro") && gm < 1 && gz < 1 && dm_mag_accuracy(&f) == 2;
+	printf("%s dm11 two places: gyro-aided %.2f,%.2f,%.2f xy err %.2f z err %.2f acc %d res %.2f\n", o ? "ok  " : "FAIL", b[0], b[1], b[2],
+	    gm, gz, dm_mag_accuracy(&f), f.cal.gm_res);
+	fails += !o;
+	o = f.cal.have_cal && sph > 1.5f;
+	printf("%s dm11 two places: sphere %.2f,%.2f,%.2f err %.2f r %.1f\n", o ? "ok  " : "FAIL", f.cal.c[0], f.cal.c[1], f.cal.c[2], sph, f.cal.r);
+	fails += !o;
+	/* magcal.txt: the state comes back; a line without it still gives the bias */
+	const char *path = "out/magcal-test.txt";
+	o = !dm_magcal_save(&f, path);
+	dm_init(&f2, 0.04f);
+	o = o && !dm_magcal_load(&f2, path) && f2.cal.gm_ok && fabsf(f2.cal.gm_c[0] - b[0]) < 0.01f &&
+	    fabs(f2.cal.gm_ata[0] - f.cal.gm_ata[0]) < 1e-3 * f.cal.gm_ata[0] && dm_mag_accuracy(&f2) == dm_mag_accuracy(&f);
+	printf("%s dm11 magcal gm line round trip\n", o ? "ok  " : "FAIL");
+	fails += !o;
+	/* one axis of rotation: z has no information and keeps the prior; flat turning alone gives accuracy 1 */
+	memset(&f2, 0, sizeof(f2));
+	dm_init(&f2, 0.04f);
+	f2.cal.have_cal = 1, f2.cal.acc = 1, f2.cal.r = 50;
+	f2.cal.c[0] = -30, f2.cal.c[1] = -45, f2.cal.c[2] = -50;
+	float q2[4] = { 1, 0, 0, 0 };
+	t11_run(&f2, q2, &ts, 4, room, 0);
+	t11_run(&f2, q2, &ts, 60, room, 2);
+	dm_mag_bias(&f2, b);
+	o = f2.cal.gm_ok && hypotf(b[0] - hb[0], b[1] - hb[1]) < 1 && fabsf(b[2] + 50) < 1 && dm_mag_accuracy(&f2) == 1;
+	printf("%s dm11 flat turn only: %.2f,%.2f,%.2f (z stays -50) acc %d\n", o ? "ok  " : "FAIL", b[0], b[1], b[2], dm_mag_accuracy(&f2));
+	fails += !o;
+	/* SEE wins, and SNS_MAG_GYROFIT=0 stays with the sphere */
+	const float sb[3] = { 1, 2, 3 };
+	dm_mag_cal_bias(&f2, sb, 1);
+	o = !strcmp(dm_mag_src(&f2), "dsp");
+	memset(&f2, 0, sizeof(f2));
+	dm_init(&f2, 0.04f);
+	f2.cal.gm_off = 1;
+	t11_run(&f2, q2, &ts, 4, room, 0);
+	t11_run(&f2, q2, &ts, 30, room, 2);
+	o = o && !f2.cal.gm_ok && f2.cal.gm_pairs == 0;
+	printf("%s dm11 source order: SEE first; switch off: no pairs\n", o ? "ok  " : "FAIL");
+	fails += !o;
+}
+
 int main(void)
 {
 	struct dm_report2 r;
@@ -417,6 +521,7 @@ int main(void)
 		fails += !ok;
 	}
 	t9_tests();
+	t11_tests();
 	/* O13: interest from the status text (devmotion8) and the 5 s hold */
 	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
 	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"

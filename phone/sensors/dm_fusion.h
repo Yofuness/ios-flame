@@ -99,6 +99,25 @@ _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bi
 #define DM_HC_FAST 0.5f		/* rad/s */
 #define DM_HC_UPRIGHT 20.0f	/* deg: top this close to vertical: the back of the device gives the heading */
 #define DM_BETA_STILL 0.2f
+/*
+ * dm11: gyro-aided hard iron (SNS_MAG_GYROFIT=0: off), independent of the field strength, which differs between places.
+ * Pairs of mag samples ~2 s apart with the gyro's rotation R (j -> i): (I - R) b = m_i - R m_j. Normal equations with a
+ * forgetting per pair (a still phone forgets nothing). Source: SEE status >= 1 > this (see gm_ok) > the sphere fit.
+ */
+#define DM_GM_HIST 64		/* history entries, ~2.5 s */
+#define DM_GM_HIST_S 0.035	/* s: at least this between entries (~25 Hz at 50 Hz mag) */
+#define DM_GM_PAIR_EVERY 5	/* entries per pair (~5 Hz) */
+#define DM_GM_LAG_S 2.0		/* s, +- DM_GM_LAG_TOL */
+#define DM_GM_LAG_TOL 0.5
+#define DM_GM_MIN_DEG 25.0f	/* smaller rotations carry mostly noise */
+#define DM_GM_MAX_RATE 5.0f	/* rad/s: faster in the window: integration error */
+#define DM_GM_JUMP 10.0f	/* uT: | |m_i - b| - |m_j - b| | above this: a disturbance */
+#define DM_GM_JUMP_STREAK 50	/* this many in a row: the bias is off, not the field; accept */
+#define DM_GM_HALF_PAIRS 3000.0	/* half-life, ~10 min of pairs */
+#define DM_GM_SOLVE_S 5.0
+#define DM_GM_LAMBDA 0.5	/* Tikhonov weight toward the prior; a 25 deg pair adds ~0.2 */
+#define DM_GM_EIG_MIN 20.0	/* AtA eigenvalue of an observable direction */
+#define DM_GM_RES_GOOD 4.0f	/* uT: RMS pair residual for accuracy 2 */
 
 struct dm_fusion {
 	float q[4];		/* w x y z: device -> earth (z up) */
@@ -120,8 +139,13 @@ struct dm_fusion {
 		float heading_tc;		/* s, 0 = no heading low-pass */
 		int hold_off, gate_off;		/* dm8: env switches (SNS_MAG_HOLD=0, SNS_MAG_GATE=0) */
 		int gbias_off, hc_off;		/* dm9: env switches (SNS_DM_GBIAS=0, SNS_HEADING_CF=0) */
-		int grav_q;			/* dm10: SNS_HEADING_GRAVITY=q: tilt from q, not the low-passed accel (default lp) */
+		int grav_q;			/* dm11: tilt from q (default); SNS_HEADING_GRAVITY=lp: the low-passed accel */
 		float hc_k_slow, hc_k_fast;	/* dm10: DM_HC_K_* unless SNS_HC_K_SLOW / SNS_HC_K_FAST */
+		/* dm11: AtA (xx xy xz yy yz zz), Atb, y.y and the weight sum; persisted in magcal.txt */
+		double gm_ata[6], gm_atb[3], gm_yty, gm_w, gm_eig[3];	/* gm_eig: ascending */
+		float gm_c[3], gm_r, gm_res;
+		int gm_ok, gm_acc, gm_off;	/* gm_ok: two directions observable, gm_c is the bias; gm_off: SNS_MAG_GYROFIT=0 */
+		unsigned gm_pairs;
 	} cal;
 	/* dm8: mag used for the correction (gated), its time and the raw sample's time (ticks; 0 = untimed) */
 	float mag_use[3];
@@ -143,6 +167,16 @@ struct dm_fusion {
 	int grav_have;
 	float hc_h, hc_hmag;		/* deg, 0..360 */
 	int hc_have, hc_hmag_ok;
+	/* dm11: gyro-only orientation (device -> a free reference) and the mag history; restart with the fusion */
+	float gq[4];
+	struct dm_gm_hist {
+		uint64_t ts;
+		float m[3], q[4];
+	} gm_h[DM_GM_HIST];
+	int gm_hn, gm_hi, gm_tick, gm_jumps;
+	unsigned gm_rej_jump;
+	uint64_t gm_fast_ts, gm_solve_ts;
+	unsigned gm_solved_at;
 };
 
 void dm_init(struct dm_fusion *f, float beta);
@@ -165,6 +199,7 @@ int dm_sphere_fit(const float (*m)[3], int n, float c[3], float *r, float *res);
 void dm_mag_cal_bias(struct dm_fusion *f, const float b[3], int status);
 void dm_gyro_cal_bias(struct dm_fusion *f, const float b[3], int status);
 int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: the fit */
+const char *dm_mag_src(const struct dm_fusion *f);	/* dm11: "dsp", "gyro", "fit", "none" */
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
 float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */

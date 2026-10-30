@@ -415,8 +415,10 @@ static int start(void)
 	dm.cal.gbias_off = e && !strcmp(e, "0");
 	e = getenv("SNS_HEADING_CF");	/* dm9: complementary heading and still beta, 0 = off */
 	dm.cal.hc_off = e && !strcmp(e, "0");
-	e = getenv("SNS_HEADING_GRAVITY");	/* dm10: q = tilt from q (default lp) */
-	dm.cal.grav_q = e && !strcmp(e, "q");
+	e = getenv("SNS_HEADING_GRAVITY");	/* dm11: lp = tilt from the low-passed accel (default q) */
+	dm.cal.grav_q = !(e && !strcmp(e, "lp"));
+	e = getenv("SNS_MAG_GYROFIT");	/* dm11: gyro-aided hard iron, 0 = off */
+	dm.cal.gm_off = e && !strcmp(e, "0");
 	e = getenv("SNS_HEADING_TRACE");
 	dm_trace = e && !strcmp(e, "1");
 	e = getenv("SNS_DM_TYPE");
@@ -652,7 +654,7 @@ void sns_tick(const struct sns_link_ops *ops)
 			dm_mag_bias(&dm, b);
 			printf(", devmotion %llu, dm type %d acc %d cal %s r %.1f res %.2f n %d ring %d bias %.1f,%.1f,%.1f "
 			    "st %d yaw %.1f gcal st %d %.4f,%.4f,%.4f", (unsigned long long)dm_written, dm_type_last,
-			    dm_mag_accuracy(&dm), dm_mag_cal_dsp(&dm) ? "dsp" : dm.cal.have_cal ? "fit" : "none", dm.cal.r,
+			    dm_mag_accuracy(&dm), dm_mag_src(&dm), dm.cal.r,
 			    dm.cal.res, dm.cal.n, dm.cal.ring_n, b[0], b[1], b[2], dm.see_mag_st, dm_yaw, dm.see_gyro_st,
 			    dm.see_gyro_bias[0], dm.see_gyro_bias[1], dm.see_gyro_bias[2]);
 			printf(", mag gaps >200ms %u >1s %u max %llu ms, gate rej r %u dip %u", dm_gap_200, dm_gap_1s,
