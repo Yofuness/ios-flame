@@ -10,12 +10,13 @@ v1.1 (2026-10-30): NULL instead of PROC_NULL (build fix).
 v2 (2026-10-30): bounded blob logging (strings >= 8 chars with offsets + hex 0x00-0x7f, 4 launchd + 32 others), op4 result logging, HOME=/var/mobile/Containers/Data/... fallback from the exec environment (kern_exec.c, after exec_extract_strings). Needs the base commit tracking kern_exec.c (unchanged file).
 v3 (2026-10-30): lookup by pid only (the exec-time uniqueid did not match, sb2), op-4 calls after 60 s logged.
 v4: entries kept across the exit notification an exec sends for the retired proc (sb3); op4 log aimed at Providers.
+v5: the entry is cleared at the start of the HOME scan; the exec hook (later in the same exec) no longer wipes it (sb4).
 ---
  bsd/kern/sweet_amfi.c | 314 +++++++++++++++++++++++++++++++++++++++++++++++++-
  1 file changed, 313 insertions(+), 1 deletion(-)
 
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 8d4012f..e0edb05 100644
+index 8d4012f..58f33d6 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
 @@ -26,6 +26,7 @@
@@ -26,7 +27,7 @@ index 8d4012f..e0edb05 100644
  #include <IOKit/IOBSD.h>
  #include <kern/startup.h>
  #include <libkern/amfi/amfi.h>
-@@ -408,6 +409,349 @@ sweet_sbext_consume(struct proc *p, user_addr_t arg)
+@@ -408,6 +409,351 @@ sweet_sbext_consume(struct proc *p, user_addr_t arg)
  	return 0;
  }
  
@@ -160,8 +161,7 @@ index 8d4012f..e0edb05 100644
 +		return 0;
 +	}
 +	pid_t pid = proc_pid(p);
-+	/* 0240 v2: a new exec in this pid drops the old entry (HOME fallback re-adds) */
-+	sweet_sandbox_proc_exit(p);
++	/* v5: no clearing here: this hook runs after the HOME scan of the same exec (it clears instead) */
 +	if (macpolicyattr == NULL || macpolicyattrlen == 0) {
 +		return 0;
 +	}
@@ -220,6 +220,9 @@ index 8d4012f..e0edb05 100644
 +	if (!sweet_sbcont_enabled() || path == NULL || env == NULL) {
 +		return;
 +	}
++	/* v5: a new exec in this pid drops the old entry here, before anything of this exec is stored (the
++	   exec hook runs later in exec_mach_imgact and used to wipe what this scan had just stored: sb4) */
++	sweet_sandbox_proc_exit(p);
 +	if (strncmp(path, "/System/", 8) != 0 && strncmp(path, "/Applications/", 14) != 0 &&
 +	    strncmp(path, "/private/var/containers/", 24) != 0 &&
 +	    strncmp(path, "/var/containers/", 16) != 0) {
@@ -376,7 +379,7 @@ index 8d4012f..e0edb05 100644
  static int
  sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
  {
-@@ -422,7 +766,8 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+@@ -422,7 +768,8 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
  		return sweet_sbext_enabled() ? sweet_sbext_issue(p, arg) : ENOENT;
  	case 6:         /* extension consume (0219) */
  		return sweet_sbext_enabled() ? sweet_sbext_consume(p, arg) : ENOENT;
@@ -386,7 +389,7 @@ index 8d4012f..e0edb05 100644
  	case 0x43:      /* container expected */
  		return ENOENT;
  	default:
-@@ -558,6 +903,8 @@ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
+@@ -558,6 +905,8 @@ sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
  static const struct mac_policy_ops sweet_sandbox_mac_ops = {
  	.mpo_policy_syscall = sweet_sandbox_syscall,
  	.mpo_priv_grant = sweet_sandbox_priv_grant,
