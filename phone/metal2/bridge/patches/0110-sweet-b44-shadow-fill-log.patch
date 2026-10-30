@@ -1,0 +1,98 @@
+diff --git a/crates/metal2vulkan-runtime/src/buffer_texture.rs b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+--- a/crates/metal2vulkan-runtime/src/buffer_texture.rs
++++ b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+@@ -1254,7 +1254,14 @@
+                     depth: 1,
+                 },
+             })
+-            .collect();
++            .collect::<Vec<_>>();
++        // 0110 (B44): what every shadow fill copies, once per kind (shadow_fill_log).
++        let path = match (&staging, repack) {
++            (None, _) => "direct",
++            (Some(_), true) => "repack",
++            (Some(_), false) => "staging",
++        };
++        shadow_fill_log(self.texel_bytes, aspects, width, layout, at, path, &regions);
+         let (bytes, tracked) = self.buffer.tracked(layout.offset..layout.end());
+         Ok(ShadowCopies {
+             source: ShadowSource::Bytes {
+@@ -1619,4 +1626,78 @@
+             let _ = file.write_all(line.as_bytes());
+         }
+     }
++}
++
++/// 0110 (B44): one line per distinct (texel size, aspects, extent, row, offset % texel, path)
++/// of a shadow fill, the first 64, into /dev/console and /var/local/mtl2.log as 0109's are:
++/// the texels' offset in the `VkBuffer` and its residues, the slices' pitch and each region's
++/// copy (`Texels::shadow_copies`). Off: M2V_SHADOW_FILL_LOG=0.
++fn shadow_fill_log(
++    texel_bytes: u64,
++    aspects: vk::ImageAspectFlags,
++    width: u64,
++    layout: &BufferLayout,
++    at: u64,
++    path: &str,
++    regions: &[vk::BufferImageCopy],
++) {
++    use std::io::Write;
++    use std::sync::Mutex;
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    static SEEN: Mutex<Vec<(u64, u32, u64, u64, u64, u64, &'static str)>> = Mutex::new(Vec::new());
++    if !*ON.get_or_init(|| std::env::var_os("M2V_SHADOW_FILL_LOG").is_none_or(|v| v != "0")) {
++        return;
++    }
++    let path: &'static str = match path {
++        "direct" => "direct",
++        "repack" => "repack",
++        _ => "staging",
++    };
++    let key = (
++        texel_bytes,
++        aspects.as_raw(),
++        width,
++        layout.rows,
++        layout.row_pitch,
++        at % texel_bytes.max(1),
++        path,
++    );
++    {
++        let Ok(mut seen) = SEEN.lock() else { return };
++        if seen.len() >= 64 || seen.contains(&key) {
++            return;
++        }
++        seen.push(key);
++    }
++    let mut line = format!(
++        "MTL2[{} {}]: B44 fill fmt {texel_bytes}B asp {:#x} {width}x{} row {} rowbytes {} slices {} slicepitch {} off {at} off%texel {} off%16 {} path {path}",
++        std::process::id(),
++        std::env::args().next().unwrap_or_default(),
++        aspects.as_raw(),
++        layout.rows,
++        layout.row_pitch,
++        layout.row_bytes,
++        layout.slices,
++        layout.slice_pitch,
++        at % texel_bytes.max(1),
++        at % 16,
++    );
++    for region in regions.iter().take(4) {
++        line += &format!(
++            " | boff {} boff%texel {} rowlen {} imgh {} layer {} ext {}x{}",
++            region.buffer_offset,
++            region.buffer_offset % texel_bytes.max(1),
++            region.buffer_row_length,
++            region.buffer_image_height,
++            region.image_subresource.base_array_layer,
++            region.image_extent.width,
++            region.image_extent.height,
++        );
++    }
++    line.push('\n');
++    for file in ["/dev/console", "/var/local/mtl2.log"] {
++        if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(file) {
++            let _ = file.write_all(line.as_bytes());
++        }
++    }
+ }
