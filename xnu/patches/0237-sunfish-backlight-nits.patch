@@ -1,0 +1,103 @@
+From 65df428d4654f7dd9c581ef8c35f7deecbca9045 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 07:09:55 -0400
+Subject: [PATCH] 0237 sunfish: backlight nits range for CoreBrightness (from
+ redfin 0973)
+
+---
+ iokit/Kernel/arm/SweetBacklight.cpp | 52 +++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetBacklight.cpp b/iokit/Kernel/arm/SweetBacklight.cpp
+index 7431015..33f60a3 100644
+--- a/iokit/Kernel/arm/SweetBacklight.cpp
++++ b/iokit/Kernel/arm/SweetBacklight.cpp
+@@ -12,6 +12,9 @@
+  * 0216: the Control Center slider sends "brightness" / "backlight-level"
+  * (0..0x10000, k90a), never nits: sweetbl=2 maps "brightness" to
+  * DCS = 32 + b * 479 / 65536 (32..511).
++ * 0237: the panel's nits range (from ios-redfin 0973, MIT). Without it
++ * CoreBrightness falls back to logical 0..1 and never moves the backlight
++ * ("systemShallUpdateBacklight=false"). 2 / 155 / 500 nits; sweetnits=0: off.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <IOKit/IOLib.h>
+@@ -35,6 +38,7 @@ private:
+ 	void putNumber(OSDictionary *d, const char *key, UInt32 value);
+ 	static void logValue(const char *key, OSObject *value);
+ 	void setNits(uint32_t raw);
++	void publishNits();
+ 	uint32_t fMode;		/* 0209: sweetbl value */
+ };
+ OSDefineMetaClassAndStructors(AppleARMBacklight, IOService);
+@@ -90,12 +94,59 @@ AppleARMBacklight::start(IOService *provider)
+ 	OSSafeReleaseNULL(params);
+ 	putNumber(NULL, "brightness-nits", 0x00c80000);		/* 200.0, 16.16 */
+ 	putNumber(NULL, "brightness-nits-cap", 0x01f40000);	/* 500.0, 16.16 */
++	publishNits();
+ 
+ 	registerService();
+ 	IOLog("SWEET BL: published\n");
+ 	return true;
+ }
+ 
++/* 0237: integer nits (redfin's keys), the calibration dict and the two CFData values in 16.16. */
++void
++AppleARMBacklight::publishNits()
++{
++	uint32_t on = 1;
++	(void)PE_parse_boot_argn("sweetnits", &on, sizeof(on));
++	if (!on) {
++		return;
++	}
++	static const struct {
++		const char *key;
++		UInt32 value;
++	} fixed[] = {
++		{ "MinNits", 2 }, { "MaxNits", 500 }, { "MaxNitsPanel", 500 },
++		{ "HardwareAccessibleMinNits", 2 }, { "HardwareAccessibleMaxNits", 500 },
++		{ "DisplayPanelLuminanceMin", 2 }, { "DisplayPanelLuminanceMid", 155 }, { "DisplayPanelLuminanceMax", 500 },
++		{ "DisplayProductLuminanceMin", 2 }, { "DisplayProductLuminanceMid", 155 }, { "DisplayProductLuminanceMax", 500 },
++	};
++	for (unsigned i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
++		putNumber(NULL, fixed[i].key, fixed[i].value);
++	}
++	/* currents are guesses (mA, 16.16): CoreBrightness only needs them present */
++	static const struct {
++		const char *key;
++		UInt32 value;
++	} cal[] = {
++		{ "lMinPanel", 2 << 16 }, { "lMinProduct", 2 << 16 },
++		{ "lMidPanel", 155 << 16 }, { "lMidProduct", 155 << 16 },
++		{ "lMaxPanel", 500 << 16 }, { "lMaxProduct", 500 << 16 },
++		{ "current-for-max-backlight", 20 << 16 }, { "current-for-mid-backlight", 6 << 16 },
++		{ "hardware-max-current-limit", 25 << 16 },
++	};
++	OSDictionary *d = OSDictionary::withCapacity(sizeof(cal) / sizeof(cal[0]));
++	if (d) {
++		for (unsigned i = 0; i < sizeof(cal) / sizeof(cal[0]); i++) {
++			putNumber(d, cal[i].key, cal[i].value);
++		}
++		setProperty("backlight-calibration-parameters", d);
++	}
++	OSSafeReleaseNULL(d);
++	UInt32 maxNits = 500 << 16, minNits = 2 << 16;
++	setProperty("user-accessible-max-nits", &maxNits, sizeof(maxNits));
++	setProperty("digital-dimming-min-nits", &minNits, sizeof(minNits));
++	IOLog("SWEET BL: nits range 2..500 published\n");
++}
++
+ void
+ AppleARMBacklight::logValue(const char *key, OSObject *value)
+ {
+@@ -131,6 +182,7 @@ AppleARMBacklight::setNits(uint32_t raw)
+ 	OSSafeReleaseNULL(bright);
+ 	OSSafeReleaseNULL(params);
+ 	if (fMode >= 2 && nits > 0) {
++		c = c < 2 ? 0 : c;	/* 0237: below the 2-nit floor = DCS 32 */
+ 		sweet_panel_brightness((uint16_t)(32 + c * (511 - 32) / 500));
+ 	}
+ }
+-- 
+2.56.0
+
