@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 Stage d: a raw IMX363 frame (2016x1512 RAW10) is captured into RAM and saved to a file (`CAPMODE="--bypass --sid 0x8c0" tools/sunfish-cam-rx.sh --capture`, no reset); half of it still missing (SID 0xcc0 writes trapped); no iOS camera yet. **Updated:** 2026-10-31.
+**State:** 🟡 Stage d works: a complete raw IMX363 frame (2016x1512 RAW10) from two half captures through SID 0x8c0 (`--addr-offset 0x400`) joined by tools/sunfish-cam-merge.py, no reset; SID 0xcc0 (TBU hf1) passing still resets; no iOS camera yet. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 02:10 cam19 (kernel109, cam18r boot): FULL FRAME from two half captures, no reset
+- A `--bypass --sid 0x8c0`: buf done ~210 ms, frame 1889325 nonzero, guard 5917 (+1..+12095), late writes N, restored; 2 min SSH OK. B `... --addr-offset 0x400`: buf done ~220 ms, frame 1888380 nonzero, guard 6083 (+64..+11327), late writes N, restored; 3 min SSH OK.
+- `sunfish-cam-merge.py cam19-a.raw cam19-b.raw cam19-full.raw`: 3721 blocks of 1 KB, **empty even 0, odd 0**; merged: 0 all-zero 1 KB blocks, mean byte 31.2, max 255, histogram [142516, 326650, 3507, 12443, 11779, 6189, 1574, 6233, 3527, 1554, 53, 1543, 12445, 6150, 1537, 6620]; raw2png gray 0..245, colour (RGGB guess) R 0..245 G 7..134 B 0..245. Files in work/cam/ (cam19-full*.png), not viewed (privacy, night).
+- Root cause research for SID 0xcc0 (research/notes/camera-sid-cc0.md): 0x8c0 goes through TBU mnoc_hf_0 (SIDs 0x800-0xbff), 0xcc0 through TBU mnoc_hf_1 (0xc00-0xfff) (live.dts:13930-13958); TBU power votes GCC 0x17d040 (hf0), 0x17d044 (sf), 0x17d048 (hf1); redfin also turned on GCC camera_sf_axi (we don't). Next: read-only reads of those + the TBU status registers, then sf_axi on, then the hf1 TBU vote, one per boot.
 
 ### 2026-10-31 01:45 cam18 (kernel109, cam17r boot): 0xcc0 writes stay in the buffer; bounded translation still RESETS
 - A (`--bypass --sid 0x8c0`, cadab15, FAR sampling): 3 trap faults sampled, all SID 0xcc0, FAR 0x9cb00400, 0x9cb88c00, 0x9ce76400 (all inside the buffer); frame 1889287 nonzero, guard 5909 (+1..+12095); late writes N; restored; **no reset** (6 of 6 SSH checks in 3 min).
