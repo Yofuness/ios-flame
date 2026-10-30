@@ -23,6 +23,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:00 RESET with btbridge's screen-off idle mode (124c3af, btd1, kernel123)
+- Installed btbridge 124c3af (10 ms per loop while blanked, no link, no HCI traffic 500 ms; BT_DARK=0 off). Bring-up fine (3 Mbaud, "ready, pumping"; two "chip error: op 0x2007 status 0xc" lines, not seen before); K: "idle (screen blanked, no link): 10 ms" within 12 s, btbridge CPU 0.05 s per 60 s screen-off; H: "active", Settings > Bluetooth On with AirPods + Xbox listed; K/H cycle 1 clean (stats: overruns 0, uart dropped 0, recoveries 0).
+- During K/H cycles 2-3 the phone RESET into fastboot (4439 mV): per-boot log ../logs/boots/20261030-131806.log ends at 354.8 s with ordinary lines, no panic/watchdog text. Cause unknown; the same K/H cycles on kernel123 with the old btbridge (dk1) were clean, so the idle mode is the suspect (e.g. RFR held long while the chip streams, or the 10 ms sleep vs a kernel UART path).
+- Restored btbridge.old (rebooted kernel123, md5 matches the old binary). Smaller next step: BT_DARK with a 3 ms period first, or idle only after 5 s quiet; check the kernel UART/RFR side before more cycles.
+
 ### 2026-10-30 02:05 bt12 (kernel111, CAMERA=1 boots): first bring-up fixed: BT up on 4 of 4 boots (e8dc3b7)
 - Cause (research/notes/bt-boot-failures.md, 18 boots 20:07-01:18): 2 failed (11 %), both "wifi: rails up after 0 s": wait_wifi() found the LAST boot's "modem ready" in /var/local/wland.log (wland renames it to .prev only when it starts), so btbridge powered the chip before this boot's wland had it up: UART RX low ("gpio: ... rx 0"), "version reply (0 bytes)", 3 tries in ~45 s, "no controller, stop", Bluetooth gone for the boot (bluetoothd looping "no bridge yet").
 - Fix: only a wland.log with mtime >= kern.boottime counts; after 3 failed tries, 5 more rounds 30 s apart instead of exiting.

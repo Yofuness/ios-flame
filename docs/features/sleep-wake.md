@@ -13,6 +13,8 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:00 Reset during screen-off cycles with the btbridge idle mode (see bluetooth.md): kernel123 itself was clean in dk1 (4 cycles with the old btbridge); old btbridge restored.
+
 ### 2026-10-30 15:45 dk1: kernel123 = xnu 0242 display-dark idle (after iOSPlus10 0382, MIT): works, now the everyday kernel
 - While the display is off: USB poll 1 ms -> 20 ms after 2 s without USB traffic (1 ms again on any traffic), USB log thread 250 ms, touch polling stopped (no finger), keys 40 ms, FB vsync 500 ms after 5 s dark; all kicked back on display on. sysctl kern.sweet_display_dark; boot-arg sweetdark=0 = off.
 - "SWEET DARK: on: usb 20 ms (no traffic 2 s), usblog 250 ms, touch stopped, keys 40 ms, fb 500 ms after 5000 ms" / "SWEET DARK: off: usb 1 ms, usblog 100 ms, touch 8 ms, keys 20 ms, fb 16.7 ms".

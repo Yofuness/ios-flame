@@ -54,6 +54,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-30 btbridge 124c3af installed then reverted (reset in btd1): /var/local/bin/btbridge = btbridge.old again (the pre-124c3af build).
 - 2026-10-30 O12: /var/local/bin/adspboot (408bcb5, old copy adspboot.old), wland and hapticd (e5cd72d, old copies .old) rebuilt with the screen-off/idle waits; via tools/build-userland-linux.sh + flame-files put (wland: tools/sunfish-wifitest.sh installs it; adspboot: tools/sunfish-install-sensors.sh).
 - 2026-10-30 sv1: location prompts answered "Don't Allow" for Reminders, Camera, Weather, Wallet, Compass, Find My, and Watch notifications "Not Now" (fake taps; per-app TCC/location state in the phone's databases; user preference, reset in Settings > Privacy if wanted).
 - 2026-10-30 launchd: com.apple.mobile.softwareupdated dropped (tools/sunfish-launchd-drop.sh; added to row 9 in tools/sunfish-setup-phone.sh): every 2-5 min it wrote an OTAUpdate restore report ("Cleaning up unused prepared updates", waits for an EmbeddedDeviceTypeRoot IOKit service we lack, restore_error 60; 796 reports so far). Takes effect at the next boot.
