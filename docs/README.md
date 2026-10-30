@@ -20,7 +20,7 @@ Feature files: [apps](features/apps.md), [audio](features/audio.md), [battery](f
 [bluetooth](features/bluetooth.md), [boot](features/boot.md), [brightness](features/brightness.md),
 [buttons](features/buttons.md), [camera](features/camera.md), [charging](features/charging.md),
 [clock](features/clock.md), [cpu](features/cpu.md), [display](features/display.md),
-[flashlight](features/flashlight.md), [gpu](features/gpu.md), [gpu-memory](features/gpu-memory.md),
+[flashlight](features/flashlight.md), [gpu](features/gpu.md), [gpu-memory](features/gpu-memory.md), [haptics](features/haptics.md),
 [metal](features/metal.md), [not-started](features/not-started.md), [sensors](features/sensors.md),
 [sleep-wake](features/sleep-wake.md), [smoothness](features/smoothness.md), [ssh](features/ssh.md),
 [storage](features/storage.md), [touch](features/touch.md), [usb-network](features/usb-network.md),
