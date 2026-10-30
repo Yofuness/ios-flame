@@ -514,6 +514,7 @@ struct stream {
 	pthread_mutex_t lock;
 	volatile bool   running;
 	volatile bool   graph_running;  /* the capture graph has started this stream: frames may be given out */
+	volatile uint64_t given_back_at; /* sunfish (f3): CLOCK_MONOTONIC ns of the give-back (worker_given_back_long()) */
 	volatile bool   given_back;     /* sunfish (f3): relinquished, not asked for again: no more reopening (worker()) */
 	/*
 	 * redfin (B8): the worker threads. Each has the generation it was started for and goes when that is not the
@@ -1992,6 +1993,13 @@ worker_wanted(const struct stream *s, unsigned generation)
 
 static bool worker_unwanted_open(const struct stream *s);
 
+/* sunfish (f3): given back (graph not started, no request since) for 3 s on end: a streaming worker stops too */
+static bool
+worker_given_back_long(const struct stream *s)
+{
+	return worker_unwanted_open(s) && clock_gettime_nsec_np(CLOCK_MONOTONIC) - s->given_back_at >= 3000000000ull;
+}
+
 /* a pause of `ms', cut short when the worker is not wanted any more */
 static void
 worker_pause(const struct stream *s, unsigned generation, unsigned ms)
@@ -2057,7 +2065,7 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 	const char *why = "stopped";
 
 	isp_init(&isp);
-	while (buffer != NULL && worker_wanted(s, generation)) {
+	while (buffer != NULL && worker_wanted(s, generation) && !worker_given_back_long(s)) {
 		ssize_t n = camera_client_read(device, buffer, bytes);     /* sunfish (f2): camd's slots */
 		const struct redwood_camera_frame *f = (const void *)buffer;
 		size_t need;
@@ -2413,6 +2421,10 @@ worker(void *context)
 		} else {
 			why = frames(start.o, start.generation, device);
 			camera_client_close(device);
+			if (worker_given_back_long(s)) {        /* sunfish (f3): STOP sent by the close */
+				say("given back 3 s: stopped");
+				break;
+			}
 		}
 		if (!worker_wanted(s, start.generation)) {
 			break;
@@ -2785,7 +2797,8 @@ device_relinquish_streams(CMBaseObjectRef o, CFArrayRef streams, CFDictionaryRef
 	for (CFIndex i = 0; streams != NULL && i < CFArrayGetCount(streams); i++) {
 		CMBaseObjectRef st = (CMBaseObjectRef)CFArrayGetValueAtIndex(streams, i);
 
-		if (st != NULL) {
+		if (st != NULL && !stream_of(st)->given_back) {
+			stream_of(st)->given_back_at = clock_gettime_nsec_np(CLOCK_MONOTONIC);
 			stream_of(st)->given_back = true;
 		}
 	}
