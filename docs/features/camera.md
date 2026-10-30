@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 07:05 cam28 (kernel111 CAMERA=1): front IMX355 streams, but CSIPHY2 -> CSID-lite gets 0 bytes; rear regression OK (a22e43f)
+- Front path: module file com.qti.sensormodule.primax_imx355.bin from ../restore/factory/vendor.img (debugfs; research/notes/camx/, not in git); modes (4-lane RAW10): 0/3 3280x2464@30 688 Mb/s/lane, 1 3280x1848@30 720, 2 1640x924@30 (2x2) 360 -> mode 2 (1894200 B, stride 2050). CSIPHY2 0xace4000 (DT cam-sensor@1: cci-master 1, csiphy-sd-index 2), csi2phytimer RCG 0xad0604c 300 MHz, branches 0xad06064/0xad06068 on; settle 24; RX_CFG0 0x00232103 (4 lanes, map 0x3210, PHY_NUM_SEL 2 as Linux csid-gen2 does). laneAssign in both module files = 0x3210, isComboMode 0.
+- camid --front: ID 35 03 55 55, 103 writes, readback 0x0136 0x18 (24 MHz), 0x0112 0x0a, 0x0114 0x03, stream on, **frame_count 30/60/90/.../181 at 1 s steps (sensor streams 30 fps)**; but CSID bytes 0/0, 0 SOF, CSIPHY2 status after phy on all 0. No faults, no reset. Rear regression (`--stream 5`): 60.00 fps, 0 faults.
+- Next (cam29): manual front sequence with rx report (CSIPHY2 status + RX IRQ during the stream) and settle 14/40 overrides.
+
 ### 2026-10-31 06:45 Camera preview support in the Metal bridge built, not installed (615c313)
 - NativeBridgeMetalFrontend.mm (0112): newTextureWithDescriptor:iosurface:plane: no longer refuses planar IOSurfaces for MTLPixelFormatYCBCR8_420_2P(_sRGB) 500/501 on 420v/420f (CPU BT.601 conversion into an RGBA8 copy; video/full range from the fourcc) and RGB10A8_2P_XR10 550/551 (XR10 colour + plane-1 alpha into BGRA8); refreshed on bind when the IOSurface seed changes; other planar kinds refused and logged once. Off: `M2V_PLANAR=0` in backboardd's env. After ios-redfin (MIT).
 - Risks: CPU cost in backboardd's encode thread (~5-15 ms per 1080p refresh), possible tearing (replaceRegion while in flight), double colour conversion if CA's shader expects YCbCr. Install by day with the Camera.app test (U12): tools/build-metal2-linux.sh done; `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out --no-restart` then reboot.
