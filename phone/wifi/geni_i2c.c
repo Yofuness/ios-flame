@@ -1,6 +1,10 @@
 /* Userland GENI I2C on SE9 (see geni_i2c.h); offsets and values as in sweet_camprobe.c. */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "pmem.h"
 #include "geni_i2c.h"
@@ -18,7 +22,57 @@ static uint32_t sr(uint32_t off)
 	return rd32(SE + off);
 }
 
+/*
+ * SE9 lock: flock on a shared file serialises SE9 between processes (hapticd, camid, cs35l41 tools, adspboot,
+ * i2cprobe). Recursive within a process (depth count). SUNFISH_SE9_NOLOCK=1 turns it off.
+ */
+static int lock_fd = -1, lock_depth, lock_off = -1, inited;
+
+void gi2c_lock(void)
+{
+	if (lock_off < 0) {
+		const char *e = getenv("SUNFISH_SE9_NOLOCK");
+		lock_off = e && *e == '1';
+	}
+	if (lock_off || lock_depth++)
+		return;
+	if (lock_fd < 0) {
+		lock_fd = open(GI2C_LOCK_PATH, O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+		if (lock_fd < 0)
+			lock_fd = open(GI2C_LOCK_PATH_ALT, O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+		if (lock_fd < 0) {
+			printf("i2c: no SE9 lock file (%d): running unlocked\n", errno);
+			return;
+		}
+		fchmod(lock_fd, 0666);	/* umask */
+	}
+	while (flock(lock_fd, LOCK_EX) && errno == EINTR)
+		;
+}
+
+void gi2c_unlock(void)
+{
+	if (lock_off || !lock_depth || --lock_depth)
+		return;
+	if (lock_fd >= 0)
+		flock(lock_fd, LOCK_UN);
+}
+
+static int init_locked(void);
+
 int gi2c_init(void)
+{
+	if (inited)	/* once per process; the setup itself runs under the lock */
+		return 0;
+	gi2c_lock();
+	int r = init_locked();
+	gi2c_unlock();
+	if (!r)
+		inited = 1;
+	return r;
+}
+
+static int init_locked(void)
 {
 	uint32_t vote = rd32(GCC_PA + 0x5200c), cbcr = rd32(GCC_PA + 0x183a4);
 	printf("i2c: gcc_vote1 %#x, qupv3_wrap1_s3_cbcr %#x\n", vote, cbcr);
@@ -49,7 +103,17 @@ int gi2c_init(void)
 	return 0;
 }
 
+static int msg_locked(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx, unsigned nr, int stop_stretch);
+
 int gi2c_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx, unsigned nr, int stop_stretch)
+{
+	gi2c_lock();
+	int r = msg_locked(addr, tx, nt, rx, nr, stop_stretch);
+	gi2c_unlock();
+	return r;
+}
+
+static int msg_locked(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx, unsigned nr, int stop_stretch)
 {
 	unsigned got = 0;
 	sw(0x618, 0xffffffffu);

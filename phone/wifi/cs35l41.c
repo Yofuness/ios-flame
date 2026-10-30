@@ -75,9 +75,11 @@ static int rd(struct cs_amp *a, uint32_t reg, uint32_t *v)
 		return 0;
 	}
 	uint8_t p[4] = { reg >> 24, reg >> 16, reg >> 8, reg }, b[4];
+	gi2c_lock();	/* write-addr + read as one locked sequence (SE9 lock) */
 	int err = gi2c_msg(a->addr, p, 4, NULL, 0, 1);
 	if (!err)
 		err = gi2c_msg(a->addr, NULL, 0, b, 4, 0);
+	gi2c_unlock();
 	if (err) {
 		printf("cs35l41 %#x: read %08x: err %d\n", a->addr, reg, err);
 		return err;

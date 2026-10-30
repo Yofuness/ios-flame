@@ -113,9 +113,11 @@ static int mpoll(uint64_t pa, uint32_t mask, int set, unsigned ms)
 static int srd(unsigned reg, uint8_t *v)
 {
 	uint8_t a[2] = { reg >> 8, reg };
+	gi2c_lock();	/* write-addr + read as one locked sequence (SE9 lock) */
 	int e = gi2c_msg(SLG, a, 2, NULL, 0, 1);
 	if (!e)
 		e = gi2c_msg(SLG, NULL, 0, v, 1, 0);
+	gi2c_unlock();
 	if (e)
 		printf("camid: slg rd %#06x err %d\n", reg, e);
 	return e;
@@ -191,8 +193,10 @@ static int st_pins, st_reset, st_mclk, st_cci, st_ahb[3], st_gdsc;
 static void ldo_off(int n)
 {
 	uint8_t m;
+	gi2c_lock();
 	if (srd(MATRIX_CONF_A, &m) == 0 && swr(MATRIX_CONF_A, m & ~(1u << (n - 1))) == 0)
 		printf("camid: pd LDO%d off (matrix %02x)\n", n, m & ~(1u << (n - 1)));
+	gi2c_unlock();
 }
 
 static void power_down(void)
@@ -668,6 +672,7 @@ int main(int argc, char **argv)
 	printf("camid: LDO%d MISC1 %02x (%s base)\n", an, misc, misc & 1 ? "2.4 V" : "1.2 V");
 	if (!(misc & 1))
 		die("analog LDO has the 1.2 V base: cannot reach 2.8 V");
+	gi2c_lock();	/* SE9 lock held for the whole rail programming (die() exits = released) */
 	if (srd(front ? 0x2763 : 0x2963, &trim))
 		die("slg read");
 	int ldo6_bypass = trim & 1;
@@ -717,6 +722,7 @@ int main(int argc, char **argv)
 			die("LDO VOUT_OK / ILIM");
 		delay_ms(i == nldo - 1 ? 5 : 1);
 	}
+	gi2c_unlock();
 
 	/* B. GCC */
 	uint32_t g;

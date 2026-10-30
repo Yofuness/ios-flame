@@ -97,9 +97,11 @@ int drv_pin_setup(void)
 int drv_rd(unsigned reg, uint8_t *v)
 {
 	uint8_t a = reg;
+	gi2c_lock();	/* write-addr + read as one locked sequence (SE9 lock) */
 	int e = gi2c_msg(DRV, &a, 1, NULL, 0, 1);
 	if (!e)
 		e = gi2c_msg(DRV, NULL, 0, v, 1, 0);
+	gi2c_unlock();
 	if (e)
 		printf("%s: rd %#04x err %d\n", drv_tag, reg, e);
 	else

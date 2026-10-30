@@ -16,8 +16,12 @@ static int rd(unsigned addr, unsigned rb, unsigned reg, uint8_t *out, unsigned n
 	uint8_t a[4];
 	for (unsigned i = 0; i < rb; i++)
 		a[i] = (uint8_t)(reg >> (8 * (rb - 1 - i)));
+	gi2c_lock();	/* write-addr + read as one locked sequence (SE9 lock) */
 	int e = gi2c_msg((uint8_t)addr, a, rb, NULL, 0, 1);
-	return e ? e : gi2c_msg((uint8_t)addr, NULL, 0, out, n, 0);
+	if (!e)
+		e = gi2c_msg((uint8_t)addr, NULL, 0, out, n, 0);
+	gi2c_unlock();
+	return e;
 }
 
 int main(int argc, char **argv)
@@ -33,7 +37,10 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "scan")) {
 		for (unsigned a = 0x08; a < 0x78; a++) {
 			uint8_t z = 0;
-			if (gi2c_msg((uint8_t)a, &z, 1, NULL, 0, 1) == 0 && gi2c_msg((uint8_t)a, NULL, 0, b, 1, 0) == 0)
+			gi2c_lock();
+			int ok = gi2c_msg((uint8_t)a, &z, 1, NULL, 0, 1) == 0 && gi2c_msg((uint8_t)a, NULL, 0, b, 1, 0) == 0;
+			gi2c_unlock();
+			if (ok)
 				printf("i2cprobe: 0x%02x answers (reg 0 = %02x)\n", a, b[0]);
 		}
 		return 0;

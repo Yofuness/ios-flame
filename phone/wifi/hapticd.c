@@ -89,7 +89,10 @@ static int chip_on(void)
 	if (broken)
 		return -1;
 	up = 1;
-	if (gi2c_init() || drv_pin_setup() || drv_power_up() || drv_init_chip()) {
+	gi2c_lock();	/* SE9 lock over power-up + init */
+	int bad = gi2c_init() || drv_pin_setup() || drv_power_up() || drv_init_chip();
+	gi2c_unlock();
+	if (bad) {
 		give_up("power-up or init failed");
 		return -1;
 	}
@@ -97,7 +100,17 @@ static int chip_on(void)
 	return 0;
 }
 
-static int go(int on, uint8_t level)
+static int go_locked(int on, uint8_t level);
+
+static int go(int on, uint8_t level)	/* SE9 lock over each start/stop sequence */
+{
+	gi2c_lock();
+	int r = go_locked(on, level);
+	gi2c_unlock();
+	return r;
+}
+
+static int go_locked(int on, uint8_t level)
 {
 	if (on && (drv_wr(DRV_R_RTP, level) || drv_wr(DRV_R_GO, 1)))
 		return -1;
@@ -186,15 +199,16 @@ int main(void)
 			if (active && onset != tap_onset && now - onset >= SETTLE_US) {
 				uint8_t l = level_for(peak, TAP_LEVEL);
 				tap_onset = onset;
-				if (chip_on())
-					break;
-				if (go(1, l)) {
-					give_up("tap start failed");
-					break;
+				gi2c_lock();	/* one tap = one locked power-up/RTP/stop sequence */
+				int bad = chip_on() || go(1, l);
+				if (!bad) {
+					delay_ms(TAP_PULSE_MS);
+					bad = go(0, 0) ? 2 : 0;
 				}
-				delay_ms(TAP_PULSE_MS);
-				if (go(0, 0)) {
-					give_up("tap stop failed or a fault");
+				gi2c_unlock();
+				if (bad) {
+					if (up)
+						give_up(bad == 2 ? "tap stop failed or a fault" : "tap start failed");
 					break;
 				}
 				state = TAP;
