@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:30 k115: kernel115 (xnu 0238 v2, no printf under the sched lock) runs without a reset; placements happen
+- Two boots (sweetuibig=0, then default), 3+ min each, no reset (kernel114 = v1 reset at 28 s). sysq: kern.sweet_ui_bigcore 1, kern.sweet_ui_idle 1342, kern.sweet_ui_preempt 2880, kern.sweet_ui_first "tid 1024 cpu 7 preempt".
+- fps A/B void: the panel was off (auto-lock), 0 swaps in the bench windows. Redo with H before each run.
+
 ### 2026-10-30 08:15 ub1: kernel114 (xnu 0238, UI threads on the A76s) RESETS ~28 s after boot
 - Boot `CAMERA=1 ... kernel114 sweetse9=2 sweetcampmic=2` (4455 mV): SSH up at 17 s; "SWEET UI: tagged thread 599 com.apple.coreanimation.render-server (0238 class 2, kern.sweet_ui_bigcore 1)" [25.639], "tagged thread 616 com.apple.coreanimation.display.primary (class 1)" [25.737], "SWEET UIWDT: armed, 30 s" [25.815]; last line "[27.901] exec duetexpertd"; no panic text; the phone came back in fastboot. "bigcore first use" never printed.
 - Leading suspect: 0238 prints that first-use line with printf() from inside choose_processor() (pset locked, interrupts off): a printf there can deadlock the scheduler. Second suspect: returning a running big core for a real-time CA thread outside the normal RT path.

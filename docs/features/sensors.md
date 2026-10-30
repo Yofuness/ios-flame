@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:30 k115 (kernel115 = + xnu 0239 new-backlight-architecture): new path on, but auto-brightness stops entirely
+- No reset in two boots (sweetuibig=0, then default). The runner's tests were void: the panel auto-locked at ~67 s and was never woken (all frames black).
+- By hand (screen woken with H, backboardd restarted): oslog "New backlight architecture." (0239 works). But then backboardd sets no ALS properties at all (only accel/gyro ReportInterval), no AAB lines, no SWEET BL writes during `m fake als 20000` / `1`, and BrightnessSystemClient DisplayBrightnessAuto reads (none) (was 1); "EDR - transceive_data: mach_msg() => (ipc/send) timed out" x2.
+- So the new architecture wants more than the property. Investigator: legacy path + the missing piece vs new-arch requirements. Recipe note: tests must wake the screen (`H`) right before each step.
+
 ### 2026-10-30 08:05 hp1: after autobright 0/1 the ramps are real, but no step reaches the kernel
 - `autobright 0` then `1` (BrightnessSystemClient DisplayBrightnessAuto): backboardd "begin ramping L: 105.56 -> L: 399.41 Brightness: 0.718309 -> 0.959318 t: 2.710891 rate: 108.40 nits/s 60.62hz" at 20000 lux, "begin ramping L: 399.41 -> L: 2.00 ... t: 57.559097" at 1 lux; "begin virtual ramp" 0. So the runtime auto flag needed the re-toggle (now part of the recipe).
 - Kernel: no SWEET BL setProperties/nits and no SWEET FB IOMFBBrightnessLevel line during either ramp (only the periodic "IOMFBBrightnessLevel = 6917855" = 105.56 nits every ~73 s). Webcam: no visible change. Next: where the per-step writes go (investigator).
