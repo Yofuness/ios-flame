@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; front IMX355 answers. **Updated:** 2026-10-31.
+**State:** 🟡 iOS lists the Back Camera (AVFoundation, 16 formats; camera ADT + camd + SunfishAudio.driver camera code, cam26); Camera.app not tried yet (U12). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; front IMX355 answers. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 05:55 cam26 (kernel111, CAMERA=1 ADT): iOS LISTS THE BACK CAMERA; a stream kept running unwanted (fixed by hand, bug being fixed)
+- `tools/sunfish-install-camera.sh` (ffe92d6): 7 tools + table; launchd job org.iosonpixel.camd (backup launchd.plist.pre-camera); camdev.on + camdev.log 0666; StartRecorderServer = true in MediaToolbox D22/D221/Default (backups .before-camera); MobileGestalt cache moved aside (copy .pre-camera). Battery 4440 mV. `CAMERA=1 tools/sunfish-boot.sh cam26 work/kernel111/... sweetse9=2 sweetcampmic=2`: SSH ~10 s, **SpringBoard up at ~60 s** (no boot-logo hang), lock screen at +60/+120/+240 s; no new mediaserverd crash.
+- camdev.log: "plug-in loaded in mediaserverd (pid 29)" (at boot), "gate: camera on", swizzles replaced, "the camera's device vendor made", "the device made: 1 streams". **camera_avtest: 1 video device "Back Camera" (built-in_video:0), position 1 (back), 16 formats (420v/420f, 960x540 .. 4032x3024, up to 60 fps), active 1920x1080.** Front camera not listed (by design).
+- **Unwanted stream**: at boot mediaserverd asked for the stream (prewarm, "frames begin (format 0, a photo mode)"); camd's socket wasn't up yet, the worker started reopening with backoff; "streams given back" came but the worker kept reopening, connected after 11.6 s and streamed 60 fps for minutes with no client (7034 frames; AE ran: exposure 16.2 ms, gain 1.0x, ~5400 K, lux index 149). Nothing displayed or saved. Stopped by hand: /var/local/bin/camd renamed camd.disabled (launchd can't restart it), SIGTERM to camd + its camid child: "powered down", GDSC collapsed. Fix being written (worker stops reopening once the stream is stopped/given back; a late START is closed at once).
+- Phone left: kernel111 CAMERA=1 boot, camera setup installed, camd disabled (renamed), camera powered off; mediaserverd's camera code retries the socket every 5 s (harmless).
 
 ### 2026-10-31 05:35 Camera.app prerequisites built (43bff35): kernel111, mkadt --camera, camera_avtest
 - xnu 0234 (redfin 0925: DisplayPipePlaneBaseAlignment = {PlaneBaseAlignmentLinear = 64}; `sweetclcdalign=0` = old number) + 0235 (redfin 0927: plane bytes per row also at +0x10 of the IOSurface lock result; `sweetplanebpr=0` off). kernel111 = kernel110 + 0234 + 0235 (37 s).
