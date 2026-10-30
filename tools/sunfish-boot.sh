@@ -12,7 +12,7 @@ name=$1 kernel=$2; shift 2
 P=$PWD/work/boot
 base="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1"
 base="$base unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1"
-base="$base wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 flamereboot=0 sweetuiwdt=30"
+base="$base wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 sweetuiwdt=30"
 base="$base flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetfb_thread=0 sweetmtl=2 sweetddr=0 sweetgpurecover=2 sweetgpukill=1"
 base="$base sweetbattery=1"
 # on by default since 2026-10-28: iOS Wi-Fi status (xnu 0199), panel off on sleep (0202-0205)
@@ -36,7 +36,11 @@ for a in "$@"; do
 	k=${a%%=*}
 	base=$(printf '%s\n' $base | grep -v -x -e "$k" -e "$k=.*" | tr '\n' ' ')
 done
-cmdline="$base $*"
+cmdline=$(echo $base "$@")	# flamereboot=0 left out (the kernel default): the line is capped at 591 bytes (B38)
+if [ ${#cmdline} -ge 592 ]; then
+	echo "boot-args ${#cmdline} bytes, over 591 (mkpayload limit): drop an extra arg or move work/rtc-offset aside" >&2
+	exit 1
+fi
 echo "$cmdline" > "$P/$name.cmdline"
 # CAMERA=1: ADT with /arm-io/isp + /product/camera flash (mkadt.py --camera; Camera.app prerequisites,
 # camera.md); default the usual work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.

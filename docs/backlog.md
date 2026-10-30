@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B38 Boot cmdline limit: CAMERA=1 plus 3 extra boot args = 606 bytes > 592; sunfish-boot.sh refuses (sp16 dropped sweetrtcoff by hand). Shorten the defaults or raise the limit (D6 in plan.md).
+- B38 Boot cmdline limit: CAMERA=1 plus 3 extra boot args = 606 bytes > 592; sunfish-boot.sh refuses (sp16 dropped sweetrtcoff by hand). Shorten the defaults or raise the limit (D6 in plan.md). 2026-10-30: flamereboot=0 (kernel default) dropped and the double space gone (-15 B: 575 with sweetse9=2 sweetcampmic=2), sunfish-boot.sh now fails fast with the length. Still 1 B short for a third arg like sweetampreset=1 (592); real fix = a kernel-side second arg string (e.g. from the ADT /chosen), later.
 - B37 Files has no "On My iPhone": cause = no plug-in data container (pkd "no sandbox data container"); after a boot + `lsreg -r` it has one and pkd/fileproviderd accept it (files7); user check U13.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
