@@ -1985,21 +1985,25 @@ int stream_run(int secs, const char *prefix, const char *cmd)
 	if (h)
 		h->ended();
 	if (!dry && !have_status) {
+		/* cam38: camd's camid has had its Q: 2 s for that, not the 10 s a --hold command needs (CAM38_OFF=1: 10 s) */
+		const char *off38 = getenv("CAM38_OFF");
+		int term_at = h && !(off38 && !strcmp(off38, "1")) ? 200 : 1000;
+		double stop_t0 = now_s();
 		for (int t = 0;; t++) {
 			pid_t r = waitpid(pid, &status, WNOHANG);
 			if (r == pid || r < 0)
 				break;
-			if (t == 1000) {	/* 10 s past our end: the command holds 1 s longer than we */
-				printf("camrx: stream command still running 10 s after the loop, SIGTERM\n");
+			if (t == term_at) {	/* 10 s past our end: the command holds 1 s longer than we */
+				printf("camrx: stream command still running %d s after the loop, SIGTERM\n", term_at / 100);
 				kill(pid, SIGTERM);
 			}
-			if (t == 1150 && !cam36_off()) {	/* cam36: STOPPING must not hang on it */
+			if (t == term_at + 150 && !cam36_off()) {	/* cam36: STOPPING must not hang on it */
 				printf("camrx: stream command ignored SIGTERM for 1.5 s, SIGKILL\n");
 				kill(pid, SIGKILL);
 			}
 			usleep(10000);
 		}
-		printf("camrx: stream command exit status %d\n", WEXITSTATUS(status));
+		printf("camrx: stream command exit status %d, %.3f s after the stop\n", WEXITSTATUS(status), now_s() - stop_t0);
 	}
 	msleep_(100);
 	paths_down();

@@ -17,6 +17,10 @@
  * cam-f1: SENSOR a=2 picks the front IMX355 (mode 2, 1640x924, CSIPHY2, MCLK2, camid --front), a=1 the rear
  * (default). A switch while streaming stops the session (full power-down) and starts it again on the other sensor.
  * Off: CAMD_NO_FRONT=1 in camd's environment (SENSOR 2 -> -EINVAL, as before).
+ * cam38: the frames' headers say the exposure a frame was really taken with (CAM38_LATENCY frames after camid's
+ * read-back, not at once: AE saw old levels with new numbers and ran away); longer frames than the mode's, down to
+ * 15 fps; one exposure command at camid at a time (a queue of them held up its Q for seconds). Off: CAM38_OFF=1 in
+ * camd's environment.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -58,6 +62,12 @@
 #define MARGIN_F	10u
 #define FL_F		2614
 #define START_LINES_F	2604	/* cam36: the table's 0x0202/0x0203 */
+#define FL_R		1608
+#define FL_MAX_R	6443	/* cam38: 15 fps */
+#define FL_MAX_F	5228
+#define CAM38_LATENCY	3	/* frames from the last one done to the first taken with what was just written (not measured:
+				 * the frame under way, the one whose exposure has begun, then this one) */
+#define CAM38_QUEUE	16
 
 static volatile int sensor_want = 1;	/* SENSOR command: 1 rear, 2 front */
 static int front;			/* the running session's sensor (camrx_lib cam_select) */
@@ -73,7 +83,13 @@ static mach_timebase_info_data_t tb;
 /* session (camera thread) <-> main thread */
 static pthread_t sess_th;
 static volatile int sess_running, want_stop, powered, sess_failed;
-static volatile int exp_pending, exp_lines_req = -1, exp_code_req = -1;
+static volatile int exp_pending, exp_lines_req = -1, exp_code_req = -1, exp_fl_req = -1;
+static int cam38_off, exp_in_flight;	/* cam38: an E at camid not answered yet */
+static double exp_sent_at;
+static volatile uint64_t last_done_seq;
+static struct { uint64_t from; int fl, lines, code; } took[CAM38_QUEUE];	/* mu; what the frames from `from' on were taken with */
+static unsigned took_head, took_tail;
+static int hdr_fl, hdr_lines, hdr_code;	/* the copier's: the exposure of the frame in hand */
 static volatile int cur_fl = 1608, cur_lines = -1, cur_code = -1;	/* camid's read-backs */
 static int camid_in = -1, camid_out = -1;
 
@@ -187,6 +203,7 @@ static int h_busy(void)
 static void h_frame(int slot, uint64_t seq, double sof)
 {
 	uint64_t now = mach_absolute_time();
+	last_done_seq = seq;	/* cam38 */
 	if (__atomic_load_n(&copy_slot, __ATOMIC_ACQUIRE) >= 0) {
 		sh->dropped++;
 		return;
@@ -214,8 +231,23 @@ static void camid_replies(void)
 	while ((nl = strchr(buf, '\n'))) {
 		*nl = 0;
 		int fl, l, c;
+		if (buf[0] == 'E' || buf[0] == 'X')
+			exp_in_flight = 0;	/* cam38 */
 		if (sscanf(buf, "%*c %d %d %d", &fl, &l, &c) == 3 && (buf[0] == 'S' || buf[0] == 'E')) {
 			cur_fl = fl, cur_lines = l, cur_code = c;
+			pthread_mutex_lock(&mu);	/* cam38 */
+			if (buf[0] == 'S') {
+				took_head = took_tail = 0;
+				hdr_fl = fl, hdr_lines = l, hdr_code = c;
+			} else {
+				if (took_tail - took_head == CAM38_QUEUE)
+					took_head++;
+				took[took_tail % CAM38_QUEUE].from = last_done_seq + CAM38_LATENCY;
+				took[took_tail % CAM38_QUEUE].fl = fl, took[took_tail % CAM38_QUEUE].lines = l;
+				took[took_tail % CAM38_QUEUE].code = c;
+				took_tail++;
+			}
+			pthread_mutex_unlock(&mu);
 			printf("camd: sensor %s: frame_length %d, exposure %d lines, gain code %d\n",
 			       buf[0] == 'S' ? "streaming" : "exposure set", fl, l, c);
 		} else {
@@ -231,9 +263,17 @@ static void camid_replies(void)
 static int h_tick(void)
 {
 	camid_replies();
-	if (exp_pending && camid_in >= 0) {
+	/* cam38: the newest request once camid has answered the last (1 s: it lost one; on) */
+	if (exp_in_flight && mono() - exp_sent_at > 1)
+		exp_in_flight = 0;
+	if (exp_pending && camid_in >= 0 && (cam38_off || !exp_in_flight)) {
 		exp_pending = 0;
-		dprintf(camid_in, "E %d %d\n", exp_lines_req, exp_code_req);
+		if (cam38_off) {
+			dprintf(camid_in, "E %d %d\n", exp_lines_req, exp_code_req);
+		} else {
+			dprintf(camid_in, "E %d %d %d\n", exp_lines_req, exp_code_req, exp_fl_req);
+			exp_in_flight = 1, exp_sent_at = mono();
+		}
 	}
 	return want_stop || term;
 }
@@ -278,12 +318,23 @@ static void *copier(void *arg)
 		f->width = FRAME_W, f->height = FRAME_H, f->stride = FRAME_STRIDE, f->format = 1;
 		f->bayer = BAYER, f->black = BLACK;
 		f->sequence = seq, f->time = tdone;
-		f->exposure_lines = cur_lines < 0 ? 0 : (uint32_t)cur_lines;
+		/* cam38: as this frame was taken, not as the sensor's registers are now */
+		pthread_mutex_lock(&mu);
+		while (took_head != took_tail && took[took_head % CAM38_QUEUE].from <= seq) {
+			hdr_fl = took[took_head % CAM38_QUEUE].fl, hdr_lines = took[took_head % CAM38_QUEUE].lines;
+			hdr_code = took[took_head % CAM38_QUEUE].code;
+			took_head++;
+		}
+		int h_fl = cam38_off ? cur_fl : hdr_fl, h_lines = cam38_off ? cur_lines : hdr_lines, h_code = cam38_off ? cur_code : hdr_code;
+		pthread_mutex_unlock(&mu);
+		f->exposure_lines = h_lines < 0 ? 0 : (uint32_t)h_lines;
 		f->line_ns = front ? LINE_NS_F : LINE_NS;
-		f->gain = cur_code < 0 || (unsigned)cur_code >= gain_base ? GAIN_UNITY :
-			  (uint32_t)(gain_base * GAIN_UNITY / (gain_base - (uint32_t)cur_code));
+		f->gain = h_code < 0 || (unsigned)h_code >= gain_base ? GAIN_UNITY :
+			  (uint32_t)(gain_base * GAIN_UNITY / (gain_base - (uint32_t)h_code));
 		f->gain_unity = GAIN_UNITY, f->gain_max = GAIN_MAX;
-		f->frame_lines = (uint32_t)cur_fl, f->frame_lines_min = (uint32_t)cur_fl, f->frame_lines_max = (uint32_t)cur_fl;
+		f->frame_lines = (uint32_t)h_fl;
+		f->frame_lines_min = cam38_off ? (uint32_t)cur_fl : front ? FL_F : FL_R;
+		f->frame_lines_max = cam38_off ? (uint32_t)cur_fl : front ? FL_MAX_F : FL_MAX_R;
 		f->margin = front ? MARGIN_F : MARGIN, f->sensor = (uint32_t)cam->sensor, f->focus = REDWOOD_CAMERA_NO_FOCUS;
 		f->reserved[REDWOOD_CAMERA_R_SOF_LO] = (uint32_t)tsof;
 		f->reserved[REDWOOD_CAMERA_R_SOF_HI] = (uint32_t)(tsof >> 32);
@@ -348,7 +399,12 @@ static void *session(void *arg)
 	 * lines (isp_ae then started from 4 lines = black). cam36: the front table's is 2604. */
 	int front_start = front && !cam36_off();
 	cur_lines = front_start ? START_LINES_F : 1592, cur_code = 0;
-	cur_fl = front ? FL_F : 1608;
+	cur_fl = front ? FL_F : FL_R;
+	pthread_mutex_lock(&mu);	/* cam38 */
+	took_head = took_tail = 0;
+	hdr_fl = cur_fl, hdr_lines = cur_lines, hdr_code = cur_code;
+	pthread_mutex_unlock(&mu);
+	exp_in_flight = 0, last_done_seq = 0, exp_fl_req = -1;
 	stage_t0 = mono();
 	char t[24];
 	printf("%scamd: == session start, sensor %d (%s)\n", since(t), cam->sensor, cam->name);
@@ -469,6 +525,14 @@ static void command(struct client *c)
 		}
 		exp_lines_req = m.a ? (int)(m.a > 0xffff ? 0xffff : m.a) : -1;
 		exp_code_req = code;
+		/* cam38: the frame that holds the exposure (c: as asked, 0: the shortest), within the mode's and 15 fps */
+		if (m.a) {
+			uint32_t fl = m.c ? m.c : m.a + (front ? MARGIN_F : MARGIN), least = front ? FL_F : FL_R,
+				 most = front ? FL_MAX_F : FL_MAX_R;
+			exp_fl_req = (int)(fl < least ? least : fl > most ? most : fl);
+		} else {
+			exp_fl_req = -1;
+		}
 		exp_pending = 1;	/* the session's next tick passes it to camid */
 		printf("camd: client fd %d: exposure %u lines, gain %u -> code %d\n", c->fd, m.a, m.b, code);
 		reply(c, m.command, 0);
@@ -571,6 +635,7 @@ int main(int argc, char **argv)
 	 * CAMRX_FAST=0 in camd's environment keeps the old behaviour (also no start exposure) */
 	setenv("CAMRX_FAST", "1", 0);
 	fast = !strcmp(getenv("CAMRX_FAST"), "1");
+	cam38_off = getenv("CAM38_OFF") && !strcmp(getenv("CAM38_OFF"), "1");
 	printf("camd: start, pid %d, CAMRX_FAST %d\n", getpid(), fast);
 	mach_timebase_info(&tb);
 	pm_init();

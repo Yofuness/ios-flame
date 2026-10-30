@@ -13,7 +13,7 @@
  * gain max 8x for the IMX363); printed with their read-back. With --front (IMX355, Linux imx355.c): margin 10
  * lines, gain code 1024 - 1024/g, clamped to 896 = 8x (Linux allows 960).
  * --ctl (camera f1, camd; with --stream): stream until stdin ends, "Q" or SIGINT/SIGTERM (then stream off), instead of
- * --hold; stdin lines "E LINES CODE" (-1 = keep) apply exposure/gain as --exposure/--gain do, between frames in
+ * --hold; stdin lines "E LINES CODE [FRAME_LENGTH]" (-1 = keep; cam38: the frame length, never below the table's) apply exposure/gain as --exposure/--gain do, between frames in
  * group hold; replies on fd 3: "S FL LINES CODE" at stream on, "E FL LINES CODE" (read back) or "X" per command.
  * --mclk-asis: leave the MCLK RCG as it is (e.g. 24 MHz from `camclk mclk 0 24`) instead of setting it to XO.
  * --front: the front sensor instead (LDO7/2/5, MCLK2 gpio15, reset gpio68, CCI0 master 1 gpio19/20); tries 0x1a,
@@ -410,6 +410,8 @@ static int read_u16(unsigned a, unsigned reg)
 #define GAIN_CODE_MAX_F	896	/* 8x */
 #define GAIN_BASE_F	1024
 
+static int exp_fl = -1, fl_least;	/* cam38: (--ctl) the frame length asked for, and the mode's, the least it may be */
+
 /* e2: exposure and/or analog gain in one group hold; the stream is still off */
 static int exposure(unsigned a)
 {
@@ -419,6 +421,12 @@ static int exposure(unsigned a)
 	if (dry)
 		fl = 0xffff;
 	printf("camid: frame_length 0x0340 = %d lines\n", fl);
+	/* cam38: a longer frame, for a longer exposure (camd's third number; the 0x0340 write is in the hold below) */
+	int fl_new = -1;
+	if (exp_fl > 0) {
+		fl_new = exp_fl < fl_least ? fl_least : exp_fl > 0xfff0 ? 0xfff0 : exp_fl;
+		fl = fl_new;
+	}
 	rb_fl = fl;
 	unsigned lines = 0, code = 0;
 	int margin = front ? EXP_MARGIN_F : EXP_MARGIN, gmax = front ? GAIN_CODE_MAX_F : GAIN_CODE_MAX;
@@ -434,6 +442,8 @@ static int exposure(unsigned a)
 		       gmax, gbase / (gbase - code));
 	}
 	int ok = !write_reg(a, 0x0104, 1);
+	if (ok && fl_new > 0)
+		ok = !write_reg(a, 0x0340, (unsigned)fl_new >> 8) && !write_reg(a, 0x0341, (unsigned)fl_new & 0xff);
 	if (ok && exp_lines >= 0)
 		ok = !write_reg(a, 0x0202, lines >> 8) && !write_reg(a, 0x0203, lines & 0xff);
 	if (ok && gain_code >= 0)
@@ -461,6 +471,7 @@ static int ctl_loop(unsigned a)
 	char buf[256];
 	size_t n = 0;
 	rb_fl = read_u16(a, 0x0340), rb_lines = read_u16(a, 0x0202), rb_code = read_u16(a, 0x0204);
+	fl_least = rb_fl;
 	dprintf(3, "S %d %d %d\n", rb_fl, rb_lines, rb_code);
 	for (int t = 0; !ctl_quit; t++) {
 		struct pollfd p = { .fd = 0, .events = POLLIN };
@@ -476,13 +487,13 @@ static int ctl_loop(unsigned a)
 			char *nl;
 			while ((nl = strchr(buf, '\n'))) {
 				*nl = 0;
-				int l, c;
+				int l, c, fl = -1;
 				if (buf[0] == 'Q') {
 					printf("camid: ctl: Q\n");
 					return 0;
 				}
-				if (sscanf(buf, "E %d %d", &l, &c) == 2 && l <= 0xffff && c <= 0xffff) {
-					exp_lines = l, gain_code = c;
+				if (sscanf(buf, "E %d %d %d", &l, &c, &fl) >= 2 && l <= 0xffff && c <= 0xffff) {
+					exp_lines = l, gain_code = c, exp_fl = fl;
 					if (exposure(a))
 						dprintf(3, "X\n");
 					else

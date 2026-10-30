@@ -2189,6 +2189,21 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 		if (isp_ae(&isp, f, &st, &c)) {
 			(void)camera_client_write(device, &c, sizeof(c));        /* sunfish (f2): to camd */
 		}
+		/* cam38: a line a second while AE moves */
+		if (!isp.ae_stable && !isp.ae_locked && !isp.manual) {
+			static uint64_t said_at;
+			uint64_t ae_now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+
+			if (ae_now - said_at >= 1000000000ull) {
+				double ae_base = f->sensor == 2 ? 1024 : 512, ae_x = (double)f->gain / (f->gain_unity ? f->gain_unity : 256);
+
+				said_at = ae_now;
+				say("AE: mean %.0f, target %.0f, ratio %.2f; exposure %.1f ms (%u lines, frame %u), gain %.2fx (code %.0f), digital %.2fx; "
+				    "got %u lines gain %u, asked %u lines gain %u", isp.ae_seen_mean, isp.ae_seen_target, isp.ae_seen_ratio,
+				    f->exposure_lines * (double)f->line_ns / 1e6, f->exposure_lines, f->frame_lines, ae_x, ae_base - ae_base / ae_x, isp.digital,
+				    f->exposure_lines, f->gain, isp.asked_lines, isp.asked_gain);
+			}
+		}
 		if (af_now) {
 			/* (whatever it was doing: at once, from the next frame; a tap sweeps, continuous focus climbs) */
 			af.state = AF_STEADY;

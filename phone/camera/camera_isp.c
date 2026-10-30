@@ -32,6 +32,8 @@ isp_init(struct isp *isp)
 	isp->digital = 1;
 	isp->sensor_digital = 1;
 	isp->zoom = 1;
+	/* cam38 off: AE as before (mediaserverd's environment is out of reach: the file) */
+	isp->ae_old = (getenv("CAM38_OFF") != NULL && !strcmp(getenv("CAM38_OFF"), "1")) || access("/var/local/camdev.noae38", F_OK) == 0;
 	for (int i = 0; i < 3; i++) {
 		isp->ccm[i][i] = 1;
 	}
@@ -136,12 +138,15 @@ isp_measure(const struct isp *isp, const struct redwood_camera_frame *f, const u
 	uint32_t cells_w = f->width / 2, cells_h = f->height / 2;
 	double sum[3] = { 0, 0, 0 }, grey[2] = { 0, 0 }, neutral[2] = { 0, 0 }, roi_sum[3] = { 0, 0, 0 };
 	float gains[3] = { 1, 1, 1 };
-	uint32_t roi_hist[64], rx0 = 0, rx1 = 0, ry0 = 0, ry1 = 0;
+	uint32_t roi_hist[64], ae_hist[64], ae_roi_hist[64], rx0 = 0, rx1 = 0, ry0 = 0, ry1 = 0;
+	double ae_sum = 0, ae_roi_sum = 0;
 	bool roi = isp != NULL && isp->ae_roi[2] > isp->ae_roi[0] && isp->ae_roi[3] > isp->ae_roi[1];
 	int r, b;
 
 	memset(s, 0, sizeof(*s));
 	memset(roi_hist, 0, sizeof(roi_hist));
+	memset(ae_hist, 0, sizeof(ae_hist));
+	memset(ae_roi_hist, 0, sizeof(ae_roi_hist));
 	if (roi) {
 		/* (redfin: AE's metering window, in cells; at least a 16th of the frame each way) */
 		rx0 = (uint32_t)(isp->ae_roi[0] * cells_w);
@@ -165,6 +170,16 @@ isp_measure(const struct isp *isp, const struct redwood_camera_frame *f, const u
 				top_v = v[i] > top_v ? v[i] : top_v;
 			}
 			g /= 2;
+			/* cam38: the same gains for AE (once a cell: the white balance below uses them too) */
+			int shown = g;
+
+			if (isp != NULL && isp->lsc.on) {
+				lsc_at(isp, cells_w > 1 ? (float)cx / (cells_w - 1) : 0, v_pos, gains);
+				shown = (int)(g * gains[1]);
+				shown = shown > WHITE ? WHITE : shown;
+			}
+			ae_sum += shown;
+			ae_hist[shown >> 4 > 63 ? 63 : shown >> 4]++;
 			sum[0] += v[r];
 			sum[1] += g;
 			sum[2] += v[b];
@@ -173,6 +188,8 @@ isp_measure(const struct isp *isp, const struct redwood_camera_frame *f, const u
 				roi_sum[1] += g;
 				roi_sum[2] += v[b];
 				roi_hist[g >> 4 > 63 ? 63 : g >> 4]++;
+				ae_roi_sum += shown;
+				ae_roi_hist[shown >> 4 > 63 ? 63 : shown >> 4]++;
 				s->roi_cells++;
 			}
 			/*
@@ -188,7 +205,6 @@ isp_measure(const struct isp *isp, const struct redwood_camera_frame *f, const u
 				 * the light there counts for that much more than in the frame as it comes.
 				 */
 				if (isp != NULL && isp->lsc.on) {
-					lsc_at(isp, cells_w > 1 ? (float)cx / (cells_w - 1) : 0, v_pos, gains);
 					cr *= gains[0];
 					cg *= gains[1];
 					cb *= gains[2];
@@ -237,6 +253,22 @@ isp_measure(const struct isp *isp, const struct redwood_camera_frame *f, const u
 	for (int c = 0; c < 3 && s->roi_cells; c++) {
 		s->roi_mean[c] = roi_sum[c] / s->roi_cells;
 	}
+	s->ae_mean = s->cells ? ae_sum / s->cells : 0;
+	s->ae_roi_mean = s->roi_cells ? ae_roi_sum / s->roi_cells : 0;
+	for (int i = 63, above = 0; i >= 0; i--) {
+		above += ae_hist[i];
+		if (above * 100 >= (int)s->cells) {
+			s->ae_bright = i * 16 + 8;
+			break;
+		}
+	}
+	for (int i = 63, above = 0; s->roi_cells && i >= 0; i--) {
+		above += ae_roi_hist[i];
+		if (above * 100 >= (int)s->roi_cells) {
+			s->ae_roi_bright = i * 16 + 8;
+			break;
+		}
+	}
 	for (int i = 63, above = 0; s->roi_cells && i >= 0; i--) {
 		above += roi_hist[i];
 		if (above * 100 >= (int)s->roi_cells) {
@@ -270,6 +302,11 @@ ae_got(const struct isp *isp, const struct redwood_camera_frame *f)
 	}
 	gain = gain > f->gain_max && f->gain_max != 0 ? f->gain_max : gain;
 	gain = gain < f->gain_unity ? f->gain_unity : gain;
+	/* cam38: a gain code's step is up to 1/64 at the IMX363's 8x: 1 % never matched, and AE sat out its patience */
+	if (!isp->ae_old) {
+		return (f->exposure_lines + 1 >= lines && f->exposure_lines <= lines + 1) &&
+		    (uint64_t)f->gain * 100 >= (uint64_t)gain * 97 && (uint64_t)f->gain * 97 <= (uint64_t)gain * 100;
+	}
 	return (f->exposure_lines + 1 >= lines && f->exposure_lines <= lines + 1) &&
 	    (uint64_t)f->gain * 100 >= (uint64_t)gain * 99 && (uint64_t)f->gain * 99 <= (uint64_t)gain * 100;
 }
@@ -294,6 +331,11 @@ isp_ae(struct isp *isp, const struct redwood_camera_frame *f, const struct isp_s
 		isp->asked = false;
 		if (isp->asked_digital != 0) {
 			isp->sensor_digital = isp->asked_digital / 256.0f;
+		}
+		/* cam38: one frame more: camd's CAM38_LATENCY is not measured, and a frame late would swing (test_ae "late") */
+		if (!isp->ae_old) {
+			isp->ae_stable = false;
+			return false;
 		}
 	}
 	if (f->frame_lines_max != 0 && ceiling > f->frame_lines_max) {
@@ -333,6 +375,11 @@ isp_ae(struct isp *isp, const struct redwood_camera_frame *f, const struct isp_s
 		mean = 0.75 * s->roi_mean[1] + 0.25 * s->mean[1];
 		bright = s->roi_bright;
 	}
+	/* cam38: metered as the picture shows it (the raw levels left the lens shading's 2x out: a picture blown out at 44) */
+	if (!isp->ae_old) {
+		mean = s->roi_cells != 0 ? 0.75 * s->ae_roi_mean + 0.25 * s->ae_mean : s->ae_mean;
+		bright = s->roi_cells != 0 ? s->ae_roi_bright : s->ae_bright;
+	}
 	mean = mean * isp->digital > 0.5 ? mean * isp->digital : 0.5;
 	bright *= isp->digital;
 	ratio = target / mean;
@@ -340,6 +387,9 @@ isp_ae(struct isp *isp, const struct redwood_camera_frame *f, const struct isp_s
 		ratio = 0.9 * WHITE / bright > target / mean * 0.5 ? 0.9 * WHITE / bright : target / mean * 0.5;
 	}
 	ratio = ratio < 0.25 ? 0.25 : ratio > 4 ? 4 : ratio;
+	isp->ae_seen_mean = mean;
+	isp->ae_seen_target = target;
+	isp->ae_seen_ratio = ratio;
 	if (ratio > 0.94 && ratio < 1.06) {
 		isp->ae_stable = true;
 		return false;
@@ -347,6 +397,13 @@ isp_ae(struct isp *isp, const struct redwood_camera_frame *f, const struct isp_s
 	isp->ae_stable = false;
 	want = now * pow(ratio, 0.7);
 	knee = analog_max < 16 ? analog_max : 16;
+	/* cam38: a mode faster than 30 fps gives way before gain does (1/30 s, the frame rate limits allowing) */
+	if (!isp->ae_old && (double)fast * line_us < 33333) {
+		uint32_t thirtieth = (uint32_t)(33333 / line_us);
+
+		thirtieth = thirtieth > longest ? longest : thirtieth;
+		fast = thirtieth > fast ? thirtieth : fast;
+	}
 	if (want <= fast) {
 		lines = want < 4 ? 4 : (uint32_t)want;
 		gain_total = 1;
@@ -377,6 +434,22 @@ split:
 	    fabs(f->gain / unity - analog) < 0.01 * analog && fabsf(isp->digital - (float)digital) < 0.01f) {
 		isp->ae_stable = true;
 		return false;           /* (the custom exposure is there already) */
+	}
+	/*
+	 * cam38: all there already (AE at its limits, or a step too small for the sensor): no command. It asked again each
+	 * time, and camid's stdin filled up with exposures.
+	 */
+	if (!isp->ae_old && !isp->manual) {
+		uint32_t fl = frame_lines > f->frame_lines_min ? frame_lines : f->frame_lines_min;
+		double step = fabs(f->gain / unity - analog) / analog;
+
+		fl = f->frame_lines_max != 0 && fl > f->frame_lines_max ? f->frame_lines_max : fl;
+		if (f->exposure_lines + 1 >= lines && f->exposure_lines <= lines + 1 && step < 0.03 && (fl == f->frame_lines || f->frame_lines == 0) &&
+		    fabs(isp->sensor_digital - sensor_digital) < 0.01) {
+			isp->digital = (float)digital;
+			isp->ae_stable = true;
+			return false;
+		}
 	}
 	isp->digital = (float)digital;
 	isp->asked_lines = lines;

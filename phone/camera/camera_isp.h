@@ -31,6 +31,11 @@ struct isp_stats {
 	double          roi_mean[3];
 	double          roi_bright;
 	uint32_t        roi_cells;
+	/*
+	 * cam38: what AE meters: green as the picture will have it (lens shading in, up to white), the whole frame and
+	 * AE's window. The tuning's lens shading is 1x in the middle, 3-4x in the corners, 2x on average.
+	 */
+	double          ae_mean, ae_bright, ae_roi_mean, ae_roi_bright;
 };
 
 /*
@@ -107,6 +112,8 @@ struct isp {
 	float           wb_manual[3];
 	bool            awb_stable;             /* (AWB's answer) the white balance has stopped moving */
 	bool            reference;              /* the pictures by the float code (the integer code's reference: tests) */
+	bool            ae_old;                 /* cam38 off: env CAM38_OFF=1 or the file /var/local/camdev.noae38 */
+	double          ae_seen_mean, ae_seen_target, ae_seen_ratio; /* cam38: AE's last look, for the log */
 };
 
 /* frames AE waits for the exposure it asked for before it takes what the frames say (a clamped or lost request) */

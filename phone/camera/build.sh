@@ -17,4 +17,7 @@ fi
 if command -v cc >/dev/null; then
 	cc -O2 -Wall -o ../../work/cam/test-raw10-stride test_raw10_stride.c -lm -pthread
 	../../work/cam/test-raw10-stride
+	# cam38: AE against a simulated sensor
+	cc -O2 -Wall -o ../../work/cam/test-ae test_ae.c -lm -pthread
+	../../work/cam/test-ae
 fi
