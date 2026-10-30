@@ -1,0 +1,72 @@
+From 89252a87f9d7ae22330d0a4b06083e25d99a9c39 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 13:51:02 -0400
+Subject: [PATCH] 0244 sunfish: compiled-in default boot-args
+ (sweet_default_bootargs), real command line wins, sweetnodefaults=1 disables
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ pexpert/gen/bootargs.c | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/pexpert/gen/bootargs.c b/pexpert/gen/bootargs.c
+index c94c0eb..bf9161f 100644
+--- a/pexpert/gen/bootargs.c
++++ b/pexpert/gen/bootargs.c
+@@ -187,13 +187,43 @@ gotit:
+ 	return arg_found;
+ }
+ 
++/*
++ * 0244 sunfish: compiled-in default boot-args (B38: the real command line is capped at 591 bytes).
++ * A key missing from the real command line is looked up here; the real line always wins.
++ * sweetnodefaults=1 (real line only) turns the fallback off. kern.bootargs stays the real line.
++ * Came from the base= lines of tools/sunfish-boot.sh (2026-10-30): fb/panel (0199-0216), touch/keys/usb,
++ * GPU (sweetgpu*, sweetmtl, sweetpresentwait), battery, Wi-Fi events (0199), brightness/torch (0190/0208-0216),
++ * Bluetooth bridge (0226), sensors (sweetmotion=0x3f, 0241). None of them is read by userland.
++ */
++static char sweet_default_bootargs[] =
++    "sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 sweetuiwdt=30 "
++    "flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetfb_thread=0 sweetmtl=2 "
++    "sweetddr=0 sweetgpurecover=2 sweetgpukill=1 sweetbattery=1 sweetwifiev=1 sweetpanelsleep=1 "
++    "sweetpresentwait=1 sweetbl=2 sweettorch=1 btbridge=1 sweetmotion=0x3f";
++
++static boolean_t
++sweet_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_len, boolean_t force_string)
++{
++	uint32_t nodefaults = 0;
++
++	if (PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, max_len, force_string)) {
++		return TRUE;
++	}
++	/* 0244: the switch itself is never taken from the defaults */
++	if (PE_parse_boot_argn_internal(PE_boot_args(), "sweetnodefaults", &nodefaults, sizeof(nodefaults), FALSE) &&
++	    nodefaults) {
++		return FALSE;
++	}
++	return PE_parse_boot_argn_internal(sweet_default_bootargs, arg_string, arg_ptr, max_len, force_string);
++}
++
+ boolean_t
+ PE_parse_boot_argn(
+ 	const char      *arg_string,
+ 	void            *arg_ptr,
+ 	int                     max_len)
+ {
+-	return PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, max_len, FALSE);
++	return sweet_parse_boot_argn(arg_string, arg_ptr, max_len, FALSE);
+ }
+ 
+ boolean_t
+@@ -202,7 +232,7 @@ PE_parse_boot_arg_str(
+ 	char            *arg_ptr,
+ 	int                     strlen)
+ {
+-	return PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, strlen, TRUE);
++	return sweet_parse_boot_argn(arg_string, arg_ptr, strlen, TRUE);
+ }
+ 
+ #if defined(CONFIG_XNUPOST)
+-- 
+2.56.0
+

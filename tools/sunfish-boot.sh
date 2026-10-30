@@ -12,26 +12,35 @@ name=$1 kernel=$2; shift 2
 P=$PWD/work/boot
 base="debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1"
 base="$base unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1"
-base="$base wdt=-1 sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 sweetuiwdt=30"
-base="$base flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetfb_thread=0 sweetmtl=2 sweetddr=0 sweetgpurecover=2 sweetgpukill=1"
-base="$base sweetbattery=1"
+base="$base wdt=-1"
+# Kernel-parsed defaults (no userland reader). From kernel125 on (xnu 0244) they are compiled into the kernel
+# (sweet_default_bootargs) and left off the line (B38: 591-byte cap); older kernels still get them here.
+# Keep this list and the string in xnu 0244 in step.
+baked="sweetfb_noconsole=1 sweetfb_hz=60 ufslogsecs=2 sweetuiwdt=30"
+baked="$baked flametouch=0 sweettouch=2 sweetkeys=1 sweetusb=2 sweetgpu=1 sweetgpufreq=5 sweetfb_thread=0 sweetmtl=2 sweetddr=0 sweetgpurecover=2 sweetgpukill=1"
+baked="$baked sweetbattery=1"
 # on by default since 2026-10-28: iOS Wi-Fi status (xnu 0199), panel off on sleep (0202-0205)
-base="$base sweetwifiev=1 sweetpanelsleep=1"
+baked="$baked sweetwifiev=1 sweetpanelsleep=1"
 # present waits for its blit (2026-10-28: 20.3 vs 15.3 panel updates/s, 94% vs 70% of swaps; kpw1c vs kpw0c)
-base="$base sweetpresentwait=1"
+baked="$baked sweetpresentwait=1"
 # on by default since 2026-10-28: Control Center brightness slider (xnu 0208-0216) and flashlight (0190/0209; tile needs /var/local/sweet-flashlight)
-base="$base sweetbl=2 sweettorch=1"
+baked="$baked sweetbl=2 sweettorch=1"
 # on by default since 2026-10-30: Bluetooth kernel bridge for bluetoothd (xnu 0226, kernel105+; bt7: devices listed)
-base="$base btbridge=1"
+baked="$baked btbridge=1"
 # on by default since 2026-10-30: iOS orientation HID service off, auto-rotate comes from adspboot --sns-rot (sensors.md u10g; kernel107+, older kernels ignore it); 0x3f (+prox) since 2026-10-30 13:30: needs kernel122+ (xnu 0241 Placement), older kernels crash-loop backboardd with prox: pass sweetmotion=0x37 there
-base="$base sweetmotion=0x3f"
+baked="$baked sweetmotion=0x3f"
+knum=$(printf '%s\n' "$kernel" | sed -n 's|.*kernel\([0-9][0-9]*\)/.*|\1|p')
+if [ -z "$knum" ] || [ "$knum" -lt 125 ]; then
+	base="$base $baked"	# not kernelNN/ (unknown) or before 0244: pass them all
+fi
 # NOSERIAL=1: no serial console (boot-time A/B, plan D2)
 if [ "${NOSERIAL:-0}" = 1 ]; then
 	base=$(printf '%s\n' $base | grep -v -x -e 'serial=3' -e '-enable_kprintf_spam' | tr '\n' ' ')
 fi
 # Real time: PM6150 RTC + offset (tools/flame-rtc.py LOG calibrates it once).
 [ -f work/rtc-offset ] && base="$base sweetrtcoff=$(cat work/rtc-offset)"
-# Extra args replace defaults with the same key (XNU would take the first).
+# Extra args replace defaults with the same key (XNU would take the first); on kernel125+ they also
+# override the compiled-in ones (the real command line wins; sweetnodefaults=1 drops those).
 for a in "$@"; do
 	k=${a%%=*}
 	base=$(printf '%s\n' $base | grep -v -x -e "$k" -e "$k=.*" | tr '\n' ' ')
