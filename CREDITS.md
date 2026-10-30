@@ -55,6 +55,10 @@ what you need to fetch yourself.
   `phone/sensors/` (pb, sns, sensor, motion.h, test_sensd.c: the SNS/SEE sensor client and its host tests) is
   copied from their `phone/sensors/` (Copyright (c) 2026 dipa-studio, MIT, `phone/sensors/LICENSE.redfin`);
   `sns_run.c` (adspboot's `--sns-*` options) follows their `sensd.c`. Their `rqrtr.c` is replaced by `sns_link.c`.
+  `phone/audio/` (SunfishAudio.driver, the CoreAudio HAL plug-in: `audio_plugin.c`, `sunfish_audio.h`,
+  `audio_plugin.plist`) is their `phone/audio/` RedwoodAudio.driver, which is HackiOS's `userland/src/audio_plugin.c`
+  (Copyright (c) 2026 OOSEX GANG, MIT, `phone/audio/LICENSE.HackiOS`), renamed with a new factory UUID;
+  `tools/sunfish-install-audio.sh` follows their `tools/redfin-install-audio.sh`.
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)

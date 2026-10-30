@@ -68,6 +68,8 @@ echo "== wland + phone tools"
 sh phone/wifi/build.sh
 cp phone/wifi/out/wland phone/wifi/out/adspboot phone/wifi/out/aprtest phone/wifi/out/apr_tone phone/wifi/out/i2cprobe phone/wifi/out/camid phone/wifi/out/btup phone/wifi/out/btbridge phone/wifi/out/bluetool-stub "$OUT/"
 bash phone/tools/build.sh || echo "WARNING: some phone tools failed"
+# SunfishAudio.driver (CoreAudio HAL plug-in, a bundle): stays in phone/audio/out, tools/sunfish-install-audio.sh takes it from there
+sh phone/audio/build.sh >/dev/null || echo "WARNING: SunfishAudio.driver failed"
 # every Mach-O phone/tools/build.sh made (a fixed list missed new tools such as fcopy)
 for f in phone/tools/out/*; do
 	[ -f "$f" ] && [ -x "$f" ] && file -b "$f" | grep -q Mach-O && cp "$f" "$OUT/"

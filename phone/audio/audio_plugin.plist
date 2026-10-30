@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- From ios-redfin's RedwoodAudio.driver (HackiOS, MIT, LICENSE.HackiOS): names and the factory UUID changed. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>org.iosonpixel.sunfish.audio</string>
+	<key>CFBundleName</key>
+	<string>SunfishAudio</string>
+	<key>CFBundleExecutable</key>
+	<string>SunfishAudio</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
+	<!-- an AudioServerPlugIn: the type the HAL asks for (Apple's kAudioServerPlugInTypeUUID, fixed), and the
+	     function that makes our driver (audio_plugin.c) under our own factory UUID -->
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+		<array>
+			<string>4C45ECA8-FE1B-4A40-A3E7-0962E801880B</string>
+		</array>
+	</dict>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>4C45ECA8-FE1B-4A40-A3E7-0962E801880B</key>
+		<string>SunfishAudio_Create</string>
+	</dict>
+</dict>
+</plist>
