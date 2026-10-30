@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:40 dm8b: the user's walk test: the 4a drifts away at rest; the fusion lags the magnetometer
+- The user walked the 4a through a circle, then laid it flat beside the Pixel 8 Pro: started ~10 deg apart, then the 4a went "farther and farther out of sync" (higher degrees).
+- Trace work/hdg-dm9.txt (755 lines, T 107-487): the fit updated (r 48.0, res 2.86, bias -35.1,-42.6,-62.9), gate rej r 25, dip 446, no mag gaps. Fast turns show steps up to 81 deg per 0.5 s (real motion). After the handling the heading crawls: 113 -> 167 over ~50 s, then 144 -> 117 over ~50 s. Madgwick beta 0.04 corrects yaw too slowly, gyro bias uncorrected (gcal 0).
+- Fix in progress (dm9): gyro bias at rest + complementary-filter heading directly from the tilt-compensated magnetometer (settles in ~2 s).
+
 ### 2026-10-30 17:20 The user's second comparison: 4a 102-105 deg, Pixel 8 Pro right beside it 92 deg (10-13 deg apart)
 - Same place as before (under the webcam), kernel127 + 9f65fe1. In the first comparison (dm7) the 8 Pro read 52 and the 4a 97; so the 8 Pro moved 40 deg between readings while the 4a moved ~6 deg: the earlier 45 deg gap was mostly on the 8 Pro's side (disturbed or pointed differently; not separated).
 - The remaining 10-13 deg fits true vs magnetic north if the 8 Pro shows true north and local declination is ~10-13 deg west (guess: location and the 8 Pro's setting not confirmed). The 4a shows magnetic only (no location, B32).
