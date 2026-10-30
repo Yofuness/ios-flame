@@ -16,6 +16,14 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:15 rec1: real sensor recording analysed offline: the magnetometer is sound; the desk distorts the field; gyro-aided calibration works
+- Recording work/cal/motion-rec1.csv (405 s, 20027 mag samples, the user: flat circles, tumble, still at a fixed target, back at the desk; prototype research/notes/dipfit-prototype.py). The user: "much more in line" and smoother; still small jumps; 4a 288 vs Pixel 8 Pro 318 a metre apart (recording: 289 at T 425-450, so the published value matches).
+- Field after calibration: |B| 52 uT, dip 67 deg, V -48, H 20: plausible for Earth. All fits agree on z and x; y differs: sphere (-33.7,-40.1,-60.4) r 51.8; joint sphere + dip (-34.1,-40.3,-60.8); circle from flat samples y -45.1; best xy against the gyro on the flat turn (-35.1,-44.3,-60.8), rms 5.0 deg; phone's own fit (-34.1,-39.9,-59.4).
+- Place matters: H 11.4 / V -51.7 at the desk (T 110-190, T 470-500) vs H 20.8 / V -44.1 in the room (T 425-450). So the desk disturbs the field by ~10 uT and every desk comparison is unreliable; a sphere fit across places gets pulled off.
+- Gyro-aided linear fit ((I - Rij) b = m_i - Rij m_j, pairs 2 s apart, >= 25 deg): (-34.3,-41.5,-59.7), stable within ~1 uT in x,y over windows (z -55.6..-59.8), rms vs gyro on the flat turn 7 deg (sphere 10). Being written into dm_fusion (dm11), checked by replay on this recording.
+- Tilt: heading rms vs gyro on the flat turn 10.5 with 0.1 s accel, 9.4 with 1 s accel, 15.6 assuming exactly flat.
+- Absolute check remains weak: the gap to the 8 Pro (318 vs 289-298, or more if the 8 Pro shows true north) can't be attributed: a metre apart, hand-aligned, the 8 Pro's own calibration unknown.
+
 ### 2026-10-30 18:30 The user: Compass still jumps; lines up with the 8 Pro only when facing east. Mirror ruled out; bias + tilt suspected
 - Trace work/hdg-dm10.txt (931 lines, T 110-898): over 3 s windows with |dh| > 15: published h and hmag move the same way in 25 of 26 (e.g. 140/128, -170/-169, 91/104), so the mag is not mirrored (idea refuted; h includes a correction toward hmag, but k = 0.2/s while turning fast can't flip a 100+ deg turn).
 - Guesses, not measured: (1) xy hard-iron error of several uT: horizontal field under the webcam was only ~9 uT with the fit of the time (dip ~79 deg; ~18-20 uT expected from memory); a bias error makes the heading error vary with direction, near zero at two headings. (2) Tilt compensation from 0.2 s low-passed accel: at this dip a 5 deg tilt error gives ~14 deg heading error, so hand motion = jumps; use the gyro-stabilised gravity from q instead. Rest noise: hmag spans 108-127 at rest (dm9).
