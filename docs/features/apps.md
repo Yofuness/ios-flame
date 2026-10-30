@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:20 files1: Files has no "On My iPhone": the LocalStorage provider isn't registered
+- The extension exists (/System/Library/Frameworks/FileProvider.framework/PlugIns/LocalStorageFileProvider.appex) and its group container group.com.apple.FileProvider.LocalStorage exists; /var/mobile/Library/Application Support/FileProvider holds only LegacyEnabledStateHasBeenMigrated (re-made at boot); /var/db/PlugInKit-Annotations has no LocalStorage entry; 0 execs of LocalStorageFileProvider in 137 logged boots.
+- oslog while opening Files (openapp com.apple.DocumentsApp; logs in work/files1/): Files "Wanted to use com.apple.FileProvider.LocalStorage, but it isn't available"; fileproviderd "providerDomainsCompletionHandler: ... returning 3 providers"; pkd enumerates 1 com.apple.fileprovider-ui plugin.
+- `lsreg -p <appex>` -> registerPlugin: NO. On-device change: none that took (registration failed); fileproviderd and Files were restarted. Research (research/notes/files-on-my-iphone.md) on how framework plug-ins get into LaunchServices and whether our `lsreg -r` rebuilds dropped them.
+
 ### 2026-10-30 03:50 B35 Location Services row: gate found, hook not loaded (b35, kernel98)
 - Gate (research/notes/b35-location-row.md, PrivacySettingsUI disassembly): -[PUIPrivacyController specifiers] removes the "LOCATION" row unless refreshLocationServicesAvailable cached YES; that method asks CoreTelephony getSubscriptionInfo, which fails without CommCenter (removed from launchd.plist since image v13) -> nil -> row hidden.
 - SweetMetal2 hook (Preferences: refreshLocationServicesAvailable -> cache @YES, via a dyld add-image callback): no "b35:" line at all in mtl2.log, so the SweetMetal2 bundle never loads in Preferences (it only loads in Metal clients). Row still missing.
