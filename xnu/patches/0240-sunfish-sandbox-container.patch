@@ -5,12 +5,14 @@ Subject: [PATCH] 0240 sunfish: Sandbox op 4 answers the container path from
  the spawn attributes (app extensions), sweetsbcont=0 off
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+v1.1 (2026-10-30): NULL instead of PROC_NULL (build fix).
 ---
  bsd/kern/sweet_amfi.c | 174 +++++++++++++++++++++++++++++++++++++++++-
  1 file changed, 173 insertions(+), 1 deletion(-)
 
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 8d4012f..f3140f9 100644
+index 8d4012f..204a5d9 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
 @@ -26,6 +26,7 @@
@@ -163,7 +165,7 @@ index 8d4012f..f3140f9 100644
 +		uid = proc_uniqueid(p);
 +	} else {
 +		proc_t t = proc_find(pid);
-+		if (t == PROC_NULL) {
++		if (t == NULL) {
 +			return ESRCH;
 +		}
 +		uid = proc_uniqueid(t);
@@ -215,6 +217,3 @@ index 8d4012f..f3140f9 100644
  };
  
  static struct mac_policy_conf sweet_sandbox_mac_conf = {
--- 
-2.56.0
-
