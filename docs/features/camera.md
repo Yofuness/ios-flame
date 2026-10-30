@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure (cam40) and tap-to-focus + sharp photos (af5) work; open: focus on open/after a switch, slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS: live colour preview on BOTH cameras and saved HEIC photos (2026-10-30 cam35-cam37); auto-exposure (cam40), autofocus on open and on tap, sharp photos (af5-af7) work; open: shutter ignored after some reopens (B48), slow camera switch, front colour cast. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 23:00 af6/af7: focus on open works; first shutter after reopening can be ignored (port 4e3e807)
+- af6 (kernel128, camera_af.h: sweep after AE is stable, lock, per-session reset, 1 s photo timeout): no tap: F 400, 440, 481, 562, 643, 725, settles 714 (focus 991); sharp ~25 s after openapp (+9 s blurry, +16 s soft); locked, no F lines for 20+ s. After front -> rear: black ~10 s, soft at +20 s, sharp at +30 s, sweep ran again. Front: pale blue-lilac, bright, not clipped. 5 camclient sessions in a row rc 0. DEVLOST 0, FAULT 0.
+- Photo: af6's two shutter taps saved nothing, no "a photograph asked for". af7: A (openapp, 35 s, no tap): nothing; B (tap focus, 6 s, shutter): IMG_0005.HEIC; C (openapp again, 35 s, no tap): IMG_0006.HEIC, StillImage in 381 ms. So a tap isn't needed; AF isn't the cause. A's log has "Viewfinder still closed N seconds after ViewfinderClosed (CameraStopped, PreviewStopped, RuntimeError)", "stream: its worker is still in the kernel: left to finish on its own"; B/C don't. Cause open (restart race? guess); backlog B48. Logs: work/af7/.
 
 ### 2026-10-30 22:30 af5: TAP-TO-FOCUS AND SHARP PHOTOS IN CAMERA.APP (kernel128)
 - Tap on the board: yellow AF box; F 704, 684, 715, 664, 719 (hunts, settles ~719); preview sharp. Shutter: IMG_0004.HEIC (1164081 B) in ~2 s, no stall; work/cam/af5-s.jpg: every board marking readable, colours right. Exposure and focus by the app itself.
