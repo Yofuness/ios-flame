@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 iOS lists the Back Camera (AVFoundation, 16 formats; camera ADT + camd + SunfishAudio.driver camera code, cam26); Camera.app not tried yet (U12). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; front IMX355 answers. **Updated:** 2026-10-31.
+**State:** 🟡 iOS lists the Back Camera (AVFoundation, 16 formats; camera ADT + camd + SunfishAudio.driver camera code, cam26); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 07:55 cam31 (kernel111 CAMERA=1): FRONT CAMERA STREAMS: the shared csiphy0 clock was missing (c5a24d6)
+- Cause (research/notes/camera-front-csiphy2.md): live.dts:12730-12749 lists csiphy0_clk among CSIPHY2's (and 1's, 3's) clocks; downstream enables it for every PHY. camrx's front path now runs the csiphy0 branch 0xad06020 too (read back 0x1) and turns it off after.
+- `sunfish-cam-rx.sh --front --stream 5`: settle 24, sensor frame_count 30..181, **151 SOF / 150 done, 30.00 fps, CSID bytes 1894200/1894200 (one 1640x924 RAW10 frame)**, 0 faults, GFSR 0, SMMU restored, powered down. `--front --capture`: 1894200 B, 0 zero 1 KB blocks, mean byte 18.1; raw2png 1640x924 gray 0..195 (files in work/cam/cam31-front*, not viewed). The script exited 2 after the capture (a missing file-name argument; the capture itself finished): to fix.
+- Rear regression: 60.00 fps, 3810240/3810240, 0 faults. camd restored and idle. No reset.
+- Next: camd SENSOR 2 (front) through camera_device (front camera in Camera.app: ports[1] is NULL in our camera_device.c; redfin turned it half round).
 
 ### 2026-10-31 07:30 cam29 + cam30 (kernel111 CAMERA=1): front CSIPHY2 sees lane activity, CSID-lite still 0 packets with every PHY select
 - cam29 (manual front sequence): sensor frame_count 30/60/90 at 1 s steps; `rx report` RX_PKTS 0, ECC 0, CRC 0, bytes 0/0, top/RX/RDI0 IRQ 0. CSIPHY2 status 0x8b0..0x8d8 after the stream: settle 24 `00 01 00 20 00 00 04 00 80 40 00` (= the rear's pattern after a working stream, cam8), settle 14 and 40 `04 01 80 20 00 10 04 00 82 40 04`. So the PHY sees the lanes; nothing reaches CSID-lite.

@@ -47,7 +47,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine (Maps, Music, Photos, App Store fixed; 0 crashes per boot on kernel95); Camera black (no camera) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
-| [Camera](docs/features/camera.md) | 🟡 | iOS lists the rear camera ("Back Camera", 16 formats); raw photos and 60 fps streaming work from tools; Camera app not tried yet |
+| [Camera](docs/features/camera.md) | 🟡 | iOS lists the rear camera ("Back Camera", 16 formats); both cameras stream and take raw photos from tools (rear 60 fps, front 30 fps); Camera app not tried yet |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); audio playback being tested |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ✅ | auto-rotate works (accelerometer -> rotation); all 6 sensors answer on the audio DSP |
