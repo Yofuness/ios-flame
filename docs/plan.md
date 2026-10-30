@@ -6,8 +6,10 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
 1. ▶ **App extensions** (B8): Files "On My iPhone" OPENS (kernel121, xnu 0240 v5: Sandbox op 4 answers the container from the exec's HOME). Next: PhotosFileProvider, survey widgets/share/keyboard extensions. (apps.md)
-3. **Sensors** (B12): auto-rotate works; open: proximity into iOS, iOS-native motion services. (sensors.md)
-4. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
+2. ▶ **Screenshot tool** (D7/B41, dev speed): flame-shot garbage on CAMERA boots, the shot.m port renders a wrong image; fix one of them. (apps.md)
+3. **Camera.app pre-checks** (B40): iOSPlus10's 4 camera fixes vs ours, read-only, before U12. (camera.md)
+4. **Sensors** (B12): auto-rotate works; open: proximity into iOS, iOS-native motion services. (sensors.md)
+5. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
 Camera.app (U12), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
