@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 05:20 Camera.app prerequisites gap check (read-only, research/notes/camera-stage-f-gaps.md)
+- Have: 0924's tccd camera sandbox extension (our 0219). Missing: (1) ADT /arm-io/isp + /product/camera nodes (redfin mkadt.py --camera) + a MobileGestalt cache made on them; (2) MediaToolbox SubServerConfiguration.plist StartRecorderServer = true (tools/sweet-root-tweaks.py sets it false); (4) 0925 DisplayPipePlaneBaseAlignment dictionary; (5) 0927 IOSurface plane bytes-per-row at +0x10; (6) SweetMetal2 YCbCr 420_2P / RGB10A8_2P textures for the preview (1-2 d); small: front camera rotation, filter-thumbnail hook, alerts, Live Photo off. Order: 0925+0927 -> ADT camera -> StartRecorderServer -> driver hooks -> SweetMetal2 YCbCr.
+- Being written: 0234/0235 (kernel111), mkadt --camera, camera_avtest (list devices only).
+
 ### 2026-10-31 05:05 cam25 (kernel110): camera code in SunfishAudio.driver installed; gate off/on harmless; Camera.app not opened yet
 - `phone/audio/build.sh` + `tools/sunfish-install-audio.sh` (41a11d4: camera_device.c + inject_media.c over camera_client.c, gate /var/local/camdev.on). Gate off: mediaserverd restarted (pid 29 -> 471), no crash report in 80 s. Gate on (camd running, mediaserverd restarted 471 -> 490): running, no crash report.
 - **/var/local/camdev.log (0666) stayed empty in both cases**: no "gate:" line, so there's no sign the plug-in's camera constructor ran. mediaserverd runs as uid 501 (psx), so permissions aren't it. Guess: the HAL plug-in (and so inject_media's constructor) loads only when CoreAudio first initialises in mediaserverd, not at process start; or the constructor isn't reached. To check by day: open Camera.app with the gate on and read camdev.log/camd.log.
