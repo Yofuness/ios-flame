@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 05:30 jack4 (adspboot 8039500): BOTH SOUNDWIRE MASTERS ANSWER (S0 done), no reset
+- Per-group clocks: hw vote ok; clock mask 0x1e: 0x30c tx_core, 0x30d tx_npl (19.2 MHz), 0x30e rx_core, 0x30f rx_npl (22.5792 MHz, DT) on/off ok; 0x30b va_core refused "APR status 0x2" (clock_set v1 attr 1 root 0; va-macro not needed for the headphone path).
+- Reads: tx-macro 0x62ec0000 = 0; **TX SoundWire master 0x62ed0000 = 0x01050000** (SWR v1.5.0), +0x4..+0x3c = 0; **RX SoundWire master 0x62ef0000 = 0x01050000**. Batteries 4438-4440 mV; restored (sensors job pid 37, camd idle, btbridge up).
+- Next S2: TX master init + enumeration (msm-4.14 swr-mstr-ctrl.c sequence), codec WCD937x out of reset (LPI gpio24), read the slave's device ID. Writes: reset risk only (no supplies touched).
+
 ### 2026-10-30 05:05 jack3 (adspboot 1e414f0 --swr-clk-first): no reset; va_core clock vote fails, tx clocks ok
 - 4 runs (--swr-only 2/3/4/5, each a fresh kernel112 CAMERA=1 boot, sensors.off, 4437 mV): hw vote ok (status 0); clock 0x30b (va_core) "on: FAILED", 0x30c (tx_core) ok, 0x30d (tx_npl) ok (mask 0x6) -> all reads skipped by design; rc 0, no reset. Restored: sensors job up (adspboot pid 37), camd idle, btbridge up.
 - DT: va-macro clocks = va_core_clk only; tx-macro = tx_core_clk + tx_npl_clk; tx_swr_master is tx-macro's child. So the TX SoundWire (the codec's MBHC side) can be read with the two tx clocks. Next: per-group clock needs + the AFE status of the 0x30b failure.
