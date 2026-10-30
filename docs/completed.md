@@ -5,6 +5,8 @@ Newest first. Details stay in the feature Logs (docs/features/<name>.md).
 
 ## From the plan (2026-10-28 .. 2026-10-30)
 
+- 2026-10-30 CAMERA.APP LIVE PREVIEW (rear): lines are 16-byte padded (stride 2528, not 2520), 5af97b4 (camera.md cam34, cam35).
+- 2026-10-30 AIRPODS PLAY MUSIC (U11) and vibration felt (U16), the user.
 - 2026-10-30 B47 closed: CC blur is there without Turnip options (bl1; gm0 flat blue not reproducible); per-process TU_DEBUG knob kept (apps.md bl1).
 - 2026-10-30 COMPASS WORKS (B46): fake DeviceMotion HID services {0xFF0C,4} (CoreMotion) + {0xFF0C,8} (locationd heading), xnu 0243/0245, adspboot 9-axis Madgwick + hard-iron box + heading/accuracy/status 0x100 in the type-2 report; kernel126 default sweetmotion=0x4bf (sensors.md dm1-dm4).
 - 2026-10-30 D6/B38 BOOT CMDLINE LIMIT: kernel125 (xnu 0244) has 23 boot-args built in; everyday command line 574 -> 266 bytes of 591 (boot.md bk1).

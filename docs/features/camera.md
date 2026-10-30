@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP SHOWS A LIVE COLOUR PREVIEW from the rear camera (2026-10-30 cam35, stride fix); open: front camera in camd (START -> -60), saving photos. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 17:00 cam35: CAMERA.APP LIVE PREVIEW WORKS (rear, kernel127, port 5af97b4)
+- camd/camrx/camclient/camisp replaced in /var/local/bin (5af97b4 touched only comments/constants in camera_device.c + sunfish_camera.h, so SunfishAudio.driver kept), camd restarted by launchd. Camera.app: a live full-colour picture of the red circuit board (and the printed letters behind it), work/shots/cam35-rear.png, webcam agrees. Horizontal bands in the screenshot also cut the UI text and shutter button, so they are flame-shot reading during an update, not the camera.
+- Front: switching in Camera.app -> "START -> -60 after 30065 ms (camd pid 379, state 4)", "frames stopped (0)", camd.log "session end: FAULT (no more starts), 2 frames published", then every START -> -5 until camd is killed (kill; launchd restarts; rear comes back). tools/sunfish-cam-rx.sh --front --capture works, so the difference is in camd's front path.
+- Photo: the shutter tap saved nothing (Photos: "No Photos or Videos"); camdev.log "frames begin (format 0)", "streams given back (2)". Cause open.
 
 ### 2026-10-30 16:40 cam34: BOTH CAMERAS GIVE REAL PICTURES; the static is a wrong row stride (lines are 16-byte aligned)
 - kernel127, daylight. Rear (camclient -n 2 -o; camd had been in FAULT after the Camera.app session: killed, launchd restarted it, START 0 after 4.35 s): with stride 2528 the frame shows the red circuit board right in front of the lens (blurry); with our stride 2520 it is diagonal stripes = Camera.app's static. Front (tools/sunfish-cam-rx.sh --front --capture, 1894200 B): with stride 2064 (data 2050 B) it shows the ceiling and the user's iPhone 11 with its flash dot; green cast (no white balance). Shots: work/cam/cam34-rear-s2528.png, cam34-front-view.png.
