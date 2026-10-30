@@ -67,6 +67,19 @@ static int dm_trace;
 static long dm_last_save, dm_last_yaw;
 static float dm_yaw;
 /*
+ * dm10: /var/local/motion-dump.on exists (checked every 2 s while the fusion runs): raw samples as dm_fusion gets them
+ * and the published heading go to motion-dump.csv for offline tuning (dm_replay, sunfish-magcal-analyze.py), up to
+ * MDUMP_MAX. No file: nothing is opened or written.
+ */
+#define MDUMP_ON "/var/local/motion-dump.on"
+#define MDUMP_CSV "/var/local/motion-dump.csv"
+#define MDUMP_MAX (30L * 1024 * 1024)
+static FILE *mdump_fp;
+static long mdump_size, mdump_flush;
+static int mdump_said;		/* the stop reason was printed; again after the .on file goes away */
+static uint64_t mdump_h_last;
+static char mdump_buf[65536];
+/*
  * B46 dm5: SEE's background calibrations (mag_cal, gyro_cal; on-change streams) run while the fusion does; the mag
  * bias replaces the min/max box while its status is >= 1 (the box keeps learning as the fallback). SNS_SEE_CAL=0
  * turns them off (no lookup).
@@ -76,10 +89,64 @@ static int see_cal;
 #define ORIENT_HZ 15.0f		/* sensd: accel rate when it runs for orientation only */
 #define MAX_TRIES 5		/* lookups that found nothing: again every 10 s (the sensors PD may still load) */
 
+static void mdump_close(const char *why)
+{
+	if (!mdump_fp)
+		return;
+	fclose(mdump_fp);
+	mdump_fp = NULL;
+	printf("sns: motion dump closed (%s), %ld bytes\n", why, mdump_size);
+}
+
+/* dm10: from follow(), so every 2 s */
+static void mdump_check(void)
+{
+	if (access(MDUMP_ON, F_OK)) {
+		mdump_said = 0;
+		mdump_close("no .on file");
+	} else if (!dm_want) {
+		mdump_close("fusion off");
+	} else if (!mdump_fp && !mdump_said) {
+		mdump_said = 1;
+		FILE *fp = fopen(MDUMP_CSV, "a");
+		if (!fp) {
+			printf("sns: %s: %s\n", MDUMP_CSV, strerror(errno));
+			return;
+		}
+		fseek(fp, 0, SEEK_END);
+		mdump_size = ftell(fp);
+		if (mdump_size >= MDUMP_MAX) {
+			fclose(fp);
+			printf("sns: motion dump: %s is full\n", MDUMP_CSV);
+			return;
+		}
+		setvbuf(fp, mdump_buf, _IOFBF, sizeof(mdump_buf));
+		mdump_fp = fp;
+		printf("sns: motion dump to %s from %ld bytes\n", MDUMP_CSV, mdump_size);
+	}
+}
+
+static void mdump_sample(const struct motion_sample *m, uint64_t ts)
+{
+	double t = (double)ts / 19200000.0;
+	int n = 0;
+	if (m->type == MOTION_TYPE_ACCEL)
+		n = fprintf(mdump_fp, "a,%.4f,%.4f,%.4f,%.4f\n", t, m->v[0], m->v[1], m->v[2]);
+	else if (m->type == MOTION_TYPE_GYRO)
+		n = fprintf(mdump_fp, "g,%.4f,%.5f,%.5f,%.5f\n", t, m->v[0], m->v[1], m->v[2]);
+	else if (m->type == MOTION_TYPE_COMPASS)
+		n = fprintf(mdump_fp, "m,%.4f,%.3f,%.3f,%.3f\n", t, m->v[0], m->v[1], m->v[2]);
+	mdump_size += n > 0 ? n : 0;
+	if (mdump_size >= MDUMP_MAX)
+		mdump_close("30 MB");
+}
+
 /* B46: feed the fusion; after a gyro sample, a report once >= 10 ms since the last one. */
 static void dm_feed(const struct motion_sample *m)
 {
 	uint64_t ts = m->ts_mach ? m->ts_mach : mach_absolute_time();
+	if (mdump_fp)
+		mdump_sample(m, ts);	/* dm10 */
 	if (m->type == MOTION_TYPE_ACCEL) {
 		dm_accel(&dm, m->v);
 		return;
@@ -128,6 +195,13 @@ static void dm_feed(const struct motion_sample *m)
 			    dm.hc_hmag_ok ? dm.hc_hmag : -1.0f, a,
 			    dm.mag_raw_ts ? (double)(ts - dm.mag_raw_ts) / 19200.0 : -1.0);
 			dm_trace_last = ts;
+		}
+		if (mdump_fp && ts - mdump_h_last >= 19200000ull / 2) {	/* dm10 */
+			float h;
+			memcpy(&h, (const char *)&r + offsetof(struct dm_report2, heading), sizeof(h));
+			int n = fprintf(mdump_fp, "h,%.4f,%.2f,%.2f\n", (double)ts / 19200000.0, h, dm.hc_hmag_ok ? dm.hc_hmag : -1.0f);
+			mdump_size += n > 0 ? n : 0;
+			mdump_h_last = ts;
 		}
 		d.len = sizeof(r);
 		memcpy(d.bytes, &r, sizeof(r));
@@ -341,6 +415,8 @@ static int start(void)
 	dm.cal.gbias_off = e && !strcmp(e, "0");
 	e = getenv("SNS_HEADING_CF");	/* dm9: complementary heading and still beta, 0 = off */
 	dm.cal.hc_off = e && !strcmp(e, "0");
+	e = getenv("SNS_HEADING_GRAVITY");	/* dm10: q = tilt from q (default lp) */
+	dm.cal.grav_q = e && !strcmp(e, "q");
 	e = getenv("SNS_HEADING_TRACE");
 	dm_trace = e && !strcmp(e, "1");
 	e = getenv("SNS_DM_TYPE");
@@ -392,6 +468,7 @@ static int follow(void)
 			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
 	}
 	dm_want = dm_now;
+	mdump_check();	/* dm10 */
 	for (int i = 0; i < nss; i++) {
 		struct sensor *s = &ss[i];
 		int idx = s->k->motion_index, on = 1, orient_only = 0;
@@ -534,6 +611,10 @@ void sns_tick(const struct sns_link_ops *ops)
 	if (mode == M_MOTION && now - last_want >= 2000) {
 		last_want = now;
 		follow();
+	}
+	if (mdump_fp && now - mdump_flush >= 1000) {	/* dm10 */
+		fflush(mdump_fp);
+		mdump_flush = now;
 	}
 	if (dm_want && now - dm_last_yaw >= 1000) {	/* dm2: test knob, re-read every second */
 		FILE *fp = fopen(DM_YAW_PATH, "r");

@@ -19,7 +19,7 @@ void dm_init(struct dm_fusion *f, float beta)
 	if (init)
 		f->cal = cal;
 	else
-		f->cal.heading_tc = DM_HEADING_TC;
+		f->cal.heading_tc = DM_HEADING_TC, f->cal.hc_k_slow = DM_HC_K_SLOW, f->cal.hc_k_fast = DM_HC_K_FAST;
 	f->see_mag_st = init ? sms : -1, f->see_gyro_st = init ? sgs : -1;
 	memcpy(f->see_mag_bias, smb, sizeof(smb)), memcpy(f->see_gyro_bias, sgb, sizeof(sgb));
 	if (gbh)
@@ -378,13 +378,13 @@ static void dm_still_step(struct dm_fusion *f, const float gr[3], float dt)
 		f->still_acc *= 0.5f, f->still_t *= 0.5f;
 }
 
-/* dm9: up in the device frame: low-passed accel, or q's while |accel| is far from 1 g */
+/* dm9: up in the device frame: low-passed accel, or q's while |accel| is far from 1 g; dm10: grav_q: always q's */
 static void dm_grav_step(struct dm_fusion *f, float dt)
 {
 	float q0 = f->q[0], q1 = f->q[1], q2 = f->q[2], q3 = f->q[3];
 	float s[3] = { 2 * (q1 * q3 - q0 * q2), 2 * (q0 * q1 + q2 * q3), q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3 };
 	float an = sqrtf(f->acc[0] * f->acc[0] + f->acc[1] * f->acc[1] + f->acc[2] * f->acc[2]);
-	if (f->have_acc && fabsf(an - G_MS2) <= DM_GRAV_DEV * G_MS2) {
+	if (!f->cal.grav_q && f->have_acc && fabsf(an - G_MS2) <= DM_GRAV_DEV * G_MS2) {
 		float a = f->grav_have ? 1.0f - expf(-dt / DM_GRAV_TC) : 1.0f;
 		for (int i = 0; i < 3; i++)
 			s[i] = f->grav[i] + a * (f->acc[i] / an - f->grav[i]);
@@ -428,7 +428,7 @@ static void dm_heading_step(struct dm_fusion *f, float dt, int stale)
 		} else {
 			int fast = fabsf(g[0]) >= DM_HC_FAST || fabsf(g[1]) >= DM_HC_FAST || fabsf(g[2]) >= DM_HC_FAST;
 			float d = fmodf(fmodf(hm - f->hc_h, 360.0f) + 540.0f, 360.0f) - 180.0f;
-			f->hc_h += (fast ? DM_HC_K_FAST : DM_HC_K_SLOW) * d * dt;
+			f->hc_h += (fast ? f->cal.hc_k_fast : f->cal.hc_k_slow) * d * dt;
 		}
 	}
 	f->hc_h = fmodf(fmodf(f->hc_h, 360.0f) + 360.0f, 360.0f);

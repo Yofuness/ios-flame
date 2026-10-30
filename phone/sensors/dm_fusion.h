@@ -120,6 +120,8 @@ struct dm_fusion {
 		float heading_tc;		/* s, 0 = no heading low-pass */
 		int hold_off, gate_off;		/* dm8: env switches (SNS_MAG_HOLD=0, SNS_MAG_GATE=0) */
 		int gbias_off, hc_off;		/* dm9: env switches (SNS_DM_GBIAS=0, SNS_HEADING_CF=0) */
+		int grav_q;			/* dm10: SNS_HEADING_GRAVITY=q: tilt from q, not the low-passed accel (default lp) */
+		float hc_k_slow, hc_k_fast;	/* dm10: DM_HC_K_* unless SNS_HC_K_SLOW / SNS_HC_K_FAST */
 	} cal;
 	/* dm8: mag used for the correction (gated), its time and the raw sample's time (ticks; 0 = untimed) */
 	float mag_use[3];
