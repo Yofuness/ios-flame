@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:00 dm5: SEE mag_cal/gyro_cal exist ("ASH_CAL", GOOGLE), but the first integration stopped all motion streams; reverted, fixed (dm6)
+- Port bd5669f (kernel126): lookups found mag_cal (suid 0a9b44af...) and gyro_cal (suid 082bf075...), name "ASH_CAL", vendor GOOGLE, available 1, rates 10. But the status line showed only "magcal 0 gyrocal 0, written 0, devmotion 0": accel/gyro/mag never started, Compass had no heading. Reverted (5384410); working build restored (dm5r).
+- Root cause (implementer, e226cad): in sns_run.c start() the 6 motion lookups got no answer on the first try (sensors PD still loading) while the 2 cal lookups did, so start() saw 2 sensors as success and never retried; late lookup replies then landed on the cal clients' ports ("magcal: SUID event for mag"). Also msgid 1022 (16 bytes: packed bias 3 x f32 + status) is the SEE cal event and was dropped as "unhandled".
+- Fix e226cad: motion sensors are set up first and the cal sensors only when at least one motion sensor was found (else retry as before); cal sensors are enabled only after accel/gyro deliver samples; 1022 goes to the cal parser. Host test reproduces the failure. Not yet on the phone (dm6).
+
 ### 2026-10-30 19:45 cw1: corrected seed reads 263-265° W (true heading ~270° W)
 - kernel126 (the script adds sweetmotion=0x4bf), work/magcal-west.txt pushed right before the reboot: the first try lost the race to adspboot's 30 s save (old bias), the second took: status "bias -65.5,-43.2,-67.7 span 90,90,90".
 - Compass (phone untouched, top pointing west per the user): screenshot 263° W (one digit glitched), webcam 265° W (work/shots/cw1.png, scratchpad cw1-cam.jpg). 5-7° short of 270, similar to dm4's 351 vs ~0 for the old seed, so a small constant offset remains (raw value from an older boot, field-strength guess, or tilt; not separated).
