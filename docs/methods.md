@@ -22,6 +22,7 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
 - Stop booting below 3600 mV (`fastboot getvar battery-voltage`). Start the live-log listener first (`pgrep -af sunfish-livelog`).
 - Tools (status.md): `flame-cmd.py reboot|swipe|tap` (and `key N [MS]`), `flame-files.py get|put`, `flame-shot OUT.png`,
   `sunfish-install-ssh.sh`, `sunfish-install-wifi.sh`, `sunfish-livelog.sh` (log → logs/usb-live.log).
+- Screen capture: `flame-shot` (framebuffer read) is broken on CAMERA boots; `tools/sunfish-shot.sh [NAME]` (phone/tools/shot, render-server picture -> work/shots/) replaces it once verified on the phone.
 
 ## Building
 - Kernel: edit `work/src/xnu`, commit there, save the diff as `xnu/patches/NNNN-sunfish-*.patch`. Build it with tools/vm-build-xnu.sh (below); CI fallback: `gh workflow run xnu.yml --ref main`, `gh run watch ID`, `gh run download ID -n xnu-kernel -D work/kernelNN`.
