@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:10 cam23 (kernel109, cam20r boot): f1 DONE, camd + camclient work end to end (9acd78a)
+- A (split camrx regression): `--stream 5` 60.00 fps (301 SOF / 300 done), 0 faults, past ring 0, restored: same as cam22.
+- B camd (started `(/var/local/bin/camd --log /var/local/camd.log ... &)`; the phone has no nohup/pgrep/timeout): /var/run/sunfish-camera.shm 12587008 B (3 x 4 MB slots, 2016x1512 RAW10) + .sock. `camclient -n 120`: START reply after 6.67 s, 120 frames read, seq 1..219, 0 torn, published 120, dropped 6, **client 4.0 fps (sensor 60.1): copy_us ~276 ms per frame through /dev/pmem pread (~14 MB/s)**; header 2016x1512 stride 2520 fmt 1 exp 1592 lines (16.47 ms) gain 256 frame_length 1608; mean byte 23.4. `camclient -n 60 -e 800 512`: exposure change while streaming took effect (headers: exp 1592 -> 800 lines, gain 256 -> 512; mean byte 24.6 -> 28.8). Teardown on last client: camid power-down, SMMU restored, "powered down"; SIGTERM exit clean. 3 min stable; camd.raw 3810240 B, 0 zero 1 KB blocks.
+- Bottleneck: the copy out of the carveout (uncached device mapping, 32-bit loads). Next: xnu patch: pmem reads of the splash carveout through a normal-non-cacheable (write-combined) mapping with 64-bit/bcopy loads; then camera_client.c shim + camera_device.c in SunfishAudio.driver.
+- Screen: the lock-screen button icons are noise (B29, already right after boot: cam20r frame); in cam23's frame the clock digits were noise too after midnight (also B29-like, not the camera: the camera writes only 0x9cb00000.. via its SMRs).
+
 ### 2026-10-31 03:55 Stage f design (read-only, research/notes/camera-stage-f.md)
 - Chosen: a root daemon `camd` (camrx's proven code) -> /var/run/sunfish-camera.shm (3 slots, redwood_camera.h structs) + /var/run/sunfish-camera.sock (commands); camera_device.c in SunfishAudio.driver reads it through a ~150-line shim (camera_client.c) replacing its 8 device calls. Reasons: no sandbox enforced here (xnu 0050 stand-in allows all; 0219 already covers redfin 0924's tccd camera token); mediaserverd opening /dev/pmem rejected (root 0600, and a camera fault would kill audio).
 - Same iOS build as redfin (16.7.16 20H392 iPhone X), so their FigCaptureDevice vtables/selectors should match; a read-only symbol check comes before the first load. Kernel 0923 port stays the fallback (~2-3 days).
