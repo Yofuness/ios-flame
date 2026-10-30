@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:25 the user: the phone lies flat with its top pointing WEST (dm4 showed 351 deg)
+- dm4's 351 deg is the seeded guess (bias assumed the top pointed north), so the heading math and axes look right; only the hard-iron bias was wrong. With the top west and face up, device x = north, y = west, z = up, so the expected field is (Bh, 0, -Bz) ~ (21, 0, -48) uT (assumed east-US field; horizontal magnitude only scales the error when the phone is turned).
+- New seed: bias = raw (-44.5, -43.2, -115.7) - (21, 0, -48) = (-65.5, -43.2, -67.7) uT (old -44.5, -64.2, -69.6): box min -110.5 -88.2 -112.7 max -20.5 1.8 -22.7 (work/magcal-west.txt). Expected after a reboot: ~270 deg W (cw1).
+
 ### 2026-10-30 19:10 dm4: COMPASS WORKS (kernel126, heading in the DeviceMotion report)
 - Port e14aaf6: type-2 reports now carry the magnetic heading (@0x44, degrees clockwise from north, from our north-referenced q), its accuracy (@0x48: 10/20/35 deg at calibration level 2/1/0, -1 uncalibrated) and status bit 0x100 (locationd's CLCompass7 publishes only with it; it does not compute heading from q/mag itself). Host test: heading field 30 for yaw 30, status 0x100, accuracy 10.
 - dm4 (kernel126, everyday recipe + sweetmotion=0x4bf, /var/local/sensors.devmotion, seeded /var/local/magcal.txt): Compass shows a heading number and turns its dial. Webcam (yaw 0): "351° N"; yaw knob 90 -> "85° E" (shot mid-turn), yaw 200 -> "192° S" (351+200 = 191: matches), dial turned with N at lower right (work/shots/dm4-b/c.png). Compass logs [CLSensorFusionService] samples ~20/s. Status "dm type 2 acc 2 bias -44.5,-64.2,-69.8 span 90,90,94.1".
