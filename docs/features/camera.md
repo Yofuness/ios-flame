@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 iOS lists the Back Camera (AVFoundation, 16 formats; camera ADT + camd + SunfishAudio.driver camera code, cam26); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 08:15 cam32 (kernel111 CAMERA=1): iOS LISTS BOTH CAMERAS; camd idle after the boot prewarm (1d93eee)
+- camera_device.c front port restored (redfin's, half-turned; centre-crop of 1640x924 to the plist's 4:3 photo / 16:9 video sizes; SENSOR a=2 before START); camd race fixed (front chosen before the session thread; it would have stopped every front session). Off switches: /var/local/camdev.nofront (no front port), CAMD_NO_FRONT=1 (camd refuses SENSOR 2).
+- Battery 4439 mV, lock screen at ~55 s. camd by launchd (pid 42), idle (0.06-0.08 s CPU, no camid). camdev.log: "the device made: 2 streams, the back camera, the front one", the prewarm (back then front), socket not yet up, "streams given back (2)", "reopen skipped", "stop (0 frames)". **camera_avtest: Back Camera (built-in_video:0, position 1, 16 formats) + Front Camera (built-in_video:1, position 2, 18 formats).** 2 min stable, no reset.
 
 ### 2026-10-31 07:55 cam31 (kernel111 CAMERA=1): FRONT CAMERA STREAMS: the shared csiphy0 clock was missing (c5a24d6)
 - Cause (research/notes/camera-front-csiphy2.md): live.dts:12730-12749 lists csiphy0_clk among CSIPHY2's (and 1's, 3's) clocks; downstream enables it for every PHY. camrx's front path now runs the csiphy0 branch 0xad06020 too (read back 0x1) and turns it off after.
