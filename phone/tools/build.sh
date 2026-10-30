@@ -12,6 +12,7 @@
 #   vcopy    SRC DST: tree copy keeping xattrs, ACLs, flags; -l PATH, -c SRC DST compare
 #   sctl     NAME[=INT]: read or set a sysctl (no sysctl binary on the phone)
 #   fcopy    [-n] SRC DST: fcopyfile(COPYFILE_DATA) data copy (-n: F_NOCACHE), xnu 0198 test
+#   jackset  0|1|3: headphone jack state for SunfishAudio.driver (bit 0 plugged, bit 1 mic)
 #   expt, exq, runmigrator: one-off probes of ExtensionFoundation and DataMigration (runmigrator needs
 #   com.apple.migrationpluginwrapper's entitlements, not in git)
 set -euo pipefail
@@ -42,4 +43,5 @@ build camrx camrx.c camrx_lib.c ../wifi/pmem.c ../wifi/smmu.c	# camera c1/c2/d: 
 build camd camd.c camrx_lib.c ../wifi/pmem.c ../wifi/smmu.c	# camera f1: camera daemon (shm + socket)
 build camclient camclient.c	# camera f1: camd test client
 build a2s a2s.c
+build jackset jackset.c	# headphone jack S4: org.iosonpixel.jack state + post
 ls -l out

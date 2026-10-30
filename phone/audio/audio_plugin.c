@@ -63,12 +63,15 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <notify.h>
+#include <dispatch/dispatch.h>
 #include <sys/ioctl.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -164,6 +167,7 @@ enum {
 
 	kAudioDevicePropertyDeviceUID = 'uid ', kAudioDevicePropertyModelUID = 'muid', kAudioDevicePropertyTransportType = 'tran',
 	kAudioDevicePropertyRelatedDevices = 'akin', kAudioDevicePropertyClockDomain = 'clkd',
+	kAudioDevicePropertyJackIsConnected = 'jack',
 	kAudioDevicePropertyDeviceIsAlive = 'livn', kAudioDevicePropertyDeviceIsRunning = 'goin',
 	kAudioDevicePropertyDeviceCanBeDefaultDevice = 'dflt', kAudioDevicePropertyDeviceCanBeDefaultSystemDevice = 'sflt',
 	kAudioDevicePropertyLatency = 'ltnc', kAudioDevicePropertyStreams = 'stm#', kAudioObjectPropertyControlList = 'ctrl',
@@ -249,6 +253,16 @@ static Float64 ticks_per_frame;
 static UInt64 written, refused;         /* frames since the speaker's I/O started */
 static Boolean inactive[OBJECT_LAST + 1];       /* streams the HAL has switched off */
 static Float32 volume = 1.0f;           /* the speaker's volume control, 0 to 1 (iOS sets it once it routes there) */
+/*
+ * sunfish S4 (headphone jack): only with /var/local/sunfish-jack-enable (read once at Initialize), the
+ * device "Codec" has 'jack' in the output scope (headphones in) and the input scope (their microphone),
+ * which VirtualAudio's HALJackStateHandler reads to make the "Wired Headphones" port. The state comes from
+ * the Darwin notification JACK_NOTIFY (its state: bit 0 plugged, bit 1 microphone; jackset posts it).
+ */
+#define JACK_ENABLE             "/var/local/sunfish-jack-enable"
+#define JACK_NOTIFY             "org.iosonpixel.jack"
+static bool jack_enabled;
+static UInt32 jack_state;               /* under lock */
 
 static void
 say(const char *format, ...)
@@ -351,6 +365,54 @@ release(__unused void *driver)
 	return 1;
 }
 
+/* sunfish S4: a post of JACK_NOTIFY; tell the HAL when the state changed, outside the lock */
+static void
+jack_changed(int token)
+{
+	AudioObjectPropertyAddress changed[2] = {
+		{ kAudioDevicePropertyJackIsConnected, kAudioObjectPropertyScopeOutput, 0 },
+		{ kAudioDevicePropertyJackIsConnected, kAudioObjectPropertyScopeInput, 0 },
+	};
+	uint64_t state = 0;
+	UInt32 was;
+
+	notify_get_state(token, &state);
+	pthread_mutex_lock(&lock);
+	was = jack_state;
+	jack_state = (UInt32)state & 3;
+	pthread_mutex_unlock(&lock);
+	if ((UInt32)(state & 3) == was) {
+		return;
+	}
+	say("sunfish: audio: jack %s, microphone %s\n", state & 1 ? "plugged" : "empty", state & 2 ? "yes" : "no");
+	if (host != NULL) {
+		host->PropertiesChanged(host, OBJECT_CODEC, 2, changed);
+	}
+}
+
+static void
+jack_start(void)
+{
+	struct stat st;
+	dispatch_queue_t queue;
+	uint64_t state = 0;
+	int token;
+
+	if (stat(JACK_ENABLE, &st) != 0) {
+		return;
+	}
+	queue = dispatch_queue_create("org.iosonpixel.jack", DISPATCH_QUEUE_SERIAL);
+	if (notify_register_dispatch(JACK_NOTIFY, &token, queue, ^(int t) { jack_changed(t); }) != NOTIFY_STATUS_OK) {
+		say("sunfish: audio: jack: %s cannot be listened to\n", JACK_NOTIFY);
+		return;
+	}
+	notify_get_state(token, &state);
+	jack_state = (UInt32)state & 3;
+	jack_enabled = true;
+	say("sunfish: audio: jack on (%s): %s, microphone %s\n", JACK_NOTIFY, state & 1 ? "plugged" : "empty",
+	    state & 2 ? "yes" : "no");
+}
+
 static OSStatus
 initialize(__unused AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef the_host)
 {
@@ -361,6 +423,7 @@ initialize(__unused AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef 
 	ticks_per_frame = 1e9 * timebase.denom / timebase.numer / SUNFISH_AUDIO_RATE;
 	sink = open(SUNFISH_AUDIO_DEVICE, O_WRONLY);
 	say("sunfish: audio: the speaker is with the HAL (%s: %s)\n", SUNFISH_AUDIO_DEVICE, sink < 0 ? strerror(errno) : "open");
+	jack_start();
 	return 0;
 }
 
@@ -537,6 +600,14 @@ property(AudioObjectID object, const AudioObjectPropertyAddress *address, UInt32
 		}
 	} else if (object == d->object) {
 		switch (selector) {
+		case kAudioDevicePropertyJackIsConnected:
+			/* sunfish S4: headphones (output scope) and their microphone (input scope) */
+			if (jack_enabled && object == OBJECT_CODEC && scope == kAudioObjectPropertyScopeOutput) {
+				WORD(jack_state & 1);
+			} else if (jack_enabled && object == OBJECT_CODEC && scope == kAudioObjectPropertyScopeInput) {
+				WORD(jack_state >> 1 & 1);
+			}
+			break;
 		case kAudioObjectPropertyManufacturer:
 			STRING(MANUFACTURER);
 			break;
