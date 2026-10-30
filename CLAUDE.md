@@ -78,6 +78,9 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   on a test or build, after finishing a priority item, and when adding something newly found broken (add it, then
   carry on).
 - **While waiting** (tests, builds, boots): work on other Broken items instead of idling.
+- **Never idle in /loop** (the user, 2026-10-30): always keep at least one agent or build/test running; when the next
+  step of an item needs the user or it is quiet hours, start the next item that doesn't. Wake-ups ~10 min while work
+  is in flight.
 - **Need the user's input:** take the recommended path, push-notify the user, and add the question (with the
   choice made) to the "Questions for you" list in `docs/plan.md`, so they can answer later. Don't wait.
 - **Reliability:** if checking a fix needs repeated tests of an hour or more, move it to the "Later" list (`docs/backlog.md`) and move on.
