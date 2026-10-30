@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:05 B30 headphone jack: research (research/notes/headphone-jack.md, read-only)
+- Plug detect is the codec's MBHC (HPHL_DET switch, live.dts:20951 qcom,msm-mbhc-hphl-swh/gnd-swh); no jack GPIO on the SoC or PMIC (fsa4480 handle = USB-C switch, likely unused). The WCD937x is reachable only over SoundWire: TX swr2 0x62ed0000 (IRQ SPI 0x128), RX swr1 0x62ef0000; the SoundWire clock comes from the TX macro, whose clocks are AFE votes to the ADSP (lpass-clk-id 0x30b va_core, 0x30c tx_core, 0x30d tx_npl). So no detect without the ADSP.
+- Path: ADSP + LPASS hw vote (works, sp2a) -> AFE clock votes 0x30b-0x30d -> TX macro SWR clock + LPI pins -> SoundWire master init + enumerate (codec ID) -> codec reset (LPI gpio24) -> MBHC mechanical detect, polled over /dev/pmem. Supplies (L11A/L16A 1.8 V, BOB mic bias) only read, never set; mechanical detect needs no mic bias. Effort ~2-4 d detect + ~1 d iOS (a "Headphones" device in SunfishAudio.driver).
+- S0 (read-only): with the ADSP up + hw vote, read the SWR master version (0x62ed0000) and TX macro; 0/fault = clocks off -> S1 (clock votes).
+
 ### 2026-10-30 20:25 iOS has an audio output device: SunfishAudio.driver + VirtualAudio (au1, kernel108)
 - phone/audio (from ios-redfin RedwoodAudio.driver, MIT; research/notes/ios-audio-device.md): a CoreAudio HAL plug-in with redfin's devices (Speaker, Hawking input, Actuator, Codec), 48 kHz 16-bit, a null sink while /dev/sunfish-audio is missing. tools/sunfish-install-audio.sh installed it to /System/Library/Audio/Plug-Ins/HAL and moved VirtualAudio.plugin back into /Library/Audio/Plug-Ins/HAL (BTAudioHALPlugin.driver present, /Library/Audio/Tunings/D22 present).
 - au1 boot: no CRASH of backboardd / mediaserverd / SpringBoard in 110 s, GPU presenting (up to 32.8 fps). mediaserverd restarted with an oslog capture: "sunfish: audio: the speaker is with the HAL (/dev/sunfish-audio: No such file or directory)", "HALS_Device::Activate: activating device 51: Speaker", the Hawking input queried, "Starting BTAudioPlugin for mediaserverd", "Register audio plugin connection with bluetoothd". The earlier VirtualAudio crash (missing 'vdef') does not recur.
