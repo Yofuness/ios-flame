@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 M1 done: both sensors answer over CCI (rear IMX363, front IMX355; camid, 2026-10-28); no frames yet. **Updated:** 2026-10-28.
+**State:** 🟡 Stage b done: the rear IMX363 streams (mode 8, 2016x1512, ~62 frames/s counted on the sensor, MCLK 24 MHz from camcc PLL2); front IMX355 answers; no frames received yet (CSIPHY/CSID/IFE next). **Updated:** 2026-10-30.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,14 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 22:00 cam6 (kernel108, sweetse9=2 sweetcampmic=2, same boot): stage b DONE, the IMX363 streams
+- Tools: tools/sunfish-camtab.py (after ios-redfin's redfin-camtab.py; our module bin is "Parameter Parser V1.3.2", resolutionData 35 words vs redfin's 37) -> work/cam/imx363-mode8.txt (30 init + 82 mode 8 writes, all delays 0); camid `--stream FILE` (commit a55102c).
+- Modes in metric_imx363.bin (all 4-lane RAW10 0x2b, 82 writes): 0/7 4032x3024@30 552 Mb/s/lane; 1 4032x2272@30 432; 2 2016x1136@120 464; 3 2016x1136@240 828; 4 4032x2272@30 836; 5/6 4032x2272@60 836; 8 2016x1512@60.13 304 (2x2 bin, default); 9 2016x1136@60 (rate field 0).
+- Run: `camid --addr 0x1a --keep`, `camclk pll2 on`, `camclk mclk 0 24`, `camid --addr 0x1a --mclk-asis --stream /var/local/cam/imx363-mode8.txt`: ID OK, 112/112 writes, readbacks 0x0136 0x18, 0x0137 0x00 (24 MHz), 0x0112 0x0a, 0x0114 0x03 (4 lanes); stream on, 0x0100 = 1.
+- **Frame counter 0x0005 every 100 ms: 1, 6, 12, 18, 25, 31, 38, 44, 50, 57, 63 = ~62 frames/s** (mode 8 is 60.13). Stream off, 11 pd lines, `camclk off`. No reset.
+- Not done: the stream-on table's 0x0138 = 1 (temperature sensor enable) left out. Nothing receives the MIPI data yet.
+- Next: stage c (CSIPHY0 v1.2 tables + CSID-lite RDI0; CSID test pattern first).
 
 ### 2026-10-30 21:50 cam5 (kernel108, sweetse9=2 sweetcampmic=2, same boot as cam4): stage a2 DONE, IMX363 ID at MCLK 24 MHz
 - `camid --addr 0x1a --keep` (MCLK on XO 19.2 MHz): bytes 35 03 63 63, IMX363 ID OK.
