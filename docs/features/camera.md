@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 Stage b done: the rear IMX363 streams (mode 8, 2016x1512, ~62 frames/s counted on the sensor, MCLK 24 MHz from camcc PLL2); front IMX355 answers; no frames received yet (CSIPHY/CSID/IFE next). **Updated:** 2026-10-30.
+**State:** 🟡 Stage c done: real IMX363 frames arrive in CSID-lite over CSIPHY0 (2016x1512 RAW10, 3810240 bytes per frame, ECC/CRC 0); no frame in RAM yet (IFE-lite write master + SMMU next); front IMX355 answers. **Updated:** 2026-10-30.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 22:45 cam8 (kernel108, same boot): stage c DONE, real sensor frames reach CSID-lite (c5e17d7)
+- `camclk pll0 on` (Fabia, Linux v6.15 sequence): L 0x3e, FRAC 0x8000, TEST_CTL 0x40000000, USER_CTL[15:8] 0x31; lock, MODE 0xd0800004 -> 0xd0800005 after OUTCTRL (VCO 1200 MHz). camclk has no --dry-run.
+- `camrx phy on`: settle count 25 (Linux formula: 85 ns + 6 UI at 304 Mb/s/lane, 300 MHz timer; the notes' 36 was wrong); csi0phytimer 300 MHz (src 2 PLL0 even, div 3) + csiphy0 branches on; CSIPHY0 v1.2 redfin 0922 table, lane map 0x3210 (guess, worked). Status 0x8b0..0x8d8 all 0 after phy on.
+- `camrx rx arm` (RX_CFG0 0x32103 4 lanes, RDI0 VC 0 DT 0x2b), then `camid --addr 0x1a --keep --mclk-asis --stream` (frame counter 1 ... 63 in 1 s), then `camrx rx report`: **RX_PKTS 119448, ECC 0, CRC 0, RDI0_STATUS 0, bytes ping/pong 3810240/3810240 = exactly one 2016x1512 RAW10 frame**. RX IRQ 0x004000ff (DL0-3 SOT + EOT; bit 22 UNMAPPED_VC_DT, likely the sensor's embedded-data packets), RDI0 0x1ff8 (INPUT SOF/SOL/EOF, SUBSAMPLED SOF/EOF). CSIPHY status after: 00 01 00 20 00 00 04 00 80 40 00 (meaning unknown).
+- Cleanup: rx stop, phy off, clocks off, `camclk off`, `camid --addr 0x1a` (GDSC collapse). No reset.
+- Next: stage d (IFE-lite write master RDI0 -> a RAM buffer through the SMMU; dump one RAW10 frame to the PC).
 
 ### 2026-10-30 22:20 cam7 (kernel108, same boot): stage c1 DONE, CSID-lite test pattern runs (camrx, ba7ebf7)
 - Base: `camid --addr 0x1a --keep`, `camclk pll2 on`. Before: cphy_rx/ife_lite_csid/ife_lite/csi0phytimer RCGs CMD 0x80000000 CFG 0; branches off. Refgen (read-only, offsets are guesses) BIAS_EN 0x4040404, BG_CTRL 0x1010101.
