@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:45 hp5: "ON MY IPHONE" IS LISTED (fpfix via the sh exec wrapper, kernel116); opening it gives "Content Unavailable"
+- kernel116 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2. fileproviderd starts through the wrapper (kill -> one restart, no crash loop). The oslog capture showed no "fpfix"/"not eligible" lines either way (os_log from the constructor not seen).
+- fpdump: LocalStorage "isEnabled=1 ... supportsEnumeration=1 ... isConnectedToAppExtension=1", storage .../Containers/Shared/AppGroup/E1DA353E.../File Provider Storage (no --enable needed). Files > Browse > Locations: On My iPhone, iCloud Drive, Recently Deleted.
+- Tapping On My iPhone: "Content Unavailable - The folder contents could not be displayed because of an unknown error." (Try Again). Next: the enumeration error (LocalStorageFileProvider / fileproviderd log while tapping): probably an APFS-only call on HFSX.
+
 ### 2026-10-30 09:30 fpfix (2f74fc1): launchd drops DYLD_* from the job env; a sh exec wrapper instead
 - hp4: with EnvironmentVariables DYLD_INSERT_LIBRARIES on com.apple.FileProvider, fileproviderd (pid 396) still logs "Volume /dev/ufsroot1 not eligible to store FP library, skipping", no "fpfix" line; fpdump: LocalStorage isEnabled=0, --enable -> NSCocoaErrorDomain Code=4. Files Browse: no Locations at all.
 - By hand: DYLD_INSERT_LIBRARIES works for our tools and for fileproviderd started from a shell (DYLD_PRINT_LIBRARIES shows /private/var/local/lib/fpfix.dylib loaded right after the main image). So launchd strips DYLD_* from the job's environment.

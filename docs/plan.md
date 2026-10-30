@@ -18,7 +18,7 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
    offsets from a RAM-log rescue. (battery.md)
 6. ▶ **Camera** (B17): both cameras stream (rear 60 fps, front 30 fps), camd + camera_device in SunfishAudio.driver, iOS lists
    Back + Front (kernel112 CAMERA=1 = current boot), preview textures + colour tuning installed. Next: Camera.app (U12). (camera.md)
-7. **Files "On My iPhone"** (B37): LocalStorage linked to its data container (lsreg -r), pkd/fileproviderd accept it; check U13. (apps.md)
+7. ▶ **Files "On My iPhone"** (B37): LISTED now (fpfix.dylib in fileproviderd via a sh exec wrapper: FP library on our HFSX /var); opening it shows "Content Unavailable": next the enumeration error. (apps.md)
 8. **Headphone jack detect** (B30, the user's ask): codec answers over SoundWire (jack5); MBHC setup clean (jack6); next S3 = real plug test (U15). iOS side PARKED: VirtualAudio only creates "Null_Device"/"Actuator" (jack10b; patch option in audio.md). (audio.md)
 9. ▶ **Haptics** (B39): iOS HAPTICS WORK (hp3: Settings switch taps -> hapticd -> motor, 4/4). Next: launchd job + install script (MG cache step), HAPTICS=1 in the boot recipe; the user feels it (U16). (haptics.md)
 Parked 2026-10-30: auto-brightness (B42; lux path works, no way for iOS's ramp to reach the panel yet).

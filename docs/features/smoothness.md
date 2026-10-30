@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:45 hp5: CA blur defaults change nothing; the CA_EMPTY_SHADERS bound did not apply
+- kernel116, sunfish-m2env-bench.sh, H before each run: base 21.9 / 23.4 swaps/s; CADisableAutoSeparateBackdropLayers=1 21.5 / 21.8; CALinearBlurs=1 23.0; CALinearBlurs=0 24.6 / 23.6; final base 22.5 (all within the 21-25 noise; keys set in com.apple.coreanimation as mobile, removed after).
+- CA_EMPTY_SHADERS=1 via /var/local/mtl2-env: 24.0, but the home screen looked normal: mtl2-env is read by our Metal frontend, not put into backboardd's process environment, so the bound was never measured. Next: set it in backboardd's launchd job EnvironmentVariables for one boot (backup), or skip.
+
 ### 2026-10-30 09:15 ub2: xnu 0238 v2 (UI threads on the A76s) works but gains ~0.5 swaps/s
 - kernel115 sweetblnew=0 (HAPTICS=1 CAMERA=1), fpsbench BENCH_TIGHT=1 30 s, H before each run, live `sysq kern.sweet_ui_bigcore N`:
   off 22.5 / 22.4 / 23.3 (mean 22.73 swaps/s, 21.37 panel/s, GPU 32.1 %); display only (1) 22.9 / 23.3 / 23.2 (23.13, 22.13, 34.7 %); display + render-server (3) 23.1 / 22.9 / 23.9 (23.30, 22.23, 33.9 %). Placements per run: mode 1 ~2100 idle + ~400 preempt, mode 3 ~5700 + ~1050. No reset.
