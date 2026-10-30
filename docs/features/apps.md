@@ -48,6 +48,10 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 02:35 files2: LaunchServices does know the LocalStorage extension; fileproviderd leaves it out
+- exq (installed to /var/local/bin/exq from phone/tools/out): com.apple.fileprovider-nonui has 8 records incl. com.apple.FileProvider.LocalStorage -> FileProvider.framework/PlugIns/LocalStorageFileProvider.appex (191 app / 517 extension records). `lsreg -p` on it -> 0 = success (files1's "-> 0" was success too, misread). lsd logs "_LSServerRegisterItemInfo begin", no refusal; AMFI trusted. So the 3-provider answer is fileproviderd's own filter; reading work/files1/fp-fileproviderd.log for the reason.
+- On-device: /var/local/bin/exq (phone tool).
+
 ### 2026-10-30 02:20 files1: Files has no "On My iPhone": the LocalStorage provider isn't registered
 - The extension exists (/System/Library/Frameworks/FileProvider.framework/PlugIns/LocalStorageFileProvider.appex) and its group container group.com.apple.FileProvider.LocalStorage exists; /var/mobile/Library/Application Support/FileProvider holds only LegacyEnabledStateHasBeenMigrated (re-made at boot); /var/db/PlugInKit-Annotations has no LocalStorage entry; 0 execs of LocalStorageFileProvider in 137 logged boots.
 - oslog while opening Files (openapp com.apple.DocumentsApp; logs in work/files1/): Files "Wanted to use com.apple.FileProvider.LocalStorage, but it isn't available"; fileproviderd "providerDomainsCompletionHandler: ... returning 3 providers"; pkd enumerates 1 com.apple.fileprovider-ui plugin.
