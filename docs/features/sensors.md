@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:20 The user's second comparison: 4a 102-105 deg, Pixel 8 Pro right beside it 92 deg (10-13 deg apart)
+- Same place as before (under the webcam), kernel127 + 9f65fe1. In the first comparison (dm7) the 8 Pro read 52 and the 4a 97; so the 8 Pro moved 40 deg between readings while the 4a moved ~6 deg: the earlier 45 deg gap was mostly on the 8 Pro's side (disturbed or pointed differently; not separated).
+- The remaining 10-13 deg fits true vs magnetic north if the 8 Pro shows true north and local declination is ~10-13 deg west (guess: location and the 8 Pro's setting not confirmed). The 4a shows magnetic only (no location, B32).
+- Still open: behaviour while being turned (jumps), accuracy at other headings, the slow 4-5 deg wander at rest (dm8).
+
 ### 2026-10-30 17:15 dm8: Compass heading steady at rest: no gaps, no fallback, steps at most 0.5 deg (port 9f65fe1)
 - kernel127, 4459 mV, SSH 17 s; magcal.txt kept; SNS_HEADING_TRACE=1 by hand in sensors-start.sh (gone at the next install). Compass in front ~113 s, phone still: 225 trace lines, heading 101.0..105.6 (slow wander), largest step 0.5 deg, 0 steps > 3 deg; "dm type 3" 0 of 11 status lines; "mag gaps >200ms 0 >1s 0 max 20 ms, gate rej r 0 dip 0". So at rest the mag stream has no gaps at all; the earlier type-3 lines were not shown to be caused by real gaps (not re-tested while moving).
 - Screenshot digits torn by flame-shot (~103 not readable). Next: the user's comparison away from electronics, and whether it jumps while being moved.
