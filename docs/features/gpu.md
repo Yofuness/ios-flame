@@ -22,6 +22,13 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:15 backboardd lost its Vulkan device (kernel127, ~365 s, after Camera.app launches): the screen cycled old frames
+- The user: "display is doing all kinds of whacky things". Webcam, 4 frames in 1 s: home screen flipping between old pictures (with/without dock, sharp/blurred). Kernel: swaps 60/s -> 10.0 fps at ~370 s; "SWEET FB: backboardd notifications type 5 off/on" every 50 ms from 365.57 s; GPU submits 51 per 5 s (0 missed, no fault line). Just before: SpringBoard "orient: R front now none" (364.05), touch at 362.8.
+- /var/local/mtl2.log: "native-metal: commandBuffer refused: command buffer: DeviceLost" + "texture refused: texture: DeviceLost", 129506 lines kept after "log truncated at 37582208 bytes": the first cause scrolled away. backboardd state R, 2:04 CPU. Saved: work/mtl2-devlost.log. Also seen: "planar iosurface refused: b3a8 fmt 550 plane 0".
+- kill -9 backboardd (pid 60 -> 403) recovered the UI in < 25 s, no reboot.
+- The earlier full UI hang (sleep-wake.md 20:30, kernel126) started with the same "notifications type 5 off". Related? Not known: that one ended in U state.
+- Cause not found. Bridge change in progress: first-cause line, flood stop, backboardd exits so launchd restarts it.
+
 ### 2026-10-28 15:44-16:44 k83s: 1 h app soak, 0 GPU hangs (kernel83 + sweetpresentwait=1)
 - 204 app opens, no STOP, 0 hangs / crumbs / tlb-sync lines, 0 resets; pool 199 -> peak 341 -> 287 MB (flat); PhotosFileProvider x1. The 0207 TLB gate was not exercised. Note: the hang-heavy runs today (sk70, sk71, k77s, k81, k82) all ran with sweetpresentwait=0; this one with =1. Possibly the put-off present path (0158) is part of the busy-hang trigger: watch the hang rate with presentwait=1 (now the default).
 
