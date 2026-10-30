@@ -28,6 +28,7 @@
 #define GCC_CAM_AHB	0x10b008
 #define GCC_CAM_XO	0x10b02c
 #define GCC_CAM_HF_AXI	0x10b020
+#define GCC_CAM_SF_AXI	0x10b06c	/* cam20: Linux gcc-sm7150.c gcc_camera_sf_axi_clk; redfin 0921 enables it */
 
 #define CAMCC		0xad00000
 #define CAMCC_END	0xad20000
@@ -583,6 +584,10 @@ int main(int argc, char **argv)
 	uint32_t hf = mrd(GCC_CAM_HF_AXI);
 	mwr(GCC_CAM_HF_AXI, hf | 1);
 	printf("camid: gcc camera_hf_axi was %#x (enabled; checked after the GDSC)\n", hf);
+	/* cam20: the IFE's SID 0xcc0 half reset the phone when passed (cam17/18); redfin also runs sf_axi */
+	uint32_t sf = mrd(GCC_CAM_SF_AXI);
+	mwr(GCC_CAM_SF_AXI, sf | 1);
+	printf("camid: gcc camera_sf_axi was %#x (enabled; checked after the GDSC)\n", sf);
 
 	/* C. CAMCC */
 	g = mrd(GDSC_CLK);
@@ -597,7 +602,10 @@ int main(int argc, char **argv)
 	printf("camid: titan gdsc was %#x, now %#x\n", g, dry ? 0 : rd32(TITAN_GDSC));
 	if (!dry)
 		(void)wait_bit(GCC_CAM_HF_AXI, 1u << 31, 0, 1);
-	printf("camid: after gdsc: gcc camera_hf_axi %#x, camera_xo %#x\n", mrd(GCC_CAM_HF_AXI), mrd(GCC_CAM_XO));
+	if (!dry)
+		(void)wait_bit(GCC_CAM_SF_AXI, 1u << 31, 0, 1);
+	printf("camid: after gdsc: gcc camera_hf_axi %#x, camera_sf_axi %#x, camera_xo %#x\n", mrd(GCC_CAM_HF_AXI),
+	       mrd(GCC_CAM_SF_AXI), mrd(GCC_CAM_XO));
 	branch_on("cpas_ahb", CPAS_AHB, 0, &st_ahb[0]);
 	branch_on("core_ahb", CORE_AHB, 1, &st_ahb[1]);
 	branch_on("camnoc_axi", CAMNOC_AXI, 0, &st_ahb[2]);

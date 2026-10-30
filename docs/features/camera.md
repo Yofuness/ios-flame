@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 02:25 cam20 prep (read-only, kernel109 cam18r boot, camera powered down): TBUs are on; camera_sf_axi is off
+- pinsample reads: TBU vote GDSCs 0x17d040 (hf0) / 0x17d044 (sf) / 0x17d048 (hf1) all 0x80000001 (bit31 PWR_ON = 1, our SW_COLLAPSE vote off: someone else keeps all three TBUs on); TBU status 0x15182210/18/20 = 1, 1, 1. So the hf1 TBU behind SID 0xcc0 is powered: the research's first guess is out.
+- GCC camera_hf_axi 0x10b020 0x80000001 (camera off now); **camera_sf_axi 0x10b06c = 0x80000000 (disabled)** (Linux v6.15 gcc-sm7150.c: halt/enable 0xb06c; research/re/gcc-sm7150.c). redfin 0921 enables sf_axi; we never did.
+- camid now enables camera_sf_axi next to hf_axi. Next (cam20): `--bypass --sid 0x8c0 --sid-mask 0x400` (cam17's config) with sf_axi on.
+
 ### 2026-10-31 02:10 cam19 (kernel109, cam18r boot): FULL FRAME from two half captures, no reset
 - A `--bypass --sid 0x8c0`: buf done ~210 ms, frame 1889325 nonzero, guard 5917 (+1..+12095), late writes N, restored; 2 min SSH OK. B `... --addr-offset 0x400`: buf done ~220 ms, frame 1888380 nonzero, guard 6083 (+64..+11327), late writes N, restored; 3 min SSH OK.
 - `sunfish-cam-merge.py cam19-a.raw cam19-b.raw cam19-full.raw`: 3721 blocks of 1 KB, **empty even 0, odd 0**; merged: 0 all-zero 1 KB blocks, mean byte 31.2, max 255, histogram [142516, 326650, 3507, 12443, 11779, 6189, 1574, 6233, 3527, 1554, 53, 1543, 12445, 6150, 1537, 6620]; raw2png gray 0..245, colour (RGGB guess) R 0..245 G 7..134 B 0..245. Files in work/cam/ (cam19-full*.png), not viewed (privacy, night).
