@@ -34,6 +34,9 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:30 Headphone jack S4 design (read-only, research/notes/headphone-jack.md "S4")
+- SunfishAudio.driver has no route/jack handling (transport 'bltn', terminal types 'spkr'/'micr' only, one PropertiesChanged for volume). Draft (guess): an output data source on "Speaker" ('ssrc': 'ispk'/'hdpn', like the Codec 'imic' control) + kAudioDevicePropertyJackIsConnected; PropertiesChanged on plug changes; the plug poller notifies via notify_post("com.sunfish.jack") + notify_set_state; behind /var/local/sunfish-jack-enable. Unknown: what VirtualAudio maps to AVAudioSessionPortHeadphones: checking its strings/disassembly next. Sound through the jack is separate (WCD RX path).
+
 ### 2026-10-30 06:15 jack6 (adspboot b7cca2a --swr-mbhc 20, no headphones): MBHC init clean, no plug event, no reset
 - Efuse 0x34CD 0x03, 0x34C0 0x04, 0x34C1 0x0b (-> SLEEP_CTL bits[3:1] from efuse29 & 0x0E, Linux wcd937x_io_init; an earlier <<1 was fixed before the run). Codec writes over the SoundWire FIFO, all read back: 0x3103 0x16->0x12->0x92->0xd2; 0x312a 0x10->0x00; 0x3029 0x55->0x85; 0x3001 0x00->0x80->0xc0->0x80; 0x31b1 0x00->0x08 (2 uA pull-up); 0x3014 0x39->0xff; 0x3122 0xe9->0xe6; 0x3120 0x02->0x82; 0x3015 0x08->0x09.
 - Poll 20 s: 0x346E (INTR_STATUS_0) 0 throughout; 0x3019 (RESULT_3) 0 -> 0x10 right after init (bit 4 SWCH_LEVEL_REMOVE: "removed" level, fits no plug), 0x3125 0; no PLUG line. Teardown restored all 9 registers (read back). 4438-4440 mV; restored sensors/camd/btbridge.
