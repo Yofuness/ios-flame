@@ -45,7 +45,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Wi-Fi](docs/features/wifi.md) | ✅ | joins the home network at boot (from a config file on the phone); iOS shows the Wi-Fi icon and the network in Settings (`sweetwifiev=1`); joining a new network from Settings is untested |
 | [Battery](docs/features/battery.md) | 🟡 | real reading; % shows no jumps at idle, discharge unchecked |
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
-| [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine (Maps, Music, Photos, App Store fixed; 0 crashes per boot on kernel95); Camera black (no camera) |
+| [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine; Files "On My iPhone" opens (2026-10-30, kernel121: app extensions get their sandbox container) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
 | [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); both cameras stream and take raw photos from tools (rear 60 fps, front 30 fps); Camera app not tried yet |

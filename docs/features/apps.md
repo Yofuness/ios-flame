@@ -48,6 +48,12 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 11:00 sb5: "ON MY IPHONE" OPENS (kernel121 = xnu 0240 v5 + fpfix): "Folder is Empty", no error
+- 0240 history: v1 (container from the spawn blob: xpcproxy passes none), v2 (HOME=...Containers/Data/... recorded at exec), v3 (lookup by pid only), v4 (exit notify kept), v5 (the later exec hook had wiped the entry the HOME scan had just stored: the clear moved to the start of the scan).
+- sb5 (kernel121 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2, no reset): `sbcont 269` (Calculator) -> /private/var/mobile/Containers/Data/Application/91283062-E420-4FBF-8D0B-1CC8C6A50C30; kernel "op4 by sbcont for pid 269 (Calculator) -> 0"; 53 op4 lines, all Calculator/Files ones -> 0.
+- Files: On My iPhone shows a folder view "Folder is Empty"; LocalStorageFileProvider (pid 322) launched and did not terminate (no "failed to get my own sandbox container"). PhotosFileProvider check inconclusive (no log lines in 15 s).
+- Open: create/save a file there (U13 by the user or fake taps), PhotosFileProvider (B8), other extension types (widgets, share sheet, keyboards) now that op 4 answers.
+
 ### 2026-10-30 10:40 sb2 (kernel118, 0240 v2): the HOME fallback finds every container; op 4 still says ENOENT -> v3
 - sb2: spawn blobs of the extensions (LocalStorageFileProvider 307/308/310, PhotosFileProvider 309/311, all ppid 1): "len 1104 profile yes container no", no strings past "plugin" @0x10 (the profile name): xpcproxy passes no container there. "HOME container" lines: LocalStorage -> .../PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965, Photos -> .../PluginKitPlugin/A9E8417C-..., apps (Files 309A017E-...) -> Data/Application/<UUID>. op4: 23 lines, all early boot (xpcproxy/keybagd queries, ENOENT); none from the extensions; extensions still die, Files "Content Unavailable".
 - By hand (new phone tool phone/tools/sbcont.c: sandbox_container_path_for_pid): self, Files (276) and Weather (247) -> ENOENT, and no op4 log line (the 32-line cap was likely used up by an early burst whose printf lines were partly lost). Reading: the lookup compared the uniqueid recorded at exec with the running proc's, which differs.

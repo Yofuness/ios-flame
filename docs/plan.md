@@ -5,8 +5,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. ▶ **App extensions + Files "On My iPhone"** (B37, B8): "On My iPhone" listed (fpfix.dylib in fileproviderd); every
-   PlugInKit extension dies because our kernel's Sandbox op 4 (container path) says ENOENT: xnu 0240 being written. (apps.md)
+1. ▶ **App extensions** (B8): Files "On My iPhone" OPENS (kernel121, xnu 0240 v5: Sandbox op 4 answers the container from the exec's HOME). Next: PhotosFileProvider, survey widgets/share/keyboard extensions. (apps.md)
 2. ▶ **GPU smoothness** (the user's ask; ours ~23 swaps/s vs redfin's 55-64): DEADFILL and UI threads on the A76s
    gave ~+0.5; CA blur keys nothing. Next: CA_EMPTY_SHADERS bound via backboardd's job env, then blur-pass cuts
    (research/notes/blur-cost.md). (smoothness.md)
