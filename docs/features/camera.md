@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:00 Camera.app on kernel121 (sv1): frames flow, but the start takes 11 s and the first frames are unexposed
+- camdev.log: "open: START -> 0 after 11220 ms (camd pid 42, state 2)", "frames of 2016x1512 from the kernel (the Back Camera, 60.1 fps mode)", colour tuning loaded, PrimaryScaler 4032x3024 420f and SecondaryScaler 1504x1128 420f pictures given; "frame 5: exposure 0.0 ms, gain 1.0x, digital 1.00x, green 40 above black ... lux index -494"; stopped after 4 frames / 3 pictures (the survey went home at 5 s, before the preview could show). camd: 15 frames published, 0 dropped.
+- So the "black preview" in the survey was the 11 s bring-up. Open: start time (camd bring-up ~11 s: Optimize), exposure 0.0 ms at the start (AE start values), Magnifier the same.
+
 ### 2026-10-30 11:40 B40 pre-checks (read-only)
 - c26ce1c StartRecorderServer: have (sunfish-install-camera.sh:63, same plists/key; sweet-root-tweaks.py:120 undoes it on a root rebuild).
 - 51f6f0b ADT nodes: have, superset (mkadt.py:86-91 adds camera-front + flash; iOSPlus10 only camera-rear + empty /product/camera).

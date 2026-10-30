@@ -48,6 +48,12 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:00 sv1: app survey with screenshots (kernel121, flame-shot; work/shots/sv1-*.png)
+- OK (real UI or first-run sheet): Safari (UI; last page can't reach 192.168.7.1), Settings, Reminders, Calendar, Camera (UI; preview black at 5 s: camera start takes 11 s, see camera.md), Maps, Clock, Calculator, Music, Podcasts, TV, News, App Store, Health, Wallet, Mail, FaceTime (sign-in), Fitness, Voice Memos, Compass, Translate, Find My, Shortcuts, Tips. EMPTY-OK: Notes, Photos, Contacts, Files (On My iPhone "Folder is Empty"), Messages.
+- Broken: Measure (back to home within 5 s, no crash report; ARKit app), Watch/Bridge (home + "Watch would like to send notifications"), Magnifier (preview black: same 11 s camera start), Weather ("Cupertino --", no data).
+- Garbled image areas (not icons): Maps (torn textures), TV (one icon), Mail banner, Voice Memos header (red/blue stripes), Compass needle/logo, Tips hero image (torn black line): looks like B29's texture shadows.
+- No new crash reports during the survey. Location prompts (Reminders, Camera, Weather, Wallet, Compass, Find My) and Watch notifications were answered "Don't Allow"/"Not Now" by fake taps (device-changes.md).
+
 ### 2026-10-30 11:15 ext1: extension survey on kernel121: no extension dies any more; softwareupdated dropped
 - 150 s `oslog -l -g sandbox` while using the widgets page, Photos, Files and Notes: "Terminating app due to uncaught exception" 0, "failed to get my own sandbox container" 0. Works: Today view widgets (Notes, Battery; a third large widget shows grey placeholder bars), the Notes keyboard, Files On My iPhone. Home-screen Photos widget "No content available" = empty library (chronod schedules it, no errors). Notification Center swipe showed the lock screen instead (gesture, not checked further). Share sheet not tested (no photos).
 - New find: 796 OTAUpdate-*.ips restore reports, one every 2-5 min, from softwareupdated ("Cleaning up unused prepared updates", waiting for an IOKit service with EmbeddedDeviceTypeRoot, restore_error 60): job com.apple.mobile.softwareupdated dropped (next boot). Software Update can't work here anyway.
