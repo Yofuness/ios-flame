@@ -11,6 +11,9 @@
  * (stream off), WM off, CSID down, IFE reset, SMMU park + restore (cap_down), rx stop, phy off, clocks off,
  * camclk off, camid power-down: the script's order. A failed bring-up or a fault (SMMU/bank fault, writes past
  * the ring) = state FAULT: no more starts until camd restarts. The safety rules are camrx's (camrx.c header).
+ * cam36: a session with no or too few frames, or whose frames stopped, is no FAULT: its clients get -EIO or lose
+ * their start and the next START retries. Off: CAM36_OFF=1 in camd's environment (also the rear start exposure on
+ * the front, and see camrx_lib.h).
  * cam-f1: SENSOR a=2 picks the front IMX355 (mode 2, 1640x924, CSIPHY2, MCLK2, camid --front), a=1 the rear
  * (default). A switch while streaming stops the session (full power-down) and starts it again on the other sensor.
  * Off: CAMD_NO_FRONT=1 in camd's environment (SENSOR 2 -> -EINVAL, as before).
@@ -54,6 +57,7 @@
 #define LINE_NS_F	12750u
 #define MARGIN_F	10u
 #define FL_F		2614
+#define START_LINES_F	2604	/* cam36: the table's 0x0202/0x0203 */
 
 static volatile int sensor_want = 1;	/* SENSOR command: 1 rear, 2 front */
 static int front;			/* the running session's sensor (camrx_lib cam_select) */
@@ -68,7 +72,7 @@ static mach_timebase_info_data_t tb;
 
 /* session (camera thread) <-> main thread */
 static pthread_t sess_th;
-static volatile int sess_running, want_stop, powered;
+static volatile int sess_running, want_stop, powered, sess_failed;
 static volatile int exp_pending, exp_lines_req = -1, exp_code_req = -1;
 static volatile int cur_fl = 1608, cur_lines = -1, cur_code = -1;	/* camid's read-backs */
 static int camid_in = -1, camid_out = -1;
@@ -334,20 +338,22 @@ static void *session(void *arg)
 		{ BIN "camclk", "pll2", "on", NULL }, { BIN "camclk", "pll0", "on", NULL },
 		{ BIN "camid", "--front", "--addr", "0x1a", "--keep", NULL }, { BIN "camclk", "mclk", "2", "24", NULL },
 	};
-	int rc = 0;
+	int rc = 0, latch;
+	const char *why = "bring-up failed";
 	cam_select(front);	/* (front: set by the main loop before the thread, cam-f2) */
 	gain_base = front ? 1024 : 512;
 	sh->latest_seq = 0, sh->published = 0, sh->dropped = 0;
 	sh->data_bytes = FRAME_BYTES;
 	/* B43: the tables' own exposure (0x0202/0x0203 = 1592 lines, gain 0) until camid's "S" read-back, not -1 -> 0
-	 * lines (isp_ae then started from 4 lines = black). Front: assumed the same 1592. */
-	cur_lines = 1592, cur_code = 0;
+	 * lines (isp_ae then started from 4 lines = black). cam36: the front table's is 2604. */
+	int front_start = front && !cam36_off();
+	cur_lines = front_start ? START_LINES_F : 1592, cur_code = 0;
 	cur_fl = front ? FL_F : 1608;
 	stage_t0 = mono();
 	char t[24];
 	printf("%scamd: == session start, sensor %d (%s)\n", since(t), cam->sensor, cam->name);
-	if (fast) {	/* B43: an indoor start exposure (~1500 lines, 2x gain), sent on the first tick */
-		exp_lines_req = 1500, exp_code_req = (int)(gain_base / 2);
+	if (fast) {	/* B43: an indoor start exposure (~1500 lines, 2x gain; cam36: front 2604), sent on the first tick */
+		exp_lines_req = front_start ? START_LINES_F : 1500, exp_code_req = (int)(gain_base / 2);
 		exp_pending = 1;
 	}
 	powered = 1;
@@ -356,22 +362,34 @@ static void *session(void *arg)
 	if (!rc && !want_stop && !term)
 		rc = precheck() || clocks_on() || phy_on(-1);
 	printf("%scamd: clocks + phy %s\n", since(t), rc ? "failed" : "on");
+	latch = rc;
 	if (!rc && !want_stop && !term) {
 		stop = 0;
 		stream_hooks = &hooks;
 		rc = stream_run(0, NULL, "camid --ctl (camd)");
 		stream_hooks = NULL;
-		if (rc && !sh->published && (want_stop || term))
-			rc = 0;	/* stopped before a frame: "no completed frame" is no fault */
+		/* cam36: FAULT = SMMU fault, a real stray write (old pixels can't cause it now) or a stream setup that
+		 * failed before its loop (its SMMU state is not restored, no retry on that) */
+		static const char *const whys[] = { "ok", "stream setup failed", "SMMU fault", "writes past the ring",
+						    "no frames", "frames stopped", "frame not saved" };
+		why = whys[stream_end];
+		latch = cam36_off() ? rc : rc == 2 || stream_end == CAM_END_PAST_RING || stream_end == CAM_END_SETUP;
+		if (rc && !sh->published && (want_stop || term) && (cam36_off() || !latch))
+			rc = latch = 0;	/* stopped before a frame: "no completed frame" is no fault */
 		if (camid_out >= 0)
 			close(camid_out), camid_out = -1;
 	}
 	while (__atomic_load_n(&copy_slot, __ATOMIC_ACQUIRE) >= 0)
 		usleep(1000);
 	power_down();
-	sh->state = rc ? SUNFISH_CAMERA_FAULT : SUNFISH_CAMERA_IDLE;
-	printf("camd: == session end: %s, %llu frames published, %llu dropped\n", rc ? "FAULT (no more starts)" : "ok",
-	       (unsigned long long)sh->published, (unsigned long long)sh->dropped);
+	/* cam36: not started again by itself: the clients are told, the next START retries */
+	sess_failed = !latch && !want_stop && !term && (rc || !sh->published) && !cam36_off();
+	if (sess_failed && !rc)
+		why = "too few frames";
+	sh->state = latch ? SUNFISH_CAMERA_FAULT : SUNFISH_CAMERA_IDLE;
+	printf("camd: == session end: %s%s, %llu frames published, %llu dropped\n",
+	       latch ? "FAULT (no more starts): " : sess_failed ? "failed, next START retries: " : "ok",
+	       latch || sess_failed ? why : "", (unsigned long long)sh->published, (unsigned long long)sh->dropped);
 	fflush(stdout);
 	sess_running = 0;
 	return NULL;
@@ -594,6 +612,14 @@ int main(int argc, char **argv)
 			for (int j = 1; j < n; j++)
 				if (p[j].revents & (POLLIN | POLLHUP | POLLERR) && cl[idx[j - 1]].fd >= 0)
 					command(&cl[idx[j - 1]]);
+		}
+		if (sess_failed && !sess_running) {	/* cam36 */
+			sess_failed = 0;
+			for (int i = 0; i < MAXCL; i++) {
+				if (cl[i].fd >= 0 && cl[i].pending)
+					reply(&cl[i], SUNFISH_CAMERA_START, -EIO);
+				cl[i].started = cl[i].pending = 0;
+			}
 		}
 		int want = 0;
 		for (int i = 0; i < MAXCL; i++)

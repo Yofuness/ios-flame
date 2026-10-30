@@ -1628,17 +1628,25 @@ static double now_s(void)
 	return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+int cam36_off(void)
+{
+	const char *e = getenv("CAM36_OFF");
+	return e && !strcmp(e, "1");
+}
+
 /* sweet_pmem takes multi-byte pwrite/pread on unmanaged PAs (page by page, 32-bit stores): 64 KB chunks */
 static int cap_zero(uint64_t pa, uint32_t len)
 {
 	static uint8_t z[65536], b[4];
-	static int done;
+	static const struct cam_sensor *zeroed_for;
 	const char *e = getenv("CAMRX_FAST");
-	if (done && e && !strcmp(e, "1")) {	/* B43: camd zeroes once per process (CAMRX_FAST=1) */
+	/* B43: camd zeroes once per process (CAMRX_FAST=1). cam36: and per sensor change: a front session after a rear
+	 * one has old rear pixels past its smaller ring (false "past the ring") */
+	if (zeroed_for && (zeroed_for == cam || cam36_off()) && e && !strcmp(e, "1")) {
 		printf("camrx: carveout zeroed before (CAMRX_FAST), skipped\n");
 		return 0;
 	}
-	done = 1;
+	zeroed_for = cam;
 	double t0 = now_s();
 	for (uint32_t o = 0; o < len; o += sizeof z)
 		if (pm_wr(pa + o, z, len - o < sizeof z ? len - o : sizeof z))
@@ -1855,9 +1863,11 @@ int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, in
 #define WM0_DONE	1u		/* BUS_IRQ_STATUS1 (redfin 0923; our capture's buf done bit) */
 
 const struct cam_stream_hooks *stream_hooks;
+int stream_end;
 
 int stream_run(int secs, const char *prefix, const char *cmd)
 {
+	stream_end = CAM_END_SETUP;
 	const struct cam_stream_hooks *h = stream_hooks;
 	uint16_t m[CS_MAXSMR][2];
 	int tk[CS_MAXSMR], nm, nreq;
@@ -1904,6 +1914,7 @@ int stream_run(int secs, const char *prefix, const char *cmd)
 	int writing = -1, next = 0, last = -1, status = 0, have_status = 0;
 	double t0 = 0, tend = 0, tstart = now_s(), tsof = 0;
 	unsigned dropped = 0;
+	int stalled = 0;
 	pid_t pid = -1;
 	if (!dry) {
 		if (h ? h->spawn(&pid) : run_cmd(cmd, &pid)) {
@@ -1955,6 +1966,11 @@ int stream_run(int secs, const char *prefix, const char *cmd)
 				printf("camrx: no SOF within 15 s\n");
 				break;
 			}
+			if (t0 && now - tsof > 2 && !cam36_off()) {	/* cam36: the longest frame is < 1 s */
+				printf("camrx: frames stopped: no SOF for %.1f s\n", now - tsof);
+				stalled = 1;
+				break;
+			}
 			if (!have_status && waitpid(pid, &status, WNOHANG) == pid) {
 				have_status = 1;
 				printf("camrx: stream command ended early (status %d) after %.1f s\n", WEXITSTATUS(status),
@@ -1976,6 +1992,10 @@ int stream_run(int secs, const char *prefix, const char *cmd)
 			if (t == 1000) {	/* 10 s past our end: the command holds 1 s longer than we */
 				printf("camrx: stream command still running 10 s after the loop, SIGTERM\n");
 				kill(pid, SIGTERM);
+			}
+			if (t == 1150 && !cam36_off()) {	/* cam36: STOPPING must not hang on it */
+				printf("camrx: stream command ignored SIGTERM for 1.5 s, SIGKILL\n");
+				kill(pid, SIGKILL);
 			}
 			usleep(10000);
 		}
@@ -2013,18 +2033,24 @@ int stream_run(int secs, const char *prefix, const char *cmd)
 		uint64_t gpa = CAP_CO_PA + (uint64_t)RING_N * PLACE_BYTES, ng = nonzero(gpa, CAP_CO_LEN - RING_N * PLACE_BYTES);
 		printf("camrx: past the ring: %llu nonzero of %u%s\n", (unsigned long long)ng, CAP_CO_LEN - RING_N * PLACE_BYTES,
 		       ng ? "  WRITTEN" : "");
-		bad = (fsr & 0x800001feu) || ng || tf || last < 0;
+		/* cam36: 2 = a real fault, 1 = writes past the ring, no completed frame or frames stopped */
+		stream_end = (fsr & 0x800001feu) || tf ? CAM_END_FAULT : ng ? CAM_END_PAST_RING :
+			     last < 0 ? CAM_END_NO_FRAMES : stalled ? CAM_END_STOPPED : CAM_END_OK;
+		bad = stream_end == CAM_END_FAULT ? (cam36_off() ? 1 : 2) : stream_end != CAM_END_OK;
 		if (last < 0) {
 			printf("camrx: no completed frame, nothing saved\n");
 		} else if (!prefix) {
 			;	/* camd: no file */
 		} else if (save_frame(CAP_CO_PA + (uint64_t)last * PLACE_BYTES, out)) {
 			printf("camrx: writing %s failed\n", out);
-			bad = 1;
+			if (!bad)
+				bad = 1, stream_end = CAM_END_SAVE;
 		} else {
 			printf("camrx: last frame (slot %d, %u B) -> %s, saved, fsync ok\n", last, FRAME_BYTES, out);
 		}
 	}
+	if (dry)
+		stream_end = CAM_END_OK;
 	cap_down();
 	return bad;
 }

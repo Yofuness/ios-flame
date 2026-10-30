@@ -1,7 +1,7 @@
 /*
  * camclient: camera f1 test client for camd (phone/camera/sunfish_camera.h), no mediaserverd.
- *   camclient [-n FRAMES] [-o FILE] [-e LINES GAIN]
- * Connects, START (waits for its reply: frames flowing), optionally EXPOSURE (GAIN 256 = 1x), reads FRAMES (default
+ *   camclient [-n FRAMES] [-o FILE] [-e LINES GAIN] [-s SENSOR]
+ * Connects, SENSOR if -s (1 rear, 2 front), START (waits for its reply: frames flowing), optionally EXPOSURE (GAIN 256 = 1x), reads FRAMES (default
  * 120) new frames from the shared slots (polls latest_seq every 1 ms, 1 s timeout a frame), prints seq, the header
  * and the mean byte for the first and every 30th, then fps, seq gaps and torn copies; -o: the last frame as a
  * camisp input (bare 2016x1512 RAW10, stride 2528); STOP.
@@ -45,7 +45,7 @@ static int cmd(int s, uint32_t c, uint32_t a, uint32_t b, double timeout)
 
 int main(int argc, char **argv)
 {
-	int frames = 120, el = -1, eg = -1;
+	int frames = 120, el = -1, eg = -1, sensor = 0;
 	const char *out = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-n") && i + 1 < argc)
@@ -54,8 +54,10 @@ int main(int argc, char **argv)
 			out = argv[++i];
 		else if (!strcmp(argv[i], "-e") && i + 2 < argc)
 			el = atoi(argv[i + 1]), eg = atoi(argv[i + 2]), i += 2;
+		else if (!strcmp(argv[i], "-s") && i + 1 < argc && (!strcmp(argv[i + 1], "1") || !strcmp(argv[i + 1], "2")))
+			sensor = atoi(argv[++i]);
 		else {
-			fprintf(stderr, "usage: camclient [-n FRAMES] [-o FILE] [-e LINES GAIN]\n");
+			fprintf(stderr, "usage: camclient [-n FRAMES] [-o FILE] [-e LINES GAIN] [-s 1|2]\n");
 			return 2;
 		}
 	}
@@ -83,6 +85,12 @@ int main(int argc, char **argv)
 	if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof a)) {
 		perror(SUNFISH_CAMERA_SOCK);
 		return 1;
+	}
+	if (sensor) {
+		int sr = cmd(s, REDWOOD_CAMERA_SENSOR, (uint32_t)sensor, 0, 5);
+		printf("camclient: SENSOR %d -> %d\n", sensor, sr);
+		if (sr)
+			return 1;
 	}
 	double t0 = mono();
 	int r = cmd(s, SUNFISH_CAMERA_START, 0, 0, 60);

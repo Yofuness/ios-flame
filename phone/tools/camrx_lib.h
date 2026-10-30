@@ -68,6 +68,12 @@ struct cam_stream_hooks {
 };
 extern const struct cam_stream_hooks *stream_hooks;
 
+/* cam36: why stream_run ended (it returns 2 for FAULT, 1 for the others but OK). CAM36_OFF=1 in the environment: the
+ * pre-cam36 behaviour (carveout zeroed once per process, no stall watchdog, no SIGKILL, any failure = 1) */
+enum { CAM_END_OK, CAM_END_SETUP, CAM_END_FAULT, CAM_END_PAST_RING, CAM_END_NO_FRAMES, CAM_END_STOPPED, CAM_END_SAVE };
+extern int stream_end;
+int cam36_off(void);
+
 int precheck(void);
 int status(void);
 int smmu_report(int n, char **sids);
