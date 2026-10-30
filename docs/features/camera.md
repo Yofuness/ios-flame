@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:55 Plug-in camera opens work again (2ed9d22 on the phone, boot sp16r)
+- After a mediaserverd restart: camdev.log "open: START -> 0 after 11713 ms (camd pid 42, state 2)" and "START -> 0 after 18286 ms"; the earlier "START -> -22 after 30 s" is gone. (The opens are iOS prewarm: "opened after stop: closed at once".) U12 (Camera.app by the user) is unblocked.
+
 ### 2026-10-30 06:45 Plug-in camera open stalled camd: SENSOR fields in the wrong order (fixed in 2ed9d22, not yet on the phone)
 - Seen (kernel112 CAMERA=1, after mediaserverd restarts in jack8): camdev.log "open: START -> -22 after 30064 ms (camd pid 42, state 0)" twice; camd.log only "client fd 6 connected/gone". camd alone works: `camclient -n 30` START 0 after 10.80 s, 30 frames, 14.19 fps read, 0 torn, STOP 0.
 - Cause (investigator, code reading): camera_client.c built SENSOR as { SENSOR, sensor, ~0, ~0, 0, 0 }, i.e. the sensor in `bytes`; camd skipped 1-2 bytes of the following START as payload, replied -EINVAL to a = ~0, then blocked in read_full() for the rest of START, freezing its whole loop until the client closed (30 s). The -22 logged was SENSOR's reply left in `r`.

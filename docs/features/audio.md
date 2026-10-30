@@ -34,6 +34,19 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 06:55 jack9 (boot sp16r, kernel112 CAMERA=1; SunfishAudio.driver b1a7d1c): the HAL never asks the plug-in for 'jack'
+- VirtualAudio RE (research/notes/headphone-jack.md "S4 jack8"): the Wired Headphones port and the jack handler exist only if the "Codec" device answers HasProperty({'jack','outp',0}) at the first check (once per process, __cxa_guard at va.s 0x241834); the listener is registered only for the scopes that passed.
+- b1a7d1c logs every 'jack' Has/Size/Get with the client pid. After a mediaserverd restart (pid 329) and `jackset 1/3/0`: 0 "jack call" lines, so neither the gate check nor a read after PropertiesChanged reaches our plug-in. The HAL does ask object 9 (Codec) other properties (jack8), so it knows the device.
+- Reading: VirtualAudio's Device_Codec_Aspen is either not created on this phone or bound to another HAL object. Next: trace what creates Device_Codec_Aspen and how it finds its HAL device (investigator).
+
+### 2026-10-30 06:50 sp16 (kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, without sweetrtcoff; adspboot 6c7619d): amp echo reads zeros on both slots, control included
+- Test (research/notes/speaker-next.md): bottom amp 0x41 echoes ASPRX1 on ASP TX2 and VPMON (supply voltage) on TX1; --rec captures SD1. `adspboot ... --amp --rec --rec-echo [--lpi-slew] --amp-addr 0x41 --amp-db -20`, 1 kHz -20 dBFS.
+- sp16a: "rec-echo: tx1src 0x28 tx2src 0x8" (read back, restored after); PLL_LOCK 3 ms, PUP_DONE 3 ms, STATUS1 0x01400000, no faults; pcm 488 periods in 4856 ms, 0 underflows. All 45 `rec t=` lines: ch0 and ch1 rms 0, peak 0, zero 5120 of 5120 (baseline, tone and after). Mic: 0 TONE windows.
+- sp16b (+ --lpi-slew, fresh boot: a second adspboot on the same boot gets "glink up, 0 channels"): lpi-slew 0x62b6f000 0 -> 0x3333, 0x62b6f004 0 -> 0xf; same zeros, 0 TONE windows.
+- Reading: even the VPMON control is zero, so the SD1 capture path is dead (amp SDOUT not on gpio11, or Hi-Z, or the AFE TX port reads another line); nothing is learned about SD0. No reset, battery 4455 mV each boot.
+- The boot cmdline with CAMERA=1 + three extra args hit the 592-byte limit (606): sweetrtcoff was dropped for these boots (work/rtc-offset moved aside, then back). Backlog item added.
+- Speaker stays parked. Next if resumed: prove the SD1 capture path first (the amp's SDOUT pin/HiZ settings vs stock DT, AFE TX port line mask), then repeat the echo.
+
 ### 2026-10-30 06:40 jack8 (same boot as jack7; SunfishAudio.driver 834c2bd then 2a4c7f9): no query follows the plug; oslog drops lines
 - 834c2bd logs every HAL call for a property we don't have; /var/local/sunfish-jack-out gives "Codec" (object 9) a null-sink output stream (object 13).
 - jack8 A/B (runner, unfiltered oslog): 0 driver lines at all; `oslog -n mediaserverd` caught 1 of 3 jack lines. So 2a4c7f9: say() also writes /var/local/camdev.log, and the log cap (200) resets at each jack change.

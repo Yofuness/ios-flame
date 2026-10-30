@@ -44,6 +44,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
+- D6 boot cmdline over 592 bytes with CAMERA=1 + 3 args (B38): shorten the default args.
 - D5 [DONE 2026-10-29] fake taps/swipes (`T`/`W` in /var/local/sweet-orient): tests no longer need a finger.
 - D2 [DONE 2026-10-29] SSH earlier at boot: dropbear Interactive, SSH up 16-18 s.
 - D4 [DONE 2026-10-29] live log per boot (`../logs/boots/current.log`); the 474 MB log gzipped in `../logs/archive/`.
