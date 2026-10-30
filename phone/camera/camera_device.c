@@ -26,7 +26,7 @@
  *
  * The shutter: StillImageCaptureNow asks for one frame of the whole sensor on the StillImage output
  * (the time machine's TimeMachineSuspendNow/ResumeNow are taken and ignored). Focus, where there is
- * a lens motor (the wide camera's): by contrast, continuous, and on the window a tap gives (af_frame()).
+ * a lens motor (the wide camera's): by contrast, continuous, and on the window a tap gives (camera_af.h).
  *
  * Everything asked of the device and the streams that is not answered here is said in mediaserverd's
  * log ("redwood: camera: ..."), once per property.
@@ -312,7 +312,7 @@ static const struct prop stream_props[] = {
 	{ "RegionOfInterestForCameraControls", "Collection", "ReadWrite" }, { "AEMeteringMode", "Number", "ReadWrite" },
 	{ "MaxFrameCoalescingDuration", "Number", "ReadWrite" }, { "LimitAERange", "Boolean", "ReadWrite" },
 	{ "TimeMachineSuspendNow", "Boolean", "WriteOnly" }, { "TimeMachineResumeNow", "Boolean", "WriteOnly" },
-	/* focus (the wide camera's lens motor; see af_frame()) */
+	/* focus (the wide camera's lens motor; see camera_af.h) */
 	{ "AutoFocusNow", "Collection", "WriteOnly" }, { "ContinuousAutoFocusNow", "Collection", "WriteOnly" },
 	{ "FocusNow", "Collection", "WriteOnly" }, { "PeakTrackingFocusNow", "Collection", "WriteOnly" },
 	{ "LockAFNow", "Boolean", "WriteOnly" }, { "ManualFocusNow", "Collection", "WriteOnly" },
@@ -545,9 +545,6 @@ struct stream {
 	int             still_flash;    /* the flash the latest StillImageCaptureNow asked for: 0 off, 1 on, 2 auto, -1 as FlashMode */
 };
 
-/* AF_MODE_*: after a search, focus keeps watching (continuous), or stays where it is (auto: one search) */
-enum { AF_MODE_AUTO = 1, AF_MODE_CONTINUOUS = 2 };
-
 static struct stream *
 stream_of(CMBaseObjectRef o)
 {
@@ -735,16 +732,7 @@ af_window(struct stream *s, CFTypeRef value)
 	s->af_window[3] = (float)(y0 + height);
 }
 
-/*
- * The lens's travel focus uses (the kernel's positions: 0 infinity, 1023 macro). redfin (WS-A, kernel 0929): the back
- * camera's actuator is an ON Semi LC898129 (AF, OIS and EEPROM in one chip); the kernel maps 0..1023 onto its codes
- * 400..725 for now (to be widened from the EEPROM's calibration), so the whole of it is safe to use -- HackiOS's phone
- * stopped at 768 (an over-current on its LDO) and had a hard stop at 0. The IMX355 and IMX481 are fixed focus.
- */
-#define AF_NEAR         0               /* (infinity) */
-#define AF_FAR          REDWOOD_CAMERA_FOCUS_MAX        /* (macro) */
-#define AF_STEP         64
-#define AF_FINE         16
+#include "camera_af.h"
 
 /* ---- redfin (plan B4-B7): the controls' values ------------------------------------------------------------------- */
 
@@ -1664,247 +1652,6 @@ colour_temperature(const struct isp *isp)
 	return kelvin[2];
 }
 
-/*
- * Focus, where the camera has a lens motor (the frames' focus is a position, not REDWOOD_CAMERA_NO_FOCUS:
- * the wide camera's): by contrast, as there is nothing else to go by -- the sensor's phase-detection
- * pixels are not read. A search climbs from where the lens is: a step of AF_STEP one way, on that way
- * while the middle of the picture gets sharper, back the other way if the first step was not, until
- * two steps in a row are less sharp than the sharpest (or the travel, AF_NEAR to AF_FAR, ends); then
- * around the sharpest in steps of AF_FINE, and there it stays. Each place is measured two frames after
- * the lens was told to go there (it settles in less than one). The lens is only ever moved a step at a
- * time: thrown across its travel it knocked, audibly, against its stop at 0. In focus, it stays until
- * the middle has been a good deal less sharp or quite differently lit for a second, and then until
- * the picture has kept still for a third of one: no searching while the phone is being moved.
- * A focus asked for (a tap: AutoFocusNow, on the window AFWindowParams gave) sweeps instead: the
- * lens is walked to the nearer end of its travel, then measured towards the other in steps of
- * AF_STEP until it is past the sharpest (two steps in a row well under it), then around the sharpest
- * -- it finds what was tapped however far out of focus it was, where the climb gave up on the flat
- * of the curve.
- */
-enum { AF_WATCH, AF_STEADY, AF_CLIMB, AF_SWEEP, AF_FINE_SEARCH, AF_SETTLE, AF_MANUAL };
-
-struct af {
-	int             state;
-	uint32_t        at, target;     /* where the lens was told to go; where it is going a step at a time */
-	unsigned        wait;           /* frames before the next measurement */
-	int             way;            /* +1 nearer, -1 further */
-	bool            turned;
-	unsigned        worse;          /* steps in a row less sharp than the sharpest */
-	uint32_t        start, best, fine_to;
-	float           best_sharpness;
-	float           sharpness, level;       /* in focus: the middle's, to watch */
-	float           last_sharpness, last_level;
-	unsigned        unlike, steady, steps;
-	bool            now;            /* asked for: no waiting for the picture to keep still */
-	bool            sweep;          /* ... and the whole travel measured */
-	float           sum_sharpness, sum_level;
-	unsigned        measured;
-	/* redfin (B5) */
-	bool            hold;           /* a one-off search (AF_MODE_AUTO) done: the lens stays until focus is asked for again */
-	int32_t         manual_at;      /* the ManualFocusNow position being gone to or held (-1: none) */
-	bool            started;        /* at and target are the kernel's */
-};
-
-/* whether focus is looking for the sharpest, or the lens is on its way somewhere (AFStatus; a photograph waits for it) */
-static bool
-af_searching(const struct af *af)
-{
-	return af->state == AF_CLIMB || af->state == AF_SWEEP || af->state == AF_FINE_SEARCH || af->state == AF_SETTLE ||
-	    af->state == AF_MANUAL || (af->state == AF_STEADY && af->now) || af->at != af->target;
-}
-
-static void
-af_go(int device, struct af *af, uint32_t target)
-{
-	struct redwood_camera_command c = { .command = REDWOOD_CAMERA_FOCUS };
-
-	af->target = target < AF_NEAR ? AF_NEAR : target > AF_FAR ? AF_FAR : target;
-	c.a = af->at < af->target ? (af->target - af->at > AF_STEP ? af->at + AF_STEP : af->target) :
-	    (af->at - af->target > AF_STEP ? af->at - AF_STEP : af->target);
-	af->at = c.a;
-	/*
-	 * The lens settles in a few milliseconds; what is spoilt is the frame being exposed while it moved
-	 * (written at a frame's end, the next one's exposure has begun): one frame let go by before a
-	 * measurement, none on the way.
-	 */
-	af->wait = af->at == af->target ? 1 : 0;
-	af->steps++;
-	af->sum_sharpness = af->sum_level = 0;
-	af->measured = 0;
-	(void)camera_client_write(device, &c, sizeof(c));        /* sunfish (f2): to camd */
-}
-
-static void
-af_frame(int device, struct af *af, const struct redwood_camera_frame *f, const uint8_t *raw, const float window[4], bool locked,
-    int mode, int32_t manual)
-{
-	float level, sharpness;
-	unsigned needed = f->gain >= 16 * f->gain_unity ? 2 : 1;      /* (in the dark, two frames to a measurement) */
-
-	if (f->focus == REDWOOD_CAMERA_NO_FOCUS) {
-		return;
-	}
-	if (!af->started) {
-		af->started = true;
-		af->at = af->target = f->focus;         /* (where the kernel put it) */
-		af->manual_at = -1;
-	}
-	/* redfin (B5): ManualFocusNow: the lens there, a step at a time, and held */
-	if (manual >= 0 && manual != af->manual_at) {
-		af->manual_at = manual;
-		af->state = AF_MANUAL;
-		af->now = af->sweep = false;
-		af_go(device, af, (uint32_t)manual);
-		return;
-	}
-	if (af->wait > 0) {
-		af->wait--;
-		return;
-	}
-	if (af->at != af->target) {
-		af_go(device, af, af->target);          /* (the next step of a longer way) */
-		return;
-	}
-	if (af->state == AF_MANUAL) {
-		af->state = AF_WATCH;
-		af->hold = true;
-		say("focus: the lens at %u, as asked", af->at);
-		return;
-	}
-	/* redfin (B5): a frame exposed while the lens moved (the kernel's LENS_MOVING) is no measure of where it is */
-	if (f->reserved[REDWOOD_CAMERA_R_FLAGS] & REDWOOD_CAMERA_LENS_MOVING) {
-		return;
-	}
-	if (af->state == AF_WATCH && (locked || af->hold)) {
-		return;                 /* (nothing to measure for) */
-	}
-	sharpness = isp_sharpness(f, raw, window[0], window[1], window[2], window[3], &level);
-	af->sum_sharpness += sharpness;
-	af->sum_level += level;
-	if (++af->measured < needed) {
-		return;
-	}
-	sharpness = af->sum_sharpness / af->measured;
-	level = af->sum_level / af->measured;
-	af->sum_sharpness = af->sum_level = 0;
-	af->measured = 0;
-	switch (af->state) {
-	case AF_WATCH:
-		if (locked || (af->sharpness > 0 && sharpness > af->sharpness * 0.6f && level > af->level * 0.7f &&
-		    level < af->level * 1.4f)) {
-			af->unlike = 0;
-			return;
-		}
-		if (af->sharpness > 0 && ++af->unlike < 30) {
-			return;
-		}
-		af->state = AF_STEADY;
-		af->steady = 0;
-		af->last_sharpness = sharpness;
-		af->last_level = level;
-		return;
-	case AF_STEADY:
-		if (fabsf(sharpness - af->last_sharpness) < 0.15f * af->last_sharpness && fabsf(level - af->last_level) < 0.1f * af->last_level) {
-			af->steady++;
-		} else {
-			af->steady = 0;
-		}
-		af->last_sharpness = sharpness;
-		af->last_level = level;
-		if (af->steady < 10 && !af->now) {
-			return;
-		}
-		af->now = false;
-		if (af->sweep) {
-			af->sweep = false;
-			af->state = AF_SWEEP;
-			af->best_sharpness = -1;
-			af->worse = 0;
-			af->steps = 0;
-			af->way = af->at - AF_NEAR < AF_FAR - af->at ? 1 : -1;
-			af_go(device, af, af->way > 0 ? AF_NEAR : AF_FAR);     /* (walked there a step at a time) */
-			return;
-		}
-		af->state = AF_CLIMB;
-		af->best = af->start = af->at;
-		af->best_sharpness = sharpness;
-		af->way = af->at + AF_STEP > AF_FAR ? -1 : 1;
-		af->turned = false;
-		af->worse = 0;
-		af->steps = 0;
-		af_go(device, af, (uint32_t)((int)af->at + af->way * AF_STEP));
-		return;
-	case AF_CLIMB: {
-		int next = (int)af->at + af->way * AF_STEP;
-		bool end = next < AF_NEAR || next > AF_FAR;
-
-		if (sharpness > af->best_sharpness * 1.02f) {
-			af->best = af->at;
-			af->best_sharpness = sharpness;
-			af->worse = 0;
-		} else {
-			af->worse++;
-		}
-		if (af->worse < 2 && !end) {
-			af_go(device, af, (uint32_t)next);
-			return;
-		}
-		next = (int)af->best - af->way * AF_STEP;
-		if (!af->turned && af->best == af->start && next >= AF_NEAR && next <= AF_FAR) {
-			/* not sharper that way at all: the other way, from where it started */
-			af->turned = true;
-			af->way = -af->way;
-			af->worse = 0;
-			af_go(device, af, (uint32_t)next);
-			return;
-		}
-		af->state = AF_FINE_SEARCH;
-		af->fine_to = af->best + 2 * AF_FINE > AF_FAR ? AF_FAR : af->best + 2 * AF_FINE;
-		af_go(device, af, af->best > 2 * AF_FINE + AF_NEAR ? af->best - 2 * AF_FINE : AF_NEAR);
-		return;
-	}
-	case AF_SWEEP:
-		say("focus: sweep: %u %.4f", af->at, sharpness);
-		if (sharpness > af->best_sharpness) {
-			af->best = af->at;
-			af->best_sharpness = sharpness;
-			af->worse = 0;
-		} else if (sharpness < af->best_sharpness * 0.85f) {
-			af->worse++;
-		}
-		if (af->worse < 2 && (int)af->at + af->way * AF_STEP >= AF_NEAR && (int)af->at + af->way * AF_STEP <= AF_FAR) {
-			af_go(device, af, (uint32_t)((int)af->at + af->way * AF_STEP));
-			return;
-		}
-		af->state = AF_FINE_SEARCH;
-		af->fine_to = af->best + 2 * AF_FINE > AF_FAR ? AF_FAR : af->best + 2 * AF_FINE;
-		af_go(device, af, af->best > 2 * AF_FINE + AF_NEAR ? af->best - 2 * AF_FINE : AF_NEAR);
-		return;
-	case AF_FINE_SEARCH:
-		if (sharpness > af->best_sharpness) {
-			af->best = af->at;
-			af->best_sharpness = sharpness;
-		}
-		if (af->at + AF_FINE <= af->fine_to) {
-			af_go(device, af, af->at + AF_FINE);
-			return;
-		}
-		af->state = AF_SETTLE;
-		af_go(device, af, af->best);
-		return;
-	case AF_SETTLE:
-		af->state = AF_WATCH;
-		af->sharpness = sharpness;
-		af->level = level;
-		af->unlike = 0;
-		af->hold = mode == AF_MODE_AUTO;        /* (redfin, B5: one search, and the lens stays) */
-		say("focus: the lens at %u after %u moves (sharpness %.3f)%s", af->at, af->steps, sharpness, af->hold ? ", held" : "");
-		return;
-	case AF_MANUAL:
-		return;
-	}
-}
-
 /* the sensor's colour tuning, when the image has one (fw/camera-<sensor>.isp, tools/redfin-camtune.py) */
 static void
 load_tuning(struct isp *isp, uint32_t sensor)
@@ -2042,6 +1789,7 @@ enum { SHOT_IDLE, SHOT_EXPOSING, SHOT_FIRING };
 struct shot {
 	int             state;
 	unsigned        frames, waited;
+	uint64_t        asked_at;       /* af6: when the photograph was asked for */
 	uint32_t        lines, gain;    /* the exposure asked for it */
 };
 
@@ -2067,11 +1815,13 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 	uint32_t tuned_for = ~0u, width = 0, height = 0;
 	bool switched = false, mode_asked = false;
 	float lux = -1, cct = -1;
-	struct af af = { 0 };
+	struct af af;
+	uint64_t af_sequence = 0;
 	struct shot shot = { 0 };
 	unsigned failures = 0;
 	const char *why = "stopped";
 
+	af_init(&af, access("/var/local/camdev.af-old", F_OK) == 0);    /* af6: the af5 search */
 	isp_init(&isp);
 	while (buffer != NULL && worker_wanted(s, generation) && !worker_given_back_long(s)) {
 		ssize_t n = camera_client_read(device, buffer, bytes);     /* sunfish (f2): camd's slots */
@@ -2094,6 +1844,7 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 		need = f->header_bytes + (size_t)f->stride * f->height;
 		if (f->sensor != s->camera->sensor) {
 			/* another camera's frames (the kernel's last sensor): changed, and the next ones are this one's */
+			af_reset(&af);          /* af6 */
 			if (!switched) {
 				struct redwood_camera_command c = { .command = REDWOOD_CAMERA_SENSOR, .a = s->camera->sensor, .b = REDWOOD_CAMERA_MODE_ANY,
 					.c = s->camera->formats[s->format_index & 1].kind };
@@ -2209,15 +1960,17 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 				    f->exposure_lines, f->gain, isp.asked_lines, isp.asked_gain);
 			}
 		}
-		if (af_now) {
-			/* (whatever it was doing: at once, from the next frame; a tap sweeps, continuous focus climbs) */
-			af.state = AF_STEADY;
-			af.now = true;
-			af.sweep = af_mode != AF_MODE_CONTINUOUS;
-			af.hold = false;
-			af.manual_at = -1;
+		/* af6: a new camd session (a switch, a new mode: a sensor restart counts from 1 again): focus starts over */
+		if (f->sequence < af_sequence) {
+			af_reset(&af);
 		}
-		af_frame(device, &af, f, raw, window, af_locked, af_mode, manual_focus);
+		af_sequence = f->sequence;
+		if (af_now) {
+			af_asked(&af, af_mode == AF_MODE_CONTINUOUS);
+		}
+		af_frame(device, &af, f, raw, window, af_locked, af_mode, manual_focus, isp.ae_stable || isp.ae_locked || isp.manual);
+		/* (a lens held at the start of a session has no search coming until it is let go) */
+		bool af_busy = af_searching(&af) && !(af_locked && af.state == AF_WATCH);
 		s->frames++;
 
 		/*
@@ -2238,7 +1991,13 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 		} else if (shot.state == SHOT_IDLE) {
 			flash = wish >= 0 ? wish : s->flash_mode;
 			flash = flash == 2 ? lux > 335 : flash;         /* (auto: about 8x at 1/30 s and darker) */
-			if (af_searching(&af) && af.state != AF_WATCH && shot.waited++ < 20) {
+			uint64_t shot_now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+
+			if (shot.waited++ == 0) {
+				shot.asked_at = shot_now;
+			}
+			/* af6: focus first, a second at most: found or not (AFStatus never holds a photograph up for ever) */
+			if (af_busy && (af.old ? af.state != AF_WATCH : true) && shot_now - shot.asked_at < 1000000000ull) {
 				/* (focus first) */
 			} else if (!flash || !has_flash) {
 				give_still = true;
@@ -2281,7 +2040,7 @@ frames(CMBaseObjectRef o, unsigned generation, int device)
 		}
 
 		struct md_extra extra = {
-			.af_status = af_searching(&af) ? 2 : 0, .af_locked = af_locked || af.hold, .ae_locked = isp.ae_locked && shot.state == SHOT_IDLE,
+			.af_status = af_busy ? 2 : 0, .af_locked = af_locked || af.hold, .ae_locked = isp.ae_locked && shot.state == SHOT_IDLE,
 			.awb_locked = isp.awb_locked || isp.awb_manual, .cct = cct, .flash = give_still && shot.state == SHOT_FIRING,
 		};
 		CFDictionaryRef metadata = frame_metadata(&isp, f, &st, s->port, &extra);

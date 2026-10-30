@@ -2,6 +2,7 @@
 # Camera for iOS (stage f, docs/features/camera.md; feature under work). Installs:
 #  - phone tools camid camclk camrx camd camclient camera_avtest camisp -> /var/local/bin, the IMX363 table
 #    work/cam/imx363-mode8.txt -> /var/local/cam/ (from Google's camx module, not in git: made by tools/sunfish-camtab.py)
+#  - SunfishAudio.driver (phone/audio/out, the camera's half in mediaserverd; tools/sunfish-install-audio.sh; reboot to load)
 #  - launchd job org.iosonpixel.camd (`camd --log /var/local/camd.log`, root, RunAtLoad, KeepAlive on crash only,
 #    ThrottleInterval 10); backup /System/Library/xpc/launchd.plist.pre-camera (first run only)
 #  - /var/local/camdev.on (turns on the camera in SunfishAudio.driver) and /var/local/camdev.log (0666)
@@ -72,7 +73,7 @@ if [ "$MODE" = --check ]; then
 	job --check
 	S "for t in $TOOLS; do [ -x /var/local/bin/\$t ] && echo \"tool \$t: ok\" || echo \"tool \$t: MISSING\"; done; \
 for f in /var/local/cam/imx363-mode8.txt /var/local/camdev.on /var/local/camdev.log /var/local/camd.log $LP.pre-camera \
-$MG $MG.pre-camera /var/run/sunfish-camera.shm /var/run/sunfish-camera.sock; do \
+/System/Library/Audio/Plug-Ins/HAL/SunfishAudio.driver/SunfishAudio $MG $MG.pre-camera /var/run/sunfish-camera.shm /var/run/sunfish-camera.sock; do \
 [ -e \$f ] && echo \"\$f: present\" || echo \"\$f: absent\"; done; \
 pgrep -l camd || echo 'camd: not running'"
 	for d in D22 D221 Default; do
@@ -121,6 +122,9 @@ for s in imx363 imx355; do
 done
 echo "installed: $TOOLS, /var/local/cam/{imx363-mode8,imx355-mode2}.txt, /private/var/local/fw/camera-{imx363,imx355}.isp"
 
+# 1b. the driver (camera_device.c): built by tools/build-userland-linux.sh; --undo leaves it (sunfish-install-audio.sh --undo)
+tools/sunfish-install-audio.sh
+
 # 2. launchd job
 if ! F get $LP.pre-camera $U/camera/launchd.plist.pre-camera >/dev/null 2>&1; then
 	cp $U/camera/launchd.plist.cur $U/camera/launchd.plist.pre-camera
@@ -150,4 +154,4 @@ elif [ -e $MG ]; then cp -p $MG $MG.pre-camera && rm -f $MG && echo 'MobileGesta
 else echo 'WARNING: no $MG'; fi; sync 2>/dev/null || true"
 
 # 6.
-echo "next boot must be: CAMERA=1 tools/sunfish-boot.sh NAME work/kernel111/kernel.development.sweet sweetse9=2 sweetcampmic=2"
+echo "next boot must be: CAMERA=1 tools/sunfish-boot.sh NAME work/kernel128/kernel.development.sweet sweetse9=2 sweetcampmic=2"

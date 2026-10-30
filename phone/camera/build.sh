@@ -20,4 +20,7 @@ if command -v cc >/dev/null; then
 	# cam38: AE against a simulated sensor
 	cc -O2 -Wall -o ../../work/cam/test-ae test_ae.c -lm -pthread
 	../../work/cam/test-ae
+	# af6: focus against a simulated lens
+	cc -O2 -Wall -o ../../work/cam/test-af test_af.c -lm
+	../../work/cam/test-af
 fi
