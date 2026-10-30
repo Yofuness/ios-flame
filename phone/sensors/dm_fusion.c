@@ -8,14 +8,15 @@
 
 void dm_init(struct dm_fusion *f, float beta)
 {
-	float mn[3], mx[3];	/* dm2: the hard-iron box survives a restart of the fusion */
+	struct dm_magcal cal = f->cal;	/* dm7: the fit (and its ring) survives a restart of the fusion */
 	float smb[3], sgb[3];	/* dm5: and SEE's biases (on-change: they may not come again) */
-	int cal = f->have_cal, init = f->beta != 0, sms = f->see_mag_st, sgs = f->see_gyro_st;
-	memcpy(mn, f->mag_min, sizeof(mn)), memcpy(mx, f->mag_max, sizeof(mx));
+	int init = f->beta != 0, sms = f->see_mag_st, sgs = f->see_gyro_st;
 	memcpy(smb, f->see_mag_bias, sizeof(smb)), memcpy(sgb, f->see_gyro_bias, sizeof(sgb));
 	memset(f, 0, sizeof(*f));
-	f->have_cal = cal;
-	memcpy(f->mag_min, mn, sizeof(mn)), memcpy(f->mag_max, mx, sizeof(mx));
+	if (init)
+		f->cal = cal;
+	else
+		f->cal.heading_tc = DM_HEADING_TC;
 	f->see_mag_st = init ? sms : -1, f->see_gyro_st = init ? sgs : -1;
 	memcpy(f->see_mag_bias, smb, sizeof(smb)), memcpy(f->see_gyro_bias, sgb, sizeof(sgb));
 	f->q[0] = 1.0f;
@@ -48,13 +49,13 @@ void dm_accel(struct dm_fusion *f, const float a[3])
 	f->have_acc = 1;
 }
 
-/* dm2: calibrated, normalised mag in m when the box is usable (accuracy >= 0) */
+/* dm2: calibrated, normalised mag in m when the calibration is usable (accuracy >= 0) */
 static int dm_mag_cal(const struct dm_fusion *f, float m[3])
 {
 	if (!f->have_mag || dm_mag_accuracy(f) < 0)
 		return 0;
-	float b[3], sp[3];
-	dm_mag_bias(f, b, sp);
+	float b[3];
+	dm_mag_bias(f, b);
 	for (int i = 0; i < 3; i++)
 		m[i] = f->mag[i] - b[i];
 	float n = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
@@ -100,6 +101,89 @@ static void dm_seed_mag(struct dm_fusion *f)
 	f->mag_seeded = 1;
 }
 
+/* dm7: |m|^2 = 2 c.m + k (k = r^2 - |c|^2) is linear in (c, k): 4x4 normal equations, Gaussian elimination */
+int dm_sphere_fit(const float (*m)[3], int n, float c[3], float *r, float *res)
+{
+	double A[4][5] = { { 0 } };
+	for (int s = 0; s < n; s++) {
+		double row[4] = { 2 * m[s][0], 2 * m[s][1], 2 * m[s][2], 1 };
+		double y = (double)m[s][0] * m[s][0] + (double)m[s][1] * m[s][1] + (double)m[s][2] * m[s][2];
+		for (int i = 0; i < 4; i++) {
+			for (int j = 0; j < 4; j++)
+				A[i][j] += row[i] * row[j];
+			A[i][4] += row[i] * y;
+		}
+	}
+	for (int i = 0; i < 4; i++) {
+		int p = i;
+		for (int k = i + 1; k < 4; k++)
+			if (fabs(A[k][i]) > fabs(A[p][i]))
+				p = k;
+		if (fabs(A[p][i]) < 1e-9)
+			return -1;
+		for (int j = 0; j < 5; j++) {
+			double t = A[i][j];
+			A[i][j] = A[p][j], A[p][j] = t;
+		}
+		for (int k = 0; k < 4; k++) {
+			if (k == i)
+				continue;
+			double fct = A[k][i] / A[i][i];
+			for (int j = i; j < 5; j++)
+				A[k][j] -= fct * A[i][j];
+		}
+	}
+	double x[4];
+	for (int i = 0; i < 4; i++)
+		x[i] = A[i][4] / A[i][i];
+	double r2 = x[3] + x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+	if (!(r2 > 0))
+		return -1;
+	double rr = sqrt(r2), e2 = 0;
+	for (int s = 0; s < n; s++) {
+		double d0 = m[s][0] - x[0], d1 = m[s][1] - x[1], d2 = m[s][2] - x[2];
+		double e = sqrt(d0 * d0 + d1 * d1 + d2 * d2) - rr;
+		e2 += e * e;
+	}
+	c[0] = (float)x[0], c[1] = (float)x[1], c[2] = (float)x[2];
+	*r = (float)rr, *res = (float)sqrt(e2 / n);
+	return 0;
+}
+
+/* dm7: fit the ring when it covers enough orientations; take the fit as the bias (big steps need two fits) */
+static void dm_mag_fit(struct dm_magcal *k)
+{
+	float lo[3], hi[3], c[3], r, res, sp = 1e9f;
+	for (int i = 0; i < 3; i++)
+		lo[i] = 1e9f, hi[i] = -1e9f;
+	for (int s = 0; s < k->ring_n; s++)
+		for (int i = 0; i < 3; i++) {
+			lo[i] = k->ring[s][i] < lo[i] ? k->ring[s][i] : lo[i];
+			hi[i] = k->ring[s][i] > hi[i] ? k->ring[s][i] : hi[i];
+		}
+	for (int i = 0; i < 3; i++)
+		sp = hi[i] - lo[i] < sp ? hi[i] - lo[i] : sp;
+	if (sp < DM_MAG_COVER || dm_sphere_fit((const float (*)[3])k->ring, k->ring_n, c, &r, &res) ||
+	    r < DM_MAG_R_MIN || r > DM_MAG_R_MAX || !(res < DM_MAG_RES_MAX))
+		return;
+	if (k->have_cal) {
+		float d0 = c[0] - k->c[0], d1 = c[1] - k->c[1], d2 = c[2] - k->c[2];
+		if (sqrtf(d0 * d0 + d1 * d1 + d2 * d2) > DM_MAG_STEP) {
+			float e0 = c[0] - k->pend[0], e1 = c[1] - k->pend[1], e2 = c[2] - k->pend[2];
+			int agree = k->have_pend && sqrtf(e0 * e0 + e1 * e1 + e2 * e2) <= DM_MAG_STEP;
+			memcpy(k->pend, c, sizeof(k->pend));
+			k->have_pend = !agree;
+			if (!agree)
+				return;
+		}
+	}
+	k->have_pend = 0;
+	memcpy(k->c, c, sizeof(k->c));
+	k->r = r, k->res = res, k->n = k->ring_n;
+	k->acc = res < DM_MAG_RES_GOOD && sp >= DM_MAG_COVER_GOOD ? 2 : 1;
+	k->have_cal = 1;
+}
+
 int dm_mag(struct dm_fusion *f, const float m[3])
 {
 	float n = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
@@ -113,14 +197,19 @@ int dm_mag(struct dm_fusion *f, const float m[3])
 		}
 	}
 	memcpy(f->mag, m, sizeof(f->mag));
-	if (f->have_mag) {	/* the box grows from the second consistent sample */
-		for (int i = 0; i < 3; i++) {
-			if (!f->have_cal || m[i] < f->mag_min[i])
-				f->mag_min[i] = m[i];
-			if (!f->have_cal || m[i] > f->mag_max[i])
-				f->mag_max[i] = m[i];
+	struct dm_magcal *k = &f->cal;
+	if (f->have_mag) {	/* dm7: the ring takes consistent samples, decimated so a still phone can't flood it */
+		const float *l = k->ring[(k->ring_i + DM_MAG_RING - 1) % DM_MAG_RING];
+		float d0 = m[0] - l[0], d1 = m[1] - l[1], d2 = m[2] - l[2];
+		if (!k->ring_n || sqrtf(d0 * d0 + d1 * d1 + d2 * d2) > DM_MAG_DECIM) {
+			memcpy(k->ring[k->ring_i], m, sizeof(k->ring[0]));
+			k->ring_i = (k->ring_i + 1) % DM_MAG_RING;
+			k->ring_n += k->ring_n < DM_MAG_RING;
+			if (++k->ring_new >= DM_MAG_FIT_EVERY && k->ring_n >= DM_MAG_FIT_MIN) {
+				k->ring_new = 0;
+				dm_mag_fit(k);
+			}
 		}
-		f->have_cal = 1;
 	}
 	f->have_mag = 1;
 	if (!f->mag_seeded && f->have_acc)
@@ -151,53 +240,48 @@ int dm_mag_accuracy(const struct dm_fusion *f)
 {
 	if (dm_mag_cal_dsp(f))
 		return f->see_mag_st > 3 ? 2 : f->see_mag_st - 1;	/* dm5: SEE status 1/2/3 -> 0/1/2 */
-	if (!f->have_cal)
-		return -1;
-	float lo = 1e9f;
-	for (int i = 0; i < 3; i++)
-		if (f->mag_max[i] - f->mag_min[i] < lo)
-			lo = f->mag_max[i] - f->mag_min[i];
-	return lo >= DM_MAG_SPAN_HIGH ? 2 : lo >= DM_MAG_SPAN_MED ? 1 : lo >= DM_MAG_SPAN_LOW ? 0 : -1;
+	return f->cal.have_cal ? f->cal.acc : -1;
 }
 
-void dm_mag_bias(const struct dm_fusion *f, float b[3], float span[3])
+void dm_mag_bias(const struct dm_fusion *f, float b[3])
 {
-	for (int i = 0; i < 3; i++) {
-		b[i] = dm_mag_cal_dsp(f) ? f->see_mag_bias[i] : f->have_cal ? (f->mag_max[i] + f->mag_min[i]) / 2 : 0;
-		span[i] = f->have_cal ? f->mag_max[i] - f->mag_min[i] : 0;
-	}
+	for (int i = 0; i < 3; i++)
+		b[i] = dm_mag_cal_dsp(f) ? f->see_mag_bias[i] : f->cal.have_cal ? f->cal.c[i] : 0;
 }
 
-/* "min x y z max x y z" in uT */
+/* dm7: "fit cx cy cz r res acc" (uT); the dm2 "min ... max ..." box is ignored, so a polluted box can't come back */
 int dm_magcal_load(struct dm_fusion *f, const char *path)
 {
 	FILE *fp = fopen(path, "r");
-	float a[6];
+	float a[5];
+	int acc;
 	if (!fp)
 		return -1;
-	int n = fscanf(fp, "min %f %f %f max %f %f %f", &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]);
+	int n = fscanf(fp, "fit %f %f %f %f %f %d", &a[0], &a[1], &a[2], &a[3], &a[4], &acc);
 	fclose(fp);
 	if (n != 6)
 		return -1;
-	for (int i = 0; i < 3; i++)
-		if (!isfinite(a[i]) || !isfinite(a[i + 3]) || a[i] > a[i + 3])
+	for (int i = 0; i < 5; i++)
+		if (!isfinite(a[i]) || fabsf(a[i]) > DM_MAG_MAX)
 			return -1;
-	memcpy(f->mag_min, a, sizeof(f->mag_min));
-	memcpy(f->mag_max, a + 3, sizeof(f->mag_max));
-	f->have_cal = 1;
+	if (a[3] < DM_MAG_R_MIN || a[3] > DM_MAG_R_MAX || !(a[4] < DM_MAG_RES_MAX) || acc < 1 || acc > 2)
+		return -1;
+	memcpy(f->cal.c, a, sizeof(f->cal.c));
+	f->cal.r = a[3], f->cal.res = a[4], f->cal.acc = acc, f->cal.n = 0;
+	f->cal.have_cal = 1;
 	return 0;
 }
 
 int dm_magcal_save(const struct dm_fusion *f, const char *path)
 {
 	char tmp[256];
-	if (!f->have_cal || snprintf(tmp, sizeof(tmp), "%s.new", path) >= (int)sizeof(tmp))
+	if (!f->cal.have_cal || snprintf(tmp, sizeof(tmp), "%s.new", path) >= (int)sizeof(tmp))
 		return -1;
 	FILE *fp = fopen(tmp, "w");
 	if (!fp)
 		return -1;
-	fprintf(fp, "min %.3f %.3f %.3f max %.3f %.3f %.3f\n", f->mag_min[0], f->mag_min[1], f->mag_min[2],
-	    f->mag_max[0], f->mag_max[1], f->mag_max[2]);
+	fprintf(fp, "fit %.3f %.3f %.3f %.3f %.3f %d\n", f->cal.c[0], f->cal.c[1], f->cal.c[2], f->cal.r, f->cal.res,
+	    f->cal.acc);
 	if (fclose(fp))
 		return -1;
 	return rename(tmp, path);
@@ -327,9 +411,9 @@ float dm_heading_deg(const float qv[4])
 	return h < 0 ? h + 360 : h;
 }
 
-void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r)
+void dm_report2(struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r)
 {
-	float span[3], q[4], ua[3], b[3];
+	float q[4], ua[3], b[3];
 	int acc = dm_mag_accuracy(f);
 	memset(r, 0, sizeof(*r));
 	r->type = 2;
@@ -338,13 +422,19 @@ void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm
 	memcpy(r->mag_raw, f->mag, sizeof(r->mag_raw));
 	dm_out_q(f, yaw_deg, q);
 	dm_user_accel(f, ua);
-	dm_mag_bias(f, b, span);
+	dm_mag_bias(f, b);
 	memcpy(r->q, q, sizeof(q));
 	memcpy(r->rot_rate, f->gyro, sizeof(r->rot_rate));
 	memcpy(r->user_accel, ua, sizeof(ua));
 	memcpy(r->mag_bias, b, sizeof(b));
 	/* dm3: locationd takes the heading ready-made from @0x44/@0x48 and needs status bit 8 */
-	r->heading = dm_heading_deg(q);
+	float h = dm_heading_deg(q), dt = f->hd_have ? (float)((double)(ts - f->hd_ts) / 19200000.0) : 0;
+	if (f->cal.heading_tc > 0 && f->hd_have && ts > f->hd_ts && dt < 1.0f) {	/* dm7: wrap-aware low-pass */
+		float d = fmodf(h - f->hd_out + 540.0f, 360.0f) - 180.0f;
+		h = fmodf(f->hd_out + d * (1.0f - expf(-dt / f->cal.heading_tc)) + 360.0f, 360.0f);
+	}
+	f->hd_out = h, f->hd_ts = ts, f->hd_have = 1;
+	r->heading = h;
 	r->heading_acc = acc >= 2 ? 10.0f : acc == 1 ? 20.0f : acc == 0 ? 35.0f : -1.0f;
 	r->status = acc >= 0 ? DM_STATUS_HEADING : 0;
 }

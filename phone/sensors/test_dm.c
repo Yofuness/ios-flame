@@ -32,9 +32,8 @@ static float run(const float earth_dev[3], float yaw, struct dm_report2 *r)
 	const float bias[3] = { 12, -30, 5 }, acc[3] = { 0, 0, 9.81f }, g[3] = { 0, 0, 0 };
 	memset(&f, 0, sizeof(f));
 	dm_init(&f, 0.04f);
-	f.have_cal = 1;		/* as if loaded from magcal.txt: a 90 uT box around the bias */
-	for (int i = 0; i < 3; i++)
-		f.mag_min[i] = bias[i] - 45, f.mag_max[i] = bias[i] + 45;
+	f.cal.have_cal = 1, f.cal.acc = 2, f.cal.r = 45;	/* as if loaded from magcal.txt */
+	memcpy(f.cal.c, bias, sizeof(f.cal.c));
 	dm_accel(&f, acc);
 	float m[3] = { earth_dev[0] + bias[0], earth_dev[1] + bias[1], earth_dev[2] + bias[2] };
 	for (int i = 0; i < 500; i++) {
@@ -107,6 +106,89 @@ int main(void)
 	printf("%s SEE status 0 -> accuracy 0x%x, gyro_cal rotRate %.4f,%.4f,%.4f\n", ok ? "ok  " : "FAIL",
 	    r.mag_accuracy, rr[0], rr[1], rr[2]);
 	fails += !ok;
+	/* dm7: sphere fit. Samples on a 48 uT sphere around (-20, 40, -70), 1 uT noise, only the upper ~2/3 covered */
+	{
+		const float c0[3] = { -20, 40, -70 };
+		unsigned seed = 1;
+#define RND() ((seed = seed * 1103515245u + 12345u) >> 8 & 0xffff) / 65536.0f
+		memset(&f, 0, sizeof(f));
+		dm_init(&f, 0.04f);
+		dm_accel(&f, acc);
+		for (int i = 0; i < 400; i++) {
+			float th = acosf(1 - 1.4f * RND()), ph = 6.2832f * RND(), m[3];
+			float u[3] = { sinf(th) * cosf(ph), sinf(th) * sinf(ph), cosf(th) };
+			for (int j = 0; j < 3; j++)
+			{
+				float n1 = RND(), n2 = RND(), n3 = RND();
+				m[j] = c0[j] + 48 * u[j] + (n1 + n2 + n3 - 1.5f) * 2;	/* ~1 uT sd */
+			}
+			if (i == 100 || i == 250) {	/* outliers: rejected, never in the ring */
+				float o[3] = { 300, 0, 0 }, j2[3] = { m[0] + 80, m[1], m[2] };
+				ok = dm_mag(&f, o) == -1 && dm_mag(&f, j2) == -1;
+				fails += !ok;
+			}
+			dm_mag(&f, m);
+		}
+		float b[3];
+		dm_mag_bias(&f, b);
+		float e = sqrtf((b[0] - c0[0]) * (b[0] - c0[0]) + (b[1] - c0[1]) * (b[1] - c0[1]) +
+		    (b[2] - c0[2]) * (b[2] - c0[2]));
+		ok = f.cal.have_cal && e < 2 && fabsf(f.cal.r - 48) < 2 && dm_mag_accuracy(&f) >= 1;
+		printf("%s sphere fit: bias %.2f,%.2f,%.2f err %.2f r %.2f res %.2f acc %d n %d\n", ok ? "ok  " : "FAIL",
+		    b[0], b[1], b[2], e, f.cal.r, f.cal.res, dm_mag_accuracy(&f), f.cal.n);
+		fails += !ok;
+		/* heading after the fit: flat, top east */
+		const float east[3] = { -20, 0, -40 };
+		float m[3] = { east[0] + c0[0], east[1] + c0[1], east[2] + c0[2] }, ring_n = f.cal.ring_n;
+		f.mag_seeded = 0;
+		for (int i = 0; i < 500; i++) {
+			dm_mag(&f, m);
+			dm_gyro(&f, g0, 1000000ull + i * 192000ull, 19200000.0);
+		}
+		dm_report2(&f, 1, 0, &r);
+		check("after the fit, top east: heading", heading(&r), 90, 1);
+		ok = f.cal.ring_n == ring_n + 1;
+		printf("%s still phone adds one ring sample (%d)\n", ok ? "ok  " : "FAIL", f.cal.ring_n);
+		fails += !ok;
+		/* save/load round trip; an old box file is ignored */
+		const char *path = "out/magcal-test.txt";
+		struct dm_fusion f2;
+		memset(&f2, 0, sizeof(f2));
+		ok = !dm_magcal_save(&f, path) && !dm_magcal_load(&f2, path) && fabsf(f2.cal.c[1] - f.cal.c[1]) < 0.01f &&
+		    f2.cal.acc == f.cal.acc;
+		FILE *fp = fopen(path, "w");
+		fprintf(fp, "min -110.5 -115.0 -187.3 max 24.5 1.8 -11.2\n");
+		fclose(fp);
+		memset(&f2, 0, sizeof(f2));
+		ok = ok && dm_magcal_load(&f2, path) == -1 && !f2.cal.have_cal;
+		printf("%s magcal fit line round trip, old min/max box ignored\n", ok ? "ok  " : "FAIL");
+		fails += !ok;
+		/* a still phone (one orientation, noise only): no fit */
+		memset(&f, 0, sizeof(f));
+		dm_init(&f, 0.04f);
+		for (int i = 0; i < 2000; i++) {
+			float n1 = RND(), n2 = RND(), n3 = RND();
+			float m1[3] = { -20 + (n1 - 0.5f) * 12, 88 + (n2 - 0.5f) * 12, -70 + (n3 - 0.5f) * 12 };
+			dm_mag(&f, m1);
+		}
+		ok = !f.cal.have_cal && dm_mag_accuracy(&f) == -1;
+		printf("%s still phone: no fit (ring %d)\n", ok ? "ok  " : "FAIL", f.cal.ring_n);
+		fails += !ok;
+		/* heading low-pass: a 90 deg step across north is reached smoothly (wrap-aware) */
+		memset(&f, 0, sizeof(f));
+		dm_init(&f, 0.04f);
+		dm_accel(&f, acc);
+		f.cal.have_cal = 1, f.cal.acc = 2;
+		dm_report2(&f, 19200000, 80, &r);	/* q = identity: heading 270 + yaw knob */
+		dm_report2(&f, 19200000 + 1920000, 110, &r);	/* 0.1 s later the target is 30 deg ahead */
+		float h1 = r.heading;
+		for (int i = 2; i < 30; i++)
+			dm_report2(&f, 19200000 + i * 1920000ull, 110, &r);
+		ok = h1 > 355 && h1 < 360 && fabsf(r.heading - 20) < 0.5f;
+		printf("%s heading low-pass across north: %.1f after 0.1 s, %.1f after 2.9 s\n", ok ? "ok  " : "FAIL", h1,
+		    r.heading);
+		fails += !ok;
+	}
 	/* O13: interest from the status text (devmotion8) and the 5 s hold */
 	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
 	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"

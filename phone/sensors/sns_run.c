@@ -309,6 +309,9 @@ static int start(void)
 	env.orient = 1;
 	last_want = 0;
 	dm_init(&dm, 0.04f);
+	e = getenv("SNS_HEADING_LP");	/* dm7: heading low-pass, 0 = off */
+	if (e && !strcmp(e, "0"))
+		dm.cal.heading_tc = 0;
 	e = getenv("SNS_DM_TYPE");
 	dm_type_env = e && (!strcmp(e, "2") || !strcmp(e, "3")) ? atoi(e) : 0;
 	if (dm_env)
@@ -353,8 +356,8 @@ static int follow(void)
 	if (dm_now != dm_want) {
 		printf("sns: devmotion fusion %s (%s)\n", dm_now ? "on" : "off", dm_why);
 		if (dm_now)
-			dm_init(&dm, 0.04f);	/* keeps the box and the SEE biases */
-		else if (dm.have_cal && dm_magcal_save(&dm, MAGCAL_PATH))	/* O13: save on stop */
+			dm_init(&dm, 0.04f);	/* keeps the fit and the SEE biases */
+		else if (dm.cal.have_cal && dm_magcal_save(&dm, MAGCAL_PATH))	/* O13: save on stop */
 			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
 	}
 	dm_want = dm_now;
@@ -512,7 +515,7 @@ void sns_tick(const struct sns_link_ops *ops)
 		dm_yaw = y;
 		dm_last_yaw = now;
 	}
-	if (dm_env && dm.have_cal && now - dm_last_save >= 30000) {	/* dm2: keep the hard-iron box across reboots */
+	if (dm_env && dm.cal.have_cal && now - dm_last_save >= 30000) {	/* dm2/dm7: keep the hard-iron fit across reboots */
 		if (dm_last_save && dm_magcal_save(&dm, MAGCAL_PATH))
 			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
 		dm_last_save = now;
@@ -533,13 +536,13 @@ void sns_tick(const struct sns_link_ops *ops)
 		if (dm_env)
 			printf(", dm %s (%s)", dm_want ? "on" : "off", dm_why);	/* O13 */
 		if (dm_env) {
-			float b[3], sp[3];
-			dm_mag_bias(&dm, b, sp);
-			printf(", devmotion %llu, dm type %d acc %d cal %s st %d bias %.1f,%.1f,%.1f span %.1f,%.1f,%.1f "
-			    "yaw %.1f gcal st %d %.4f,%.4f,%.4f", (unsigned long long)dm_written, dm_type_last,
-			    dm_mag_accuracy(&dm), dm_mag_cal_dsp(&dm) ? "dsp" : "box", dm.see_mag_st, b[0], b[1], b[2],
-			    sp[0], sp[1], sp[2], dm_yaw, dm.see_gyro_st, dm.see_gyro_bias[0], dm.see_gyro_bias[1],
-			    dm.see_gyro_bias[2]);
+			float b[3];
+			dm_mag_bias(&dm, b);
+			printf(", devmotion %llu, dm type %d acc %d cal %s r %.1f res %.2f n %d ring %d bias %.1f,%.1f,%.1f "
+			    "st %d yaw %.1f gcal st %d %.4f,%.4f,%.4f", (unsigned long long)dm_written, dm_type_last,
+			    dm_mag_accuracy(&dm), dm_mag_cal_dsp(&dm) ? "dsp" : dm.cal.have_cal ? "fit" : "none", dm.cal.r,
+			    dm.cal.res, dm.cal.n, dm.cal.ring_n, b[0], b[1], b[2], dm.see_mag_st, dm_yaw, dm.see_gyro_st,
+			    dm.see_gyro_bias[0], dm.see_gyro_bias[1], dm.see_gyro_bias[2]);
 		}
 		printf("\n");
 		last_print = now;

@@ -51,10 +51,22 @@ _Static_assert(offsetof(struct dm_report2, heading) == 0x44, "dm_report2 heading
 _Static_assert(offsetof(struct dm_report2, heading_acc) == 0x48, "dm_report2 heading_acc");
 _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bias");
 
-/* dm2: hard-iron calibration accuracy from the per-axis span of the min/max box (every axis must reach it) */
-#define DM_MAG_SPAN_LOW 40.0f	/* uT: accuracy 0 */
-#define DM_MAG_SPAN_MED 60.0f	/* 1 */
-#define DM_MAG_SPAN_HIGH 80.0f	/* 2 */
+/*
+ * dm7: online hard-iron calibration, a least-squares sphere fit over a ring of decimated raw samples (model: Google's
+ * contexthub mag_cal.c, written anew). Replaces the dm2 min/max box, which only grew and kept a wrong seed.
+ */
+#define DM_MAG_RING 300		/* samples kept */
+#define DM_MAG_DECIM 5.0f	/* uT: a sample enters the ring only this far from the last one that did */
+#define DM_MAG_FIT_MIN 40	/* samples needed for a fit */
+#define DM_MAG_FIT_EVERY 20	/* new ring samples between fits (~2 s while turning) */
+#define DM_MAG_COVER 30.0f	/* uT: the ring's spread needed in every axis */
+#define DM_MAG_COVER_GOOD 50.0f	/* uT: spread for accuracy 2 */
+#define DM_MAG_R_MIN 25.0f	/* uT: accepted fit radius (Earth's field is 25-65 uT) */
+#define DM_MAG_R_MAX 70.0f
+#define DM_MAG_RES_MAX 4.0f	/* uT: RMS residual for accuracy 1 */
+#define DM_MAG_RES_GOOD 2.0f	/* uT: for accuracy 2 */
+#define DM_MAG_STEP 10.0f	/* uT: a bias change this big needs two consecutive fits that agree */
+#define DM_HEADING_TC 0.3f	/* s: low-pass of the published heading @0x44 (SNS_HEADING_LP=0: off) */
 #define DM_MAG_MAX 200.0f	/* uT: |m| above this is an outlier (Earth's field is 25-65 uT) */
 #define DM_MAG_JUMP 60.0f	/* uT: a step this big from the last sample is an outlier */
 
@@ -66,8 +78,20 @@ struct dm_fusion {
 	int have_acc, have_gyro;
 	uint64_t last_ts;	/* last gyro update, ticks */
 	float mag[3];		/* dm2: last raw mag, uT, device frame */
-	float mag_min[3], mag_max[3];	/* hard-iron box (valid when have_cal) */
-	int have_mag, have_cal, mag_seeded;
+	int have_mag, mag_seeded;
+	/* dm7: sphere-fit calibration (survives dm_init); have_cal: fit_c is the bias */
+	struct dm_magcal {
+		float ring[DM_MAG_RING][3];
+		int ring_n, ring_i, ring_new;
+		int have_cal, acc, n;		/* acc 0..2; n: samples in the accepted fit */
+		float c[3], r, res;
+		int have_pend;			/* a > DM_MAG_STEP change waiting for a second fit */
+		float pend[3];
+		float heading_tc;		/* s, 0 = no heading low-pass */
+	} cal;
+	float hd_out;			/* dm7: low-passed heading */
+	uint64_t hd_ts;
+	int hd_have;
 	/* dm5: SEE's own mag_cal/gyro_cal biases (survive dm_init); the mag one replaces the box while status >= 1 */
 	float see_mag_bias[3], see_gyro_bias[3];
 	int see_mag_st, see_gyro_st;	/* -1 none yet (set by dm_init), else SEE status 0-3 */
@@ -79,19 +103,21 @@ void dm_accel(struct dm_fusion *f, const float a[3]);
 void dm_gyro(struct dm_fusion *f, const float g[3], uint64_t ts, double ticks_per_s);
 /* yaw_deg: test knob, extra rotation about the reference z axis (+ = heading increases, clockwise from above) */
 void dm_report3(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report3 *r);
-/* dm2: one raw mag sample (uT); updates the hard-iron box (outliers rejected). Returns 0 kept, -1 rejected. */
+/* dm2: one raw mag sample (uT); dm7: feeds the sphere-fit ring (outliers rejected). Returns 0 kept, -1 rejected. */
 int dm_mag(struct dm_fusion *f, const float m[3]);
 int dm_mag_accuracy(const struct dm_fusion *f);	/* -1 uncalibrated, 0..2 */
-void dm_mag_bias(const struct dm_fusion *f, float b[3], float span[3]);
+void dm_mag_bias(const struct dm_fusion *f, float b[3]);
+/* dm7: one sphere fit over the samples (exposed for tests): 0 ok (c, r, rms residual), -1 singular */
+int dm_sphere_fit(const float (*m)[3], int n, float c[3], float *r, float *res);
 /* dm5: SEE calibration events (bias uT or rad/s, status 0 unreliable .. 3 high) */
 void dm_mag_cal_bias(struct dm_fusion *f, const float b[3], int status);
 void dm_gyro_cal_bias(struct dm_fusion *f, const float b[3], int status);
-int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: the box */
+int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: the fit */
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
 float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */
 #define DM_STATUS_HEADING 0x0100
-void dm_report2(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r);
+void dm_report2(struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report2 *r);
 
 /*
  * O13: run the fusion only while a client wants device motion (backboardd keeps the services open at
