@@ -16,6 +16,10 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 12:45 px1: proximity service on (sweetmotion=0x3f) still crash-loops backboardd
+- kernel121 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetmotion=0x3f: "exec backboardd" x11 in ~130 s (every ~11 s from 23.5 s); "-[NSNull applyUIMode:]: unrecognized selector", NSInvalidArgumentException (69 lines), liblog_aop lines; black screen + spinner. backboardd opened SweetHIDProx (1 client), read IOCFPlugInTypes / IOClassNameOverride / QueueSize (absent). The 2026-10-26 fixes (DisplayIntegrated, ProtectedAccess, SensorPropertySupported, initial far event) don't help. Back on 0x37: backboardd stable.
+- New tool phone/tools/proxon.m (479fc5f: BKSHIDServicesRequestProximityDetectionMode on/off + active/near getters) for the test once prox loads. Next: backboardd disassembly for the NSNull source (investigator).
+
 ### 2026-10-30 09:05 Auto-brightness PARKED (~2 h): lux reaches iOS and AAB ramps, but no path writes the steps to our panel
 - bl3 (kernel115, new arch): backboardd "Modules not ready: Caching DisplayBrightnessFadePeriod property" and no later ready line; 0 SWEET BL lines all boot. RE (research/notes/ambient-light.md "modules not ready"): in new-arch mode BLControl builds the container from QuartzCore's CADisplay brightness control (CBBrtControl initWithCABrightnessControl:), and its modules start only when CA reports brightness capabilities or sends brightnessNotificationAttached: CA never does here. Our backlight property types all match what CoreBrightness reads.
 - Legacy mode (kernel113 / sweetblnew=0): AAB runs (real ramps after autobright 0/1, "begin ramping L: 105.56 -> 399.41"), but the legacy fade only writes the slider's brightness, never AAB's L (ramp output path).
