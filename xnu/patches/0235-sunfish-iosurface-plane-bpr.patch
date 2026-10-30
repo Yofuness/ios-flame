@@ -1,0 +1,53 @@
+From 897fe674b241c4dcd439fe749d8bf9c7136fea2b Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 00:26:34 -0400
+Subject: [PATCH] sunfish: IOSurface lock result plane bytes per row at +0x10,
+ sweetplanebpr=0 off (ios-redfin 0927, MIT) (0235)
+
+---
+ iokit/Kernel/arm/SweetSurface.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 0826fcd..c1bbd16 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -34,6 +34,7 @@
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOLocks.h>
+ #include <IOKit/system.h>
++#include <pexpert/pexpert.h>
+ #include <libkern/c++/OSArray.h>
+ #include <libkern/c++/OSDictionary.h>
+ #include <libkern/c++/OSNumber.h>
+@@ -792,6 +793,12 @@ sweet_surface_fill_result(SweetSurface *s, SweetSurfaceRef *ref, uint8_t *out)
+ 	put32(out, 0x44, s->cacheMode);
+ 	put32(out, 0x50, s->parentID);
+ 	put32(out, 0x54, 1);
++	static int planeBpr = -1;
++	if (planeBpr < 0) {
++		uint32_t v = 1;
++		PE_parse_boot_argn("sweetplanebpr", &v, sizeof(v));
++		planeBpr = v != 0;
++	}
+ 	for (uint32_t i = 0; i < s->planeCount; i++) {
+ 		uint8_t *p = out + 0x68 + i * 0x80;
+ 		const struct sweet_surface_plane *pl = &s->planes[i];
+@@ -799,6 +806,14 @@ sweet_surface_fill_result(SweetSurface *s, SweetSurfaceRef *ref, uint8_t *out)
+ 		put32(p, 0x04, pl->height);
+ 		put32(p, 0x08, pl->bytesPerRow);
+ 		put32(p, 0x0c, pl->offset);
++		/*
++		 * 0235 (ios-redfin 0927, MIT): IOSurface.framework (16.7) reads a plane's bytes per row at
++		 * +0x10 (IOSurfaceGetBytesPerRowOfPlane). Without it every 420f/420v plane has 0 bytes per
++		 * row (camera pictures drawn into their first row, VideoToolbox -12902). sweetplanebpr=0 off.
++		 */
++		if (planeBpr) {
++			put32(p, 0x10, pl->bytesPerRow);
++		}
+ 		put32(p, 0x14, pl->size);
+ 		memcpy(p + 0x18, &pl->bytesPerElement, 2);
+ 		p[0x1a] = pl->elementWidth;
+-- 
+2.56.0
+

@@ -1,0 +1,43 @@
+From 80bbcde0ac1f04701eb86f983d8f0c935f0d57a8 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 00:26:16 -0400
+Subject: [PATCH] sunfish: AppleCLCD DisplayPipePlaneBaseAlignment as a
+ dictionary, sweetclcdalign=0 off (ios-redfin 0925, MIT) (0234)
+
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 80acd56..f9960bd 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -326,7 +326,24 @@ AppleCLCD::start(IOService *provider)
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+-	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
++	/*
++	 * 0234 (ios-redfin 0925, MIT): a dictionary { PlaneBaseAlignmentLinear = 64 }, as on an iPhone's
++	 * AppleCLCD. VideoToolbox's FigGetAlignmentForIOSurfaceOutputToDisplayService takes
++	 * CFDictionaryGetValue(property, "PlaneBaseAlignmentLinear"): on a number mediaserverd dies
++	 * ("-[__NSCFNumber objectForKey:]") when Camera.app's preview starts. sweetclcdalign=0: the old number.
++	 */
++	uint32_t alignDict = 1;
++	PE_parse_boot_argn("sweetclcdalign", &alignDict, sizeof(alignDict));
++	OSDictionary *align = alignDict ? OSDictionary::withCapacity(1) : NULL;
++	OSNumber *linear = alignDict ? OSNumber::withNumber(64ULL, 32) : NULL;
++	if (align != NULL && linear != NULL) {
++		align->setObject("PlaneBaseAlignmentLinear", linear);
++		setProperty("DisplayPipePlaneBaseAlignment", align);
++	} else {
++		setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
++	}
++	OSSafeReleaseNULL(linear);
++	OSSafeReleaseNULL(align);
+ 	registerService();
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+-- 
+2.56.0
+

@@ -38,7 +38,14 @@ for a in "$@"; do
 done
 cmdline="$base $*"
 echo "$cmdline" > "$P/$name.cmdline"
-python3 -I tools/mkpayload.py "$kernel" "$P/sunfish-hi.adt" "$P/$name.payload" --cmdline "$cmdline" --gpufw "${GPUFW:-$PWD/../restore/fw/gpu}" >/dev/null
+# CAMERA=1: ADT with /arm-io/isp + /product/camera flash (mkadt.py --camera; Camera.app prerequisites,
+# camera.md); default the usual work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.
+adt=${ADT:-$P/sunfish-hi.adt}
+if [ "${CAMERA:-0}" = 1 ]; then
+	adt=$P/sunfish-hi-camera.adt
+	python3 -I tools/mkadt.py "$adt" --highmem --camera 2>/dev/null
+fi
+python3 -I tools/mkpayload.py "$kernel" "$adt" "$P/$name.payload" --cmdline "$cmdline" --gpufw "${GPUFW:-$PWD/../restore/fw/gpu}" >/dev/null
 shim/build.sh "$P/$name.payload" "$P/$name.img" >/dev/null
 echo "$(date +%T) built $name.img; waiting for fastboot"
 until fastboot devices | grep -q fastboot; do sleep 2; done

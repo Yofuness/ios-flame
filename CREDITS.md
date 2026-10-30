@@ -62,6 +62,8 @@ what you need to fetch yourself.
   `phone/camera/camera_isp.c`, `camera_isp.h` and `redwood_camera.h` are copied verbatim from their
   `phone/audio/` (MIT); `phone/camera/camisp.c` drives them.
   `tools/sunfish-camtab.py` is adapted from their `tools/redfin-camtab.py` (camx module parser).
+  `phone/camera/camera_avtest.m` is copied from their `phone/audio/camera_avtest.m`; `tools/mkadt.py --camera`
+  (/arm-io/isp, /product/camera) follows their `tools/mkadt.py`; xnu 0234/0235 port their 0925/0927 (MIT).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
   - Google's factory image, AOSP `mkbootimg` and `avbtool` (Apache 2.0)
