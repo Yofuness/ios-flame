@@ -1747,7 +1747,12 @@ int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, in
 			printf("camrx: trap verdict: %s; buffer/guard nonzero %llu/%llu (expected 0/0)\n",
 			       tf ? "fault caught (SID above)" : "NO fault in the trap bank: the IFE stream is not one of the 3 SMRs",
 			       (unsigned long long)nf, (unsigned long long)ng);
-		bad = trap ? (!tf || nf || ng) : ((fsr & 0x800001feu) || ng);
+		/* cam16-cam24: the WM always writes ~4.8 lines (12096 B) past 2016x1512 (extra/embedded lines); only
+		 * writes beyond that first 16 KB of the guard count as a fault */
+		uint64_t nfar = nonzero(cap.pa + addr_off + FRAME_BYTES + 0x4000, cap.len - addr_off - FRAME_BYTES - 0x4000);
+		if (ng && !nfar)
+			printf("camrx: guard writes stay within the expected extra lines (+16 KB): ok\n");
+		bad = trap ? (!tf || nf || ng) : ((fsr & 0x800001feu) || nfar);
 		if (save_frame(cap.pa + addr_off, out)) {
 			printf("camrx: writing %s failed\n", out);
 			bad = 1;

@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:45 cam24 (kernel110, sweetse9=2 sweetcampmic=2): 0233 makes camd ~6x faster
+- Battery 4440 mV; boot OK. `camclient -n 300`: first frame 6.26 s after START, **22.91 fps read** (was 4.0), seq 1..480 (180 gaps), 0 torn, published 300, dropped 3; copy_us bimodal ~4 ms / 34-43 ms (was ~276 ms); mean byte ~24. Teardown clean. Regression on kernel110: `--stream 5` 60.00 fps 0 faults; `--capture` full frame (0 zero 1 KB blocks). 3 min stable, no reset.
+- The capture script didn't fetch the frame: camrx failed the run on the ~12 KB "guard" writes (the ~4.8 extra lines the WM always writes). Fixed: only guard writes beyond +16 KB fail a capture.
+- kernel110 is the camera kernel now (boot with sweetse9=2 sweetcampmic=2).
+
 ### 2026-10-31 04:30 Stage f symbol check (read-only, research/notes/camera-stage-f-symbols.md)
 - 49 of 53 symbols redfin's camera_device.c / inject_media.c need are in our dyld cache: 33/36 C exports (CMDerivedObjectCreate, CMBaseObjectGetDerivedStorage, FigCaptureDeviceGetClassID, FigCaptureStreamGetClassID, VT encoder calls, port types, 20 metadata keys in CMCaptureCore), 16/16 ObjC classes/methods (BWFigCaptureDeviceVendor +sharedCaptureDeviceVendor / -initWithDeviceCreateFunction:, BWNodeOutput emitSampleBuffer:, ...). Missing: 4 optional metadata keys (AWBCCT, ColorTemperature, FocusPosition, LensPosition), which camera_device.c treats as NULL. kFigCaptureSampleBufferAttachmentKey_MetadataDictionary unconfirmed (lookup timed out; stills need it: watch for "metadata disabled" in the f2 log).
 - Stream class vtable: -[BWFigCaptureStream start]/stop call slots +0x8/+0x10 of the class's third word = redfin's layout. Device class version/slots inferred from the same build (16.7.x). Risk of loading the camera code into mediaserverd: low.
