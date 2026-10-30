@@ -1,0 +1,74 @@
+From 37c611c9ed2e1dfbdb33fcebd6bcd918e804f88d Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 02:56:52 -0400
+Subject: [PATCH] sunfish: touch idle status line every 30 s without touches,
+ sweettouchlog=0 off (B36) (0236)
+
+---
+ bsd/dev/sweet_touch.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 6a33392..33b1c8e 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -634,9 +634,38 @@ stfts_run(void)
+ 		return;
+ 	}
+ 	unsigned errors = 0, events = 0, ticks = 0;
++	/*
++	 * 0236 (B36): every 30 s without a touch event, one status line (IRQ-low
++	 * passes, good FIFO reads, read errors, last event byte, SE IRQ status,
++	 * IRQ pin level). sweettouchlog=0 off.
++	 */
++	unsigned idle_log = 1, irqs = 0, reads = 0, last_irqs = 0, last_reads = 0;
++	uint8_t last_ev = 0;
++	bool touched = false;
++	(void)PE_parse_boot_argn("sweettouchlog", &idle_log, sizeof(idle_log));
++	uint64_t idle_t0 = mach_absolute_time(), idle_ival;
++	nanoseconds_to_absolutetime(30ull * NSEC_PER_SEC, &idle_ival);
+ 	while (!st.dead) {
+ 		uint8_t ev[8];
+ 		bool poll = (++ticks % 12u) == 0;
++		if (idle_log) {
++			uint64_t now = mach_absolute_time();
++			if (now - idle_t0 >= idle_ival) {
++				if (!touched) {
++					printf("SWEET TOUCH: idle 30 s: irq %u (+%u), reads %u (+%u), errors %u, "
++					    "last status 0x%02x se 0x%x, gpio irq level %u\n",
++					    irqs, irqs - last_irqs, reads, reads - last_reads, errors, last_ev,
++					    st.irq_status, touch_rd(st.gpio, TOUCH_GPIO_IO(STFTS_PIN_IRQ)) & 1u);
++				}
++				idle_t0 = now;
++				touched = false;
++				last_irqs = irqs;
++				last_reads = reads;
++			}
++			if (!(touch_rd(st.gpio, TOUCH_GPIO_IO(STFTS_PIN_IRQ)) & 1u)) {
++				++irqs;
++			}
++		}
+ 		while ((poll || !(touch_rd(st.gpio, TOUCH_GPIO_IO(STFTS_PIN_IRQ)) & 1u)) && !st.dead) {
+ 			poll = false;
+ 			if (stfts_event(ev)) {
+@@ -645,12 +674,17 @@ stfts_run(void)
+ 				}
+ 				break;
+ 			}
++			++reads;
++			last_ev = ev[0];
+ 			if (ev[0] == 0 || ev[0] == 0xffu) {
+ 				break;
+ 			}
+ 			if (events++ < 32) {
+ 				stfts_log("first", ev);
+ 			}
++			if (ev[0] == STFTS_EVT_ENTER || ev[0] == STFTS_EVT_MOTION || ev[0] == STFTS_EVT_LEAVE) {
++				touched = true;
++			}
+ 			stfts_handle(ev);
+ 		}
+ 		touch_wait(8);
+-- 
+2.56.0
+
