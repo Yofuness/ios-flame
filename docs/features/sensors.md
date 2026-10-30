@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:30 The user: Compass still jumps; lines up with the 8 Pro only when facing east. Mirror ruled out; bias + tilt suspected
+- Trace work/hdg-dm10.txt (931 lines, T 110-898): over 3 s windows with |dh| > 15: published h and hmag move the same way in 25 of 26 (e.g. 140/128, -170/-169, 91/104), so the mag is not mirrored (idea refuted; h includes a correction toward hmag, but k = 0.2/s while turning fast can't flip a 100+ deg turn).
+- Guesses, not measured: (1) xy hard-iron error of several uT: horizontal field under the webcam was only ~9 uT with the fit of the time (dip ~79 deg; ~18-20 uT expected from memory); a bias error makes the heading error vary with direction, near zero at two headings. (2) Tilt compensation from 0.2 s low-passed accel: at this dip a 5 deg tilt error gives ~14 deg heading error, so hand motion = jumps; use the gyro-stabilised gravity from q instead. Rest noise: hmag spans 108-127 at rest (dm9).
+- Change of method: record raw accel/gyro/mag once (/var/local/motion-dump.csv) and tune offline with a replay tool, instead of more hand tests.
+
 ### 2026-10-30 18:00 dm9: Compass heading steady at rest: complementary filter + gyro bias (port efafe97)
 - kernel127, 4458 mV, SSH 19 s. Phone still ~112 s (work/hdg-dm9b.txt, 224 lines): h 113.4..119.4, raw hmag 108.4..126.7, largest step in h 1.3 deg, mean |h-hmag| 2.4 deg, drift +0.1 deg. Status: "cal fit r 48.0 res 2.86 bias -35.1,-42.6,-62.9, mag gaps >200ms 0 >1s 0 max 20 ms, gate rej r 0 dip 0, gbias -0.0097,-0.0052,0.0052 still 0" (0.0052 rad/s = 0.3 deg/s about z; still read 0 in that sample, not understood).
 - The heading under the webcam moved to ~116 with the newer fit (r 48, res 2.86 from the walk; dm7's fit r 42, res 1.78 read 97-105), so the fit itself still varies by ~15 deg when the horizontal field is this small. The saved fit should probably not be replaced by a worse one (next idea, not done). The final screenshot showed the home screen (Compass was not in front at the end; not understood).
