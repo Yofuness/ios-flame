@@ -1,0 +1,104 @@
+/* from ios-redfin (MIT), phone/audio/redwood_camera.h */
+/*
+ * /dev/redwood-camera: the phone's wide camera for iOS (boot-arg cam=5; the kernel's bsd/dev/redwood_camera.c,
+ * whose bsd/sys/redwood_camera.h this is a copy of).
+ *
+ *   open()   the first one powers the sensor up and starts its frames (the sensor's mode: boot-arg
+ *            cam_mode, else the module file's 4000x3000 one); the last close puts everything down
+ *            again, and so does a second without a read.
+ *   read()   waits (at most a second) for the newest frame not read yet: a struct
+ *            redwood_camera_frame, then as many of the frame's bytes as the buffer has room for.
+ *            A buffer of the header's size learns the frame's size and nothing else is copied.
+ *            EIO when the camera has had a fault: it stays off for the rest of the run.
+ *   write()  commands: a struct redwood_camera_command, then what it says follows.
+ */
+#ifndef _SYS_REDWOOD_CAMERA_H_
+#define _SYS_REDWOOD_CAMERA_H_
+
+#include <stdint.h>
+
+#define REDWOOD_CAMERA_DEVICE           "/dev/redwood-camera"
+#define REDWOOD_CAMERA_MAGIC            "RWFRAME1"
+
+struct redwood_camera_frame {
+	char            magic[8];       /* REDWOOD_CAMERA_MAGIC */
+	uint32_t        header_bytes;   /* this structure's size: the frame's bytes follow */
+	uint32_t        width, height;  /* pixels */
+	uint32_t        stride;         /* bytes from one line to the next */
+	uint32_t        format;         /* 1: MIPI RAW10, four pixels in five bytes */
+	uint32_t        bayer;          /* the order of a 2x2 cell: 0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR */
+	uint32_t        black;          /* the black level, in 10-bit steps */
+	uint64_t        sequence;       /* the frame's number since the sensor started, from 1 */
+	uint64_t        time;           /* when the frame was done, in mach_absolute_time()'s units */
+	uint32_t        exposure_lines; /* the exposure it was taken with, in lines ... */
+	uint32_t        line_ns;        /* ... of this many nanoseconds */
+	uint32_t        gain;           /* the sensor's analog gain register ... */
+	uint32_t        gain_unity;     /* ... which is this for 1x */
+	uint32_t        gain_max;       /* the most it may be given */
+	uint32_t        frame_lines;    /* the frame's length in lines (frames a second: 1e9 / (frame_lines * line_ns)) */
+	uint32_t        frame_lines_min; /* the mode's own length: the shortest frame */
+	uint32_t        frame_lines_max; /* the longest frame it may be given */
+	uint32_t        margin;         /* exposure_lines is at most frame_lines - margin */
+	uint32_t        sensor;         /* which: 0 the macro, 1 the wide, 2 the front, 3 the ultra-wide camera */
+	uint32_t        focus;          /* the lens's position as last set, 0 (the furthest) to 1023: REDWOOD_CAMERA_NO_FOCUS where it
+	                                 * has no motor (or it does not answer) */
+	uint32_t        reserved[5];    /* (kernel 0929-0934) [0] REDWOOD_CAMERA_FLAG_*; [1]/[2] the start of frame, mach time, low/high
+	                                 * 32 bits; [3] the sensor's digital gain: unity | max << 16 (0: none); [4] the mode's frames a
+	                                 * second x 1000 */
+};
+
+#define REDWOOD_CAMERA_NO_FOCUS 0xffffffffu
+#define REDWOOD_CAMERA_FOCUS_MAX        1023u   /* focus: 0 infinity .. 1023 macro */
+
+/* reserved[] by index */
+#define REDWOOD_CAMERA_R_FLAGS          0
+#define REDWOOD_CAMERA_R_SOF_LO         1
+#define REDWOOD_CAMERA_R_SOF_HI         2
+#define REDWOOD_CAMERA_R_DGAIN          3
+#define REDWOOD_CAMERA_R_FPS_MILLI      4
+/* reserved[REDWOOD_CAMERA_R_FLAGS] */
+#define REDWOOD_CAMERA_FLAG_FLASH_LIT   (1u << 0)       /* exposed with the flash (or the FLASH pre-flash) on */
+#define REDWOOD_CAMERA_FLAG_LENS_MOVING (1u << 1)       /* the lens moved while some of its lines were exposed */
+#define REDWOOD_CAMERA_FLAG_MODE_CHANGED (1u << 2)      /* the first frame read after a sensor or mode change */
+
+enum {
+	REDWOOD_CAMERA_EXPOSURE = 1,    /* a: lines, b: gain, c: frame lines (0: the shortest that holds the exposure) */
+	REDWOOD_CAMERA_KEEP = 2,        /* a picture for the host: a width, b height, c stride, d format (1 the frame's RAW10, 2 NV12,
+	                                 * 3 BGRA); bytes follow */
+	REDWOOD_CAMERA_SENSOR = 3,      /* another sensor: a which (as in the frames' header), b its mode (~0: the usual one);
+	                                 * the frames stop, everything goes down, and the next read starts the other one */
+	REDWOOD_CAMERA_FOCUS = 4,       /* the lens to a: 0 (the furthest) to 1023, from the next frame or so */
+	REDWOOD_CAMERA_FLASH = 5,       /* (0933) a mA per channel (0: off; the kernel caps it), b frames to light (0: 1; the next full
+	                                 * frame on), c 1 = a metering pre-flash at the torch's current; lit frames carry FLASH_LIT */
+};
+
+/*
+ * (0931-0932) EXPOSURE's d: the sensor's digital gain, 256 = 1x, 0 = as it is (range in reserved[R_DGAIN]).
+ * SENSOR's c, the mode's class when b is ~0 (REDWOOD_CAMERA_MODE_ANY); the same sensor and mode again changes nothing.
+ * FOCUS's b: REDWOOD_CAMERA_FOCUS_MOVE, or _PARK (back to infinity a step at a time). No lens motor: focus stays NO_FOCUS.
+ */
+#define REDWOOD_CAMERA_MODE_ANY         0xffffffffu
+enum {
+	REDWOOD_CAMERA_CLASS_AUTO = 0,  /* the most pixels at 4:3, <= 31 fps, <= 13 MP */
+	REDWOOD_CAMERA_CLASS_PHOTO = 1, /* (the same) */
+	REDWOOD_CAMERA_CLASS_VIDEO = 2, /* 16:9, <= 4096 wide, >= 1600x900, >= 30 fps: the lowest rate, then the fewest pixels */
+	REDWOOD_CAMERA_CLASS_VIDEO60 = 3, /* the same from 60 fps (video where the sensor has none) */
+};
+enum { REDWOOD_CAMERA_FOCUS_MOVE = 0, REDWOOD_CAMERA_FOCUS_PARK = 1 };
+
+struct redwood_camera_command {
+	uint32_t        command;
+	uint32_t        bytes;          /* of what follows this structure */
+	uint32_t        a, b, c, d;
+};
+
+/* (the camera plug-in's names for the same: WS-B wrote against the plan's contract before 0929-0934) */
+#define REDWOOD_CAMERA_MODE_AUTO        REDWOOD_CAMERA_CLASS_AUTO
+#define REDWOOD_CAMERA_MODE_PHOTO       REDWOOD_CAMERA_CLASS_PHOTO
+#define REDWOOD_CAMERA_MODE_VIDEO       REDWOOD_CAMERA_CLASS_VIDEO
+#define REDWOOD_CAMERA_MODE_VIDEO60     REDWOOD_CAMERA_CLASS_VIDEO60
+#define REDWOOD_CAMERA_FLASH_LIT        REDWOOD_CAMERA_FLAG_FLASH_LIT
+#define REDWOOD_CAMERA_LENS_MOVING      REDWOOD_CAMERA_FLAG_LENS_MOVING
+#define REDWOOD_CAMERA_MODE_CHANGED     REDWOOD_CAMERA_FLAG_MODE_CHANGED
+
+#endif /* _SYS_REDWOOD_CAMERA_H_ */

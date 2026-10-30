@@ -59,6 +59,8 @@ what you need to fetch yourself.
   `audio_plugin.plist`) is their `phone/audio/` RedwoodAudio.driver, which is HackiOS's `userland/src/audio_plugin.c`
   (Copyright (c) 2026 OOSEX GANG, MIT, `phone/audio/LICENSE.HackiOS`), renamed with a new factory UUID;
   `tools/sunfish-install-audio.sh` follows their `tools/redfin-install-audio.sh`.
+  `phone/camera/camera_isp.c`, `camera_isp.h` and `redwood_camera.h` are copied verbatim from their
+  `phone/audio/` (MIT); `phone/camera/camisp.c` drives them.
   `tools/sunfish-camtab.py` is adapted from their `tools/redfin-camtab.py` (camx module parser).
 - **blacktop/darwin-xnu-build** (<https://github.com/blacktop/darwin-xnu-build>, MIT): the XNU build.
 - Fetched and built by the user, not in git:
