@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 03:40 e3: phone-side ISP runs (camisp, 7b4bc20; ios-redfin camera_isp.c, MIT)
+- phone/camera: camera_isp.c/.h + redwood_camera.h verbatim from redfin, camisp.c wraps a bare 2016x1512 RAW10 file in a redwood_camera_frame header (stride 2520, format 1, Bayer --bayer, default RGGB unverified, black 64 assumed). Needs only libc + libm.
+- Phone (/var/local/cam/frame.raw from cam22, night scene): binned 1008x756 **83.4 ms/frame** (~12 fps); full 2016x1512 NV12 **371.9 ms/frame**. Host (PC) 13.9 / 73.6 ms. Guess for the gap: CPU clocks low (no CPU governor yet, backlog). Stats: mean R/G/B 87.0/89.0/88.1 above black, AWB gains 1.022/1.000/1.010; AE numbers meaningless (no real exposure metadata yet).
+- On-device: /var/local/bin/camisp (phone tool; tools/build-userland-linux.sh builds it), /var/local/cam/isp.ppm + isp-full.nv12 (test output, not viewed).
+- Next: f (Camera.app): redfin's /dev/redwood-camera kernel device (0923) + sandbox extension (0924) vs a userland daemon; decide, then camera_device.c + inject_media.c into SunfishAudio.driver.
+
 ### 2026-10-31 03:20 cam22 (kernel109, cam20r boot): e1 DONE, continuous streaming 60.1 fps; e2 exposure/gain written (2e94b32)
 - `sunfish-cam-rx.sh --stream 10`: SOF 602 / done 601, **60.10 fps** (per second 60-61), late address 0, 0 trap/bank faults, GFSR 0, VIOLATION 0, COMP_ERROR 0, CSID 3810240/3810240; slots 3647329 / 3648057 nonzero, past the ring 0; last frame saved; late writes N; restored. 2 min stable.
 - `--stream 30`: SOF 1805 / done 1804, **60.13 fps**, no second below 60, 0 faults, past the ring 0, saved, restored; 3 min stable.
