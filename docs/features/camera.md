@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:20 cam7 (kernel108, same boot): stage c1 DONE, CSID-lite test pattern runs (camrx, ba7ebf7)
+- Base: `camid --addr 0x1a --keep`, `camclk pll2 on`. Before: cphy_rx/ife_lite_csid/ife_lite/csi0phytimer RCGs CMD 0x80000000 CFG 0; branches off. Refgen (read-only, offsets are guesses) BIAS_EN 0x4040404, BG_CTRL 0x1010101.
+- `camrx clocks on`: cphy_rx CFG 0x504 + ife_lite_csid 0x504 (384 MHz, PLL2 early/2.5), ife_lite 0x502 (320 MHz); RCG updates done; branches lite_cphy_rx 0x1, lite_csid 0x221, ife_lite 0x1 (none stuck).
+- CSID-lite HW_VERSION 0x20000000. `camrx tpg 2` (640x480 RAW10 colour bars, VC 0xa, 4 lanes, redfin 0921 values): 20 polls; **RX_PKTS 0 -> 205814** (~213 frames/s at ~482 packets/frame, a guess at the packet count), **bytes ping/pong 384000/384000 = exactly one 640x480 RAW10 frame**; SOF/EOF bits set in every poll (INPUT + SUBSAMPLED), RDI0_STATUS 0, CRC 0, ECC reads 0xffff (unverified: saturated or misread field). RX bits 0-7 and 14 latched (not decoded).
+- Cleanup: clocks off, `camclk off`, `camid --addr 0x1a` (GDSC collapse). No reset. Note: toybox on the phone has no `sync`.
+- Next (c2): PLL0 (Fabia, 1200 MHz) for csi0phytimer 300 MHz (DT), CSIPHY0 v1.2 4-lane init (redfin 0922), CSID RX from the PHY with the sensor streaming (camid needs a keep-streaming option).
+
 ### 2026-10-30 22:00 cam6 (kernel108, sweetse9=2 sweetcampmic=2, same boot): stage b DONE, the IMX363 streams
 - Tools: tools/sunfish-camtab.py (after ios-redfin's redfin-camtab.py; our module bin is "Parameter Parser V1.3.2", resolutionData 35 words vs redfin's 37) -> work/cam/imx363-mode8.txt (30 init + 82 mode 8 writes, all delays 0); camid `--stream FILE` (commit a55102c).
 - Modes in metric_imx363.bin (all 4-lane RAW10 0x2b, 82 writes): 0/7 4032x3024@30 552 Mb/s/lane; 1 4032x2272@30 432; 2 2016x1136@120 464; 3 2016x1136@240 828; 4 4032x2272@30 836; 5/6 4032x2272@60 836; 8 2016x1512@60.13 304 (2x2 bin, default); 9 2016x1136@60 (rate field 0).

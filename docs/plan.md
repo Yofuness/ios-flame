@@ -16,7 +16,7 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
 6. ▶ **Camera** (B17): plan research/notes/camera-port.md (6 stages); a2 + b DONE (MCLK 24 MHz, IMX363 streams ~62 fps;
-   boot sweetse9=2 sweetcampmic=2, `camid --addr 0x1a --stream`). Next: stage c, CSIPHY0 + CSID-lite (TPG first). (camera.md)
+   boot sweetse9=2 sweetcampmic=2, `camid --addr 0x1a --stream`). c1 DONE (CSID test pattern: full 640x480 frames). Next: c2, PLL0 + CSIPHY0 + sensor -> CSID. (camera.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
 IMX363/IMX355 sensors; 3-5 days).
 
