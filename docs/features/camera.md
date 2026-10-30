@@ -35,6 +35,14 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:15 cam2 (kernel108, no reboot; no sweetse9): PLL2 locks; MCLK0 branch stays off
+- camclk (commit c8633dc) installed. `pll2 on`: L=0x64, USER_CTL 0x30b, CONFIG_CTL 0x20000954, CONFIG_CTL_U 0x400003d6, then BYPASSNL/RESET_N/OUTCTRL; all read back; "pll2 locked, MODE 0xc0000006" (VCO 1920 MHz, aux 480 MHz). Lock Y.
+- Correction to cam1: the Agera PLL2 register offsets differ from Fabia; the as-read status0 was USER_CTL 0x1, USER_CTL_U 0x20000954, CONFIG_CTL 0x3d6, CONFIG_CTL_U 0x04000400 (reset values).
+- `camid --keep` stopped before any write: "SE9 clocks off (no GCC writes from here)": this boot had no `sweetse9=2`, so no sensor power/GDSC.
+- `mclk 0 24`: RCG update done (M 1, N 0xec, D 0xeb, CFG 0x2501 src 5 div 1; CMD 0x80000000), but "mclk0 branch stuck off (CBCR 0x80000001)". Guess (unverified): the TITAN_TOP GDSC is off without camid's power-up.
+- `camclk off`: CBCR 0x80000000, PLL2 off (lock 0, outctrl 0). No reset. The RCG keeps the 24 MHz config until reboot.
+- Next (cam3): boot kernel108 with sweetse9=2, `camid --keep`, `pll2 on`, `mclk 0 24`, re-read the ID.
+
 ### 2026-10-30 21:00 Camera port plan from ios-redfin; camcc read-only dump (cam1, kernel108)
 - Plan: research/notes/camera-port.md (redfin MIT: sweet_cam.c via patches 0919/0921-0934, software ISP camera_isp.c, FigCaptureDevice camera_device.c; same sensors/CSID-lite/IFE-lite/CSIPHY 1.2 addresses as ours; different camcc (sdmmagpie) and SMMU SIDs). Six stages, ~2-3 weeks.
 - cam1 (read-only): camcc base 0x0ad00000 (+0x10000); GCC_CAMERA_AHB_CBCR 0x10b008 = 0x1 (on). PLL0-4 (0x0..0x4000): MODE/L/ALPHA 0 (off, no lock); PLL0/1/3/4 identical reset-looking CONFIG (USER_CTL 0x4805, CONFIG_CTL 0x20485699), PLL2 different (USER_CTL 0x20000954, CONFIG_CTL 0x3d6). MCLK0-3 RCGs (0x5004+0x20n) off (CMD 0x80000000, CFG/M/N/D 0), CBCRs 0x80000000 (off). Linux camcc-sm7150.c: all Fabia; 24 MHz MCLK = pll2 OUT_AUX, M/N 1/20. Next: a camclk tool to configure/enable PLL2 + MCLK RCG at 24 MHz, then camid at 24 MHz.
