@@ -1145,7 +1145,11 @@ redwood_media_init(void)
 {
 	const char *name = getprogname();
 	size_t length = 0;
+	char line[96];
 
+	/* sunfish (cam26): which process loads the plug-in, and when (the gate line never appeared in cam25) */
+	snprintf(line, sizeof line, "plug-in loaded in %s (pid %d)\n", name != NULL ? name : "?", getpid());
+	camera_client_log(line);
 	if (name == NULL || strcmp(name, "mediaserverd") != 0) {
 		return;
 	}
