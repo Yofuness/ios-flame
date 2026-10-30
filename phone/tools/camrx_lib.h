@@ -5,15 +5,38 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#define FRAME_BYTES	3810240u	/* 2016 x 1512 RAW10 packed = CSID bytes ping/pong in cam8 */
-#define FRAME_W		2016
-#define FRAME_H		1512
-#define FRAME_STRIDE	2520
+#define REAR_FRAME_BYTES 3810240u	/* 2016 x 1512 RAW10 packed = CSID bytes ping/pong in cam8 */
+#define FRONT_FRAME_BYTES 1894200u	/* cam-f1: IMX355 mode 2, 1640 x 924 RAW10 packed (stride 2050) */
+#define FRAME_BYTES_MAX	REAR_FRAME_BYTES
 #define CAP_CO_PA	0x9cb00000ull	/* display carveout zero-copy slot 1 (SweetSurface SWEET_ZC_SLOT_PA(1)) */
 #define CAP_CO_LEN	0xB00000u	/* frame + guard */
-#define STREAM_CMD	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt"
-#define FRAME_EXTRA	12096u	/* cam21: ~4.8 lines of 2520 B past 2016x1512 */
 #define RING_N		2
+
+/*
+ * cam-f1: the sensor path, picked by cam_select() before anything runs (default rear). Rear: IMX363 mode 8 on
+ * CSIPHY0; front (--front): IMX355 mode 2 on CSIPHY2 (DT csiphy@ace4000, cell-index 2), its own phytimer RCG and
+ * csiphy/phytimer branches (camcc-sm7150.c csi2phytimer 0x604c, branches 0x6064/0x6068), CSID RX_CFG0 phy 2.
+ * CSID-lite 0, RDI0, IFE-lite WM0 and the SMMU SIDs are the same for both.
+ */
+struct cam_sensor {
+	const char *name;
+	int sensor;			/* camd frame header: 1 rear, 2 front */
+	unsigned w, h, stride, bytes;	/* RAW10 packed */
+	unsigned extra;			/* bytes the WM writes past the frame (embedded lines) */
+	unsigned mbps;			/* lane rate (settle count) */
+	unsigned phy;			/* CSIPHY index = CSID RX_CFG0 phy select */
+	uint32_t phy_base, timer_rcg, timer_cbcr, phy_cbcr;
+	const char *stream_cmd;		/* camrx's default sensor command */
+};
+extern const struct cam_sensor *cam;
+void cam_select(int front);
+
+#define FRAME_BYTES	(cam->bytes)
+#define FRAME_W		(cam->w)
+#define FRAME_H		(cam->h)
+#define FRAME_STRIDE	(cam->stride)
+#define FRAME_EXTRA	(cam->extra)
+#define STREAM_CMD	(cam->stream_cmd)
 #define PLACE_BYTES	((FRAME_BYTES + FRAME_EXTRA + 0xffffu) & ~0xffffu)
 #define STREAM_MAX_S	600
 

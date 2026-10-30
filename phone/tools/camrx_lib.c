@@ -1,7 +1,8 @@
 /*
  * camrx_lib: the camrx register code (clocks, CSIPHY0, CSID-lite RDI0, IFE-lite WM0, the camera SMMU banks, the
  * 2-slot stream ring) without main, shared by camrx (phone/tools/camrx.c: usage and the safety notes) and camd
- * (camera f1). Split out of camrx.c unchanged, but for the stream hooks (cam_stream_hooks, camrx_lib.h).
+ * (camera f1). Split out of camrx.c unchanged, but for the stream hooks (cam_stream_hooks, camrx_lib.h) and (cam-f1)
+ * the rear/front path selection (cam_select: CSIPHY0 or CSIPHY2, frame size).
  */
 #include <signal.h>
 #include <stdio.h>
@@ -34,6 +35,13 @@
 #define PHYTIMER0_RCG	0xad06004u	/* stage c2: written by phy on */
 #define CSIPHY0_CBCR	0xad06020u	/* camcc-sm7150.c:1189 (parent cphy_rx) */
 #define PHYTIMER0_CBCR	0xad0601cu	/* camcc-sm7150.c:1117 */
+#define PHYTIMER2_RCG	0xad0604cu	/* cam-f1: camcc-sm7150.c csi2phytimer_clk_src (same ftbl as csi0) */
+#define CSIPHY2_CBCR	0xad06068u	/* cam-f1: camcc_csiphy2_clk (parent cphy_rx) */
+#define PHYTIMER2_CBCR	0xad06064u	/* cam-f1: camcc_csi2phytimer_clk */
+/* the selected path's (cam_select) */
+#define PHYTIMER_RCG	(cam->timer_rcg)
+#define CSIPHY_CBCR	(cam->phy_cbcr)
+#define PHYTIMER_CBCR	(cam->timer_cbcr)
 #define LITE_CSID_CBCR	0xad0c038u
 #define LITE_CPHY_CBCR	0xad0c040u
 #define LITE_CBCR	0xad0c01cu
@@ -91,11 +99,13 @@
 #define TPG_COMMON_GEN	0x648
 
 /* CSIPHY0 (DT "qcom,csiphy-v1.2" @0xace0000; redfin maps 0x1000, the common block is at +0x800) */
-#define CSIPHY		0xace0000u
+#define CSIPHY0		0xace0000u
+#define CSIPHY2		0xace4000u	/* cam-f1: front IMX355 (DT csiphy@ace4000, reg size 0x2000; we map 0x1000 as rear) */
+#define CSIPHY		(cam->phy_base)
 #define CSIPHY_END	(CSIPHY + 0x1000)
-#define PHY_LANES	4
+#define PHY_LANES	4	/* both sensors (IMX355 0x0114 = 3 in its table) */
 #define PHY_LANE_MAP	0x3210u	/* guess: redfin's fallback; sunfish laneAssign not yet read from metric_imx363.bin */
-#define LINK_MBPS	304	/* IMX363 mode 8, per lane (camera.md cam6) */
+#define LINK_MBPS	(cam->mbps)	/* IMX363 mode 8 304 (camera.md cam6); IMX355 mode 2 360 (0x0820 = 1440 / 4) */
 #define TIMER_MHZ	300
 
 /* IFE-lite 0 (DT vfe-lite0 reg 0xacc4000 0x4000; offsets redfin 0921 / Linux cam_vfe_lite17x, notes section 1) */
@@ -146,17 +156,42 @@
 int dry;
 volatile sig_atomic_t stop;
 
+/* cam-f1: rear (default) and front paths; see camrx_lib.h */
+static const struct cam_sensor cam_rear = {
+	"rear IMX363 mode 8", 1, 2016, 1512, 2520, REAR_FRAME_BYTES, 12096u /* cam21: ~4.8 lines */, 304, 0,
+	CSIPHY0, PHYTIMER0_RCG, PHYTIMER0_CBCR, CSIPHY0_CBCR,
+	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt",
+};
+static const struct cam_sensor cam_front = {
+	"front IMX355 mode 2", 2, 1640, 924, 2050, FRONT_FRAME_BYTES, 5 * 2050u /* guess, as the rear's ~5 lines */,
+	360, 2, CSIPHY2, PHYTIMER2_RCG, PHYTIMER2_CBCR, CSIPHY2_CBCR,
+	"/var/local/bin/camid --front --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx355-mode2.txt",
+};
+_Static_assert(REAR_FRAME_BYTES == 2016 * 1512 * 10 / 8 && FRONT_FRAME_BYTES == 1640 * 924 * 10 / 8, "RAW10");
+_Static_assert(RING_N * ((REAR_FRAME_BYTES + 12096u + 0xffffu) & ~0xffffu) <= CAP_CO_LEN, "rear ring");
+_Static_assert(RING_N * ((FRONT_FRAME_BYTES + 5 * 2050u + 0xffffu) & ~0xffffu) <= CAP_CO_LEN, "front ring");
+const struct cam_sensor *cam = &cam_rear;
+
+void cam_select(int front)
+{
+	cam = front ? &cam_front : &cam_rear;
+	printf("camrx: path %s: CSIPHY%u %#x, %ux%u RAW10 (%u B), %u Mb/s/lane\n", cam->name, cam->phy, cam->phy_base,
+	       cam->w, cam->h, cam->bytes, cam->mbps);
+}
+
 static int allowed(uint32_t pa)
 {
 	static const uint32_t ok[] = {
 		CPHY_RX_RCG, CPHY_RX_RCG + 4, LITE_CSID_RCG, LITE_CSID_RCG + 4, LITE_RCG, LITE_RCG + 4,
 		LITE_CSID_CBCR, LITE_CPHY_CBCR, LITE_CBCR,
-		PHYTIMER0_RCG, PHYTIMER0_RCG + 4, CSIPHY0_CBCR, PHYTIMER0_CBCR,	/* stage c2 */
 		CAMNOC_RCG, CAMNOC_RCG + 4,	/* stage d */
 	};
 	for (unsigned i = 0; i < sizeof ok / sizeof ok[0]; i++)
 		if (pa == ok[i])
 			return 1;
+	/* stage c2; cam-f1: only the selected path's timer RCG, branches and CSIPHY (CSIPHY0 or CSIPHY2) */
+	if (pa == PHYTIMER_RCG || pa == PHYTIMER_RCG + 4 || pa == CSIPHY_CBCR || pa == PHYTIMER_CBCR)
+		return 1;
 	if (pa >= CSIPHY && pa < CSIPHY_END && !(pa & 3))	/* stage c2 */
 		return 1;
 	if (pa >= IFE && pa < IFE_END && !(pa & 3))	/* stage d */
@@ -227,7 +262,7 @@ static int csid_clocked(void)
 
 static int phy_clocked(void)
 {
-	return branch_on(CSIPHY0_CBCR) && branch_on(PHYTIMER0_CBCR);
+	return branch_on(CSIPHY_CBCR) && branch_on(PHYTIMER_CBCR);
 }
 
 static void pw(uint32_t off, uint32_t v, const char *why)	/* CSIPHY0 write */
@@ -290,9 +325,9 @@ int status(void)
 	show_rcg("cphy_rx", CPHY_RX_RCG);
 	show_rcg("ife_lite_csid", LITE_CSID_RCG);
 	show_rcg("ife_lite", LITE_RCG);
-	show_rcg("csi0phytimer", PHYTIMER0_RCG);
-	show_cbcr("csiphy0", CSIPHY0_CBCR);
-	show_cbcr("csi0phytimer", PHYTIMER0_CBCR);
+	show_rcg("csi0phytimer", PHYTIMER_RCG);
+	show_cbcr("csiphy0", CSIPHY_CBCR);
+	show_cbcr("csi0phytimer", PHYTIMER_CBCR);
 	show_cbcr("lite_cphy_rx", LITE_CPHY_CBCR);
 	show_cbcr("lite_csid", LITE_CSID_CBCR);
 	show_cbcr("ife_lite", LITE_CBCR);
@@ -573,15 +608,15 @@ int phy_on(int settle_arg)
 	       PHY_LANE_MAP);
 	stage("csi0phytimer rcg 300 MHz (PLL0 even 600 / 2)");
 	/* ftbl F(300000000, P_CAMCC_PLL0_OUT_EVEN, 2, 0, 0) (camcc-sm7150.c:501): div field 2*2-1 = 3, src 2 (map_0) */
-	wr(PHYTIMER0_RCG + 4, (rd32(PHYTIMER0_RCG + 4) & ~0x371fu) | 0x203, "csi0phytimer CFG src 2 div 3");
-	wr(PHYTIMER0_RCG, rd32(PHYTIMER0_RCG) | 1, "CMD UPDATE");
-	if (poll(PHYTIMER0_RCG, 1, 0, 500, 1000)) {
-		printf("camrx: csi0phytimer UPDATE stuck (CMD %#x), branches not enabled\n", rd32(PHYTIMER0_RCG));
+	wr(PHYTIMER_RCG + 4, (rd32(PHYTIMER_RCG + 4) & ~0x371fu) | 0x203, "csi0phytimer CFG src 2 div 3");
+	wr(PHYTIMER_RCG, rd32(PHYTIMER_RCG) | 1, "CMD UPDATE");
+	if (poll(PHYTIMER_RCG, 1, 0, 500, 1000)) {
+		printf("camrx: csi0phytimer UPDATE stuck (CMD %#x), branches not enabled\n", rd32(PHYTIMER_RCG));
 		return 1;
 	}
 	stage("csiphy0 + csi0phytimer branches");
-	static const struct { const char *n; uint32_t cbcr; } pb[] = {
-		{ "csi0phytimer", PHYTIMER0_CBCR }, { "csiphy0", CSIPHY0_CBCR },
+	const struct { const char *n; uint32_t cbcr; } pb[] = {
+		{ "csi0phytimer", PHYTIMER_CBCR }, { "csiphy0", CSIPHY_CBCR },
 	};
 	for (unsigned i = 0; i < N(pb); i++) {
 		wr(pb[i].cbcr, rd32(pb[i].cbcr) | 1, pb[i].n);
@@ -663,7 +698,7 @@ int phy_off(void)
 		printf("camrx: csiphy0 branches already off, CSIPHY not touched\n");
 	}
 	stage("csiphy0 + csi0phytimer branches off");
-	static const uint32_t cb[] = { CSIPHY0_CBCR, PHYTIMER0_CBCR };
+	const uint32_t cb[] = { CSIPHY_CBCR, PHYTIMER_CBCR };
 	for (unsigned i = 0; i < N(cb); i++) {
 		wr(cb[i], rd32(cb[i]) & ~1u, i ? "csi0phytimer off" : "csiphy0 off");
 		if (poll(cb[i], CBCR_CLK_OFF, CBCR_CLK_OFF, 200, 1000))
@@ -683,7 +718,8 @@ int rx_arm(void)
 	if (csid_reset())
 		return 1;
 	stage("csid rx from csiphy0 (4 lanes)");
-	cw(RX_CFG0, (PHY_LANES - 1) | PHY_LANE_MAP << 4 | 0u << 20, "RX_CFG0 4 lanes, lane map, phy 0");
+	cw(RX_CFG0, (PHY_LANES - 1) | PHY_LANE_MAP << 4 | cam->phy << 20,	/* cam-f1: phy 2 for the front */
+	   cam->phy ? "RX_CFG0 4 lanes, lane map, phy 2" : "RX_CFG0 4 lanes, lane map, phy 0");
 	cw(RX_CFG1, 1u << 6 | 1u, "RX_CFG1 ECC correction + MISR (0x41)");
 	rdi0_config(0);
 	printf("camrx: armed; RX_PKTS %u. Start the sensor stream now, then 'camrx rx report'\n", cr(RX_PKTS));
@@ -1348,8 +1384,8 @@ static int cap_precheck(void)
 		return 1;
 	}
 	if (branch_req("lite_csid", LITE_CSID_CBCR) || branch_req("lite_cphy_rx", LITE_CPHY_CBCR) ||
-	    branch_req("ife_lite", LITE_CBCR) || branch_req("csiphy0", CSIPHY0_CBCR) ||
-	    branch_req("csi0phytimer", PHYTIMER0_CBCR) || branch_req("cpas_ahb (camid --keep)", CPAS_AHB_CBCR) ||
+	    branch_req("ife_lite", LITE_CBCR) || branch_req("csiphy0", CSIPHY_CBCR) ||
+	    branch_req("csi0phytimer", PHYTIMER_CBCR) || branch_req("cpas_ahb (camid --keep)", CPAS_AHB_CBCR) ||
 	    branch_req("camnoc_axi (camid --keep)", CAMNOC_CBCR))
 		return 1;
 	show_rcg("camnoc_axi", CAMNOC_RCG);
@@ -1516,8 +1552,8 @@ static void guard_where(uint64_t pa, uint32_t len)
 	if (first < 0)
 		return;
 	printf("camrx: guard writes: first at +%ld, last at +%ld past the frame end (offsets %ld..%ld), in %u 4 KB "
-	       "pages; span = %.1f lines of 2520 B\n", first - (long)FRAME_BYTES, last - (long)FRAME_BYTES, first, last,
-	       pages, (last + 1 - (long)FRAME_BYTES) / 2520.0);
+	       "pages; span = %.1f lines of %u B\n", first - (long)FRAME_BYTES, last - (long)FRAME_BYTES, first, last,
+	       pages, (last + 1 - (long)FRAME_BYTES) / (double)FRAME_STRIDE, FRAME_STRIDE);
 }
 
 /* the carveout slot1 is ours only while the framebuffer's zero-copy mode is off */
@@ -1767,7 +1803,6 @@ int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, in
 /* ---- camera e1: continuous streaming into a 2-slot ring (redfin 0923 capture loop ~580-645) ---- */
 #define RDI0_SOF	(1u << 27)	/* IFE_IRQ_STATUS0 (redfin 0923, their r17 read 0x08000220; not in our notes) */
 #define WM0_DONE	1u		/* BUS_IRQ_STATUS1 (redfin 0923; our capture's buf done bit) */
-_Static_assert(RING_N * PLACE_BYTES <= CAP_CO_LEN, "ring does not fit carveout slot1");
 
 const struct cam_stream_hooks *stream_hooks;
 

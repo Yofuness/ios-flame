@@ -9,6 +9,9 @@ MODULE.bin: the camx sensor module file from the vendor image (default
 research/notes/camx/com.qti.sensormodule.metric_imx363.bin). It is Google's file, and so is anything made from
 it: both stay out of git (default output work/cam/imx363-modeN.txt; work/ is gitignored).
 Default mode 8: 2016x1512 @60, 2x2 binned, 4 lanes at 304 Mb/s (the lowest lane rate of the 10 modes).
+Front IMX355 (com.qti.sensormodule.primax_imx355.bin, output work/cam/imx355-modeN.txt): default mode 2,
+1640x924 @30, 2x2 binned, 4 lanes at 360 Mb/s. Its file leaves the lane rate word at 0; the rate is then taken
+from the mode's REQ_LINK_BIT_RATE_MBPS writes (0x0820/0x0821, all lanes together) divided by the lanes.
 
 The file ("Parameter Parser V1.3.2", sunfish; redfin's lito2 files are V2.0.0, same layout): a symbol table of
 0x48-byte records { id, name[32], kind, parent, offset, size } and a data area; offsets are into the data area.
@@ -28,6 +31,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BIN = os.path.join(ROOT, 'research/notes/camx/com.qti.sensormodule.metric_imx363.bin')
 DEFAULT_MODE = 8
+DEFAULT_MODES = {'imx363': 8, 'imx355': 2}
 RES_WORDS = 35
 
 
@@ -46,12 +50,15 @@ def load(path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='IMX363 register tables for camid --stream')
+    ap = argparse.ArgumentParser(description='IMX363/IMX355 register tables for camid --stream')
     ap.add_argument('module', nargs='?', default=DEFAULT_BIN)
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--out')
-    ap.add_argument('--mode', type=int, default=DEFAULT_MODE)
+    ap.add_argument('--mode', type=int)
     a = ap.parse_args()
+    sensor = next((n for n in DEFAULT_MODES if n in os.path.basename(a.module)), 'imx363')
+    if a.mode is None:
+        a.mode = DEFAULT_MODES[sensor]
     data, syms, order = load(a.module)
 
     def words(sid):
@@ -79,6 +86,11 @@ def main():
         sc = words(w[2])[:8]
         modes.append(dict(w=sc[4], h=sc[5], dt=sc[1], lanes=w[13], fps=fps, line=w[3], frame=w[4], pclk=w[8],
                           lrate=w[9], bin=(w[10], w[11]), regs=regsetting(w[21])))
+        m = modes[-1]
+        if not m['lrate'] and m['lanes']:
+            r = {x[0]: x[1] for x in m['regs']}
+            if 0x820 in r and 0x821 in r:
+                m['lrate'] = ((r[0x820] << 8) | r[0x821]) * 1000000 // m['lanes']
     tables, after, used = [], '', {}
     roles = {'regToRealGain': ['on', 'off', 'holdon', 'holdoff'], 'initSettings': ['init']}
     for sid in order:
@@ -98,7 +110,7 @@ def main():
         for k, m in enumerate(modes):
             print(f'  mode {k}: {m["w"]}x{m["h"]} @{m["fps"]:.2f} dt {m["dt"]:#x}, {m["lanes"]} lanes, '
                   f'{m["lrate"] / 1e6:.0f} Mb/s/lane, bin {m["bin"][0]}x{m["bin"][1]}, line {m["line"]}, '
-                  f'frame {m["frame"]}, {len(m["regs"])} writes' + ('  (default)' if k == DEFAULT_MODE else ''))
+                  f'frame {m["frame"]}, {len(m["regs"])} writes' + ('  (default)' if k == a.mode else ''))
         for name, t in tables:
             print(f'  {name}: {len(t)} writes: ' + ' '.join(f'{x[0]:x}={x[1]:x}' + (f'+{x[5]}us' if x[5] else '')
                                                          for x in t[:8]) + (' ...' if len(t) > 8 else ''))
@@ -109,9 +121,9 @@ def main():
     if 'init' not in tab:
         sys.exit('no init table found')
     m = modes[a.mode]
-    out = a.out or os.path.join(ROOT, 'work/cam/imx363-mode%d.txt' % a.mode)
+    out = a.out or os.path.join(ROOT, 'work/cam/%s-mode%d.txt' % (sensor, a.mode))
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    lines = [f'# IMX363 from {os.path.basename(a.module)} (vendor data: keep out of git)',
+    lines = [f'# {sensor.upper()} from {os.path.basename(a.module)} (vendor data: keep out of git)',
              f'# init: {len(tab["init"])} writes']
     regs = list(tab['init'])
     lines += [f'0x{x[0]:04x} 0x{x[1]:02x} {x[5]}' for x in tab['init']]

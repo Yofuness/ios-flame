@@ -30,6 +30,10 @@
  *       polled every 1 ms for RDI0 SOF (IFE irq0 bit 27) / WM0 buf done (BUS irq1 bit 0); at each SOF WM0_IMAGE_ADDR
  *       = the other slot + REG_UPDATE (redfin 0923). SECONDS from the first SOF; per-second fps; WM0 off, the
  *       command (default camid mode 8 --hold SECONDS+1) waited for, then the last completed frame -> OUTPREFIX.raw.
+ * cam-f1: camrx [--dry-run] [--front] ...: the front IMX355 path for phy/rx/capture/stream/status: CSIPHY2
+ *       (0xace4000, csi2phytimer RCG 0xad0604c + branches 0xad06064/0xad06068 instead of CSIPHY0's), RX_CFG0 phy 2,
+ *       settle from 360 Mb/s/lane, frame 1640x924 RAW10 (mode 2), default command camid --front ... imx355-mode2.txt.
+ *       CSID-lite, RDI0, IFE-lite WM0 and the SMRs (0x8c0 + 0xcc0) are the rear's.
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
  *   camrx smmu [SID...]   read-only: sCR0, valid SMRs/S2CRs, their banks, faults; which SMRs each SID (default: the
  *                         14 DT IFE SIDs) matches
@@ -50,9 +54,15 @@ int main(int argc, char **argv)
 		dry = 1;
 		a++;
 	}
+	int front = 0;	/* cam-f1 */
+	if (a < argc && !strcmp(argv[a], "--front")) {
+		front = 1;
+		a++;
+	}
 	if (a >= argc)
 		goto usage;
 	pm_init();
+	cam_select(front);
 	if (!strcmp(argv[a], "status"))
 		return status();
 	if (!strcmp(argv[a], "smmu"))	/* cam13: read-only */
@@ -120,7 +130,7 @@ int main(int argc, char **argv)
 		const char *cmd = dcmd;
 		if (secs < 1 || secs > STREAM_MAX_S)
 			goto usage;
-		snprintf(dcmd, sizeof dcmd, STREAM_CMD " --hold %d", secs + 1);
+		snprintf(dcmd, sizeof dcmd, "%s --hold %d", STREAM_CMD, secs + 1);
 		for (int i = a + 3; i < argc; i++)
 			if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
 				cmd = argv[++i];
@@ -135,7 +145,7 @@ int main(int argc, char **argv)
 		return tpg(s);
 	}
 usage:
-	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
+	fprintf(stderr, "usage: camrx [--dry-run] [--front] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
 			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid2 0xNNN] [--sid-mask 0xM] [--addr-offset 0x400]|--xlate "
 			"[--stream-cmd \"CMD\"] [--alloc32] | stream SECONDS OUTPREFIX [--stream-cmd \"CMD\"]\n");
 	return 2;

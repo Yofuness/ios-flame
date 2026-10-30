@@ -2,7 +2,7 @@
  * Camera M1: power the rear IMX363 (SLG51000 LDOs on SE9 @0x75, GCC/CAMCC clocks, TLMM pins, reset gpio43) and
  * read its chip ID (sensor reg 0x0016, expect 03 63) over CCI0 master 0. Values from mainline Linux.
  *   camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure L] [--gain C]]
- * --stream FILE (camera stage b, rear only): after the ID read, write FILE's registers (`0xADDR 0xVAL DELAY_US` a
+ * --stream FILE (camera stage b; front too since cam-f1): after the ID read, write FILE's registers (`0xADDR 0xVAL DELAY_US` a
  * line, `#` comments; from tools/sunfish-camtab.py; at most 2000), read back 0x0136/0x0137/0x0112/0x0114, stream
  * on (0x0100 = 1), sample the frame counter 0x0005 every 100 ms for 1 s, read 0x0100, stream off. Any CCI error
  * aborts (stream off first if on) with the failing line and address.
@@ -10,7 +10,8 @@
  * frame counter sampled once a second. --exposure LINES / --gain CODE (camera e2): after the table, before stream
  * on, in group hold (0x0104 = 1 .. 0): coarse integration 0x0202/0x0203 (clamped to 4 .. frame_length 0x0340/0x0341
  * - 40, redfin 0923 EXPOSURE_MARGIN), analog gain code 0x0204/0x0205 (clamped to 448 = 8x, Sony 512 - 512/g, redfin
- * gain max 8x for the IMX363); printed with their read-back.
+ * gain max 8x for the IMX363); printed with their read-back. With --front (IMX355, Linux imx355.c): margin 10
+ * lines, gain code 1024 - 1024/g, clamped to 896 = 8x (Linux allows 960).
  * --ctl (camera f1, camd; with --stream): stream until stdin ends, "Q" or SIGINT/SIGTERM (then stream off), instead of
  * --hold; stdin lines "E LINES CODE" (-1 = keep) apply exposure/gain as --exposure/--gain do, between frames in
  * group hold; replies on fd 3: "S FL LINES CODE" at stream on, "E FL LINES CODE" (read back) or "X" per command.
@@ -400,6 +401,10 @@ static int read_u16(unsigned a, unsigned reg)
 
 #define EXP_MARGIN	40	/* redfin 0923 EXPOSURE_MARGIN */
 #define GAIN_CODE_MAX	448	/* IMX363 8x (redfin ios_gain_max), Sony code 512 - 512/8 */
+/* cam-f1: IMX355 (Linux imx355.c: IMX355_EXPOSURE_OFFSET 10, analog gain 0..960, code 1024 - 1024/g) */
+#define EXP_MARGIN_F	10
+#define GAIN_CODE_MAX_F	896	/* 8x */
+#define GAIN_BASE_F	1024
 
 /* e2: exposure and/or analog gain in one group hold; the stream is still off */
 static int exposure(unsigned a)
@@ -412,15 +417,17 @@ static int exposure(unsigned a)
 	printf("camid: frame_length 0x0340 = %d lines\n", fl);
 	rb_fl = fl;
 	unsigned lines = 0, code = 0;
+	int margin = front ? EXP_MARGIN_F : EXP_MARGIN, gmax = front ? GAIN_CODE_MAX_F : GAIN_CODE_MAX;
+	double gbase = front ? GAIN_BASE_F : 512;
 	if (exp_lines >= 0) {
-		int mx = fl - EXP_MARGIN < 4 ? 4 : fl - EXP_MARGIN;
+		int mx = fl - margin < 4 ? 4 : fl - margin;
 		lines = exp_lines < 4 ? 4 : exp_lines > mx ? (unsigned)mx : (unsigned)exp_lines;
 		printf("camid: exposure %d lines asked, %u written (clamp 4..%d)\n", exp_lines, lines, mx);
 	}
 	if (gain_code >= 0) {
-		code = gain_code > GAIN_CODE_MAX ? GAIN_CODE_MAX : (unsigned)gain_code;
+		code = gain_code > gmax ? (unsigned)gmax : (unsigned)gain_code;
 		printf("camid: analog gain code %d asked, %u written (max %d = 8x), = %.2fx\n", gain_code, code,
-		       GAIN_CODE_MAX, 512.0 / (512 - code));
+		       gmax, gbase / (gbase - code));
 	}
 	int ok = !write_reg(a, 0x0104, 1);
 	if (ok && exp_lines >= 0)
@@ -632,10 +639,6 @@ int main(int argc, char **argv)
 		fprintf(stderr, "camid: --hold 1-900, --exposure, --gain need --stream\n");
 		return 2;
 	}
-	if (stream_file && front) {
-		fprintf(stderr, "camid: --stream is rear only\n");
-		return 2;
-	}
 	if (addr && addr != 0x10 && addr != 0x1a && !(front && (addr == 0x36 || addr == 0x2d)))
 		return 2;
 	if (front) {
@@ -811,6 +814,11 @@ int main(int argc, char **argv)
 		rc = read_id(addr) ? 1 : 0;
 	else if (read_id(0x10) == 0 || read_id(0x1a) == 0)
 		rc = 0;
+	/* cam-f1: the front streams too; its probe loop stops at the first address that answers (0x1a on sunfish) */
+	if (!rc && stream_file && front && addr != 0x1a && addr) {
+		printf("camid: --front --stream: only at 0x1a\n");
+		rc = 1;
+	}
 	if (!rc && stream_file && stream(addr ? addr : 0x1a))
 		rc = 1;
 	power_down();

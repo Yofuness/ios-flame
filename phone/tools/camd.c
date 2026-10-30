@@ -11,6 +11,9 @@
  * (stream off), WM off, CSID down, IFE reset, SMMU park + restore (cap_down), rx stop, phy off, clocks off,
  * camclk off, camid power-down: the script's order. A failed bring-up or a fault (SMMU/bank fault, writes past
  * the ring) = state FAULT: no more starts until camd restarts. The safety rules are camrx's (camrx.c header).
+ * cam-f1: SENSOR a=2 picks the front IMX355 (mode 2, 1640x924, CSIPHY2, MCLK2, camid --front), a=1 the rear
+ * (default). A switch while streaming stops the session (full power-down) and starts it again on the other sensor.
+ * Off: CAMD_NO_FRONT=1 in camd's environment (SENSOR 2 -> -EINVAL, as before).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -34,6 +37,7 @@
 
 #define BIN		"/var/local/bin/"
 #define TABLE		"/var/local/cam/imx363-mode8.txt"
+#define TABLE_F		"/var/local/cam/imx355-mode2.txt"	/* cam-f1 */
 #define LOG_MAX		(1 << 20)
 #define MAXCL		8
 /* IMX363 mode 8 (camera.md cam22): frame_length 1608 lines at 60.1 fps measured -> 10347 ns a line */
@@ -44,6 +48,16 @@
 #define GAIN_MAX	(8u * GAIN_UNITY)	/* camid GAIN_CODE_MAX 448 = 8x */
 #define BLACK		64u	/* assumed (camera.md e3) */
 #define BAYER		0u	/* RGGB, unverified (camera.md e3) */
+/* cam-f1: IMX355 mode 2 (module file: line 1836, frame 2614 lines, pixel clock 144 MHz -> 12750 ns a line, 30 fps;
+ * not measured yet), camid EXP_MARGIN_F 10, gain code 1024 - 1024/g (GAIN_BASE_F) */
+#define FPS_MILLI_F	30000u
+#define LINE_NS_F	12750u
+#define MARGIN_F	10u
+#define FL_F		2614
+
+static volatile int sensor_want = 1;	/* SENSOR command: 1 rear, 2 front */
+static int front;			/* the running session's sensor (camrx_lib cam_select) */
+static unsigned gain_base = 512;	/* Sony analog gain code base: 512 IMX363, 1024 IMX355 */
 
 static struct sunfish_camera_shm *sh;
 static uint8_t *shm_base;
@@ -122,9 +136,13 @@ static int h_spawn(pid_t *pid)
 		close(ci[0]), close(ci[1]);
 		return 1;
 	}
-	static const char *const av[] = { BIN "camid", "--addr", "0x1a", "--keep", "--mclk-asis", "--stream", TABLE,
-					  "--ctl", NULL };
-	printf("camd: stream command: camid --addr 0x1a --keep --mclk-asis --stream " TABLE " --ctl\n");
+	static const char *const avr[] = { BIN "camid", "--addr", "0x1a", "--keep", "--mclk-asis", "--stream", TABLE,
+					   "--ctl", NULL };
+	static const char *const avf[] = { BIN "camid", "--front", "--addr", "0x1a", "--keep", "--mclk-asis", "--stream",
+					   TABLE_F, "--ctl", NULL };
+	const char *const *av = front ? avf : avr;
+	printf("camd: stream command: camid %s--addr 0x1a --keep --mclk-asis --stream %s --ctl\n", front ? "--front " : "",
+	       front ? TABLE_F : TABLE);
 	fflush(stdout);
 	*pid = fork();
 	if (*pid < 0)
@@ -246,14 +264,15 @@ static void *copier(void *arg)
 		f->bayer = BAYER, f->black = BLACK;
 		f->sequence = seq, f->time = tdone;
 		f->exposure_lines = cur_lines < 0 ? 0 : (uint32_t)cur_lines;
-		f->line_ns = LINE_NS;
-		f->gain = cur_code < 0 ? GAIN_UNITY : (uint32_t)(512u * GAIN_UNITY / (512u - (uint32_t)cur_code));
+		f->line_ns = front ? LINE_NS_F : LINE_NS;
+		f->gain = cur_code < 0 || (unsigned)cur_code >= gain_base ? GAIN_UNITY :
+			  (uint32_t)(gain_base * GAIN_UNITY / (gain_base - (uint32_t)cur_code));
 		f->gain_unity = GAIN_UNITY, f->gain_max = GAIN_MAX;
 		f->frame_lines = (uint32_t)cur_fl, f->frame_lines_min = (uint32_t)cur_fl, f->frame_lines_max = (uint32_t)cur_fl;
-		f->margin = MARGIN, f->sensor = 1, f->focus = REDWOOD_CAMERA_NO_FOCUS;
+		f->margin = front ? MARGIN_F : MARGIN, f->sensor = (uint32_t)cam->sensor, f->focus = REDWOOD_CAMERA_NO_FOCUS;
 		f->reserved[REDWOOD_CAMERA_R_SOF_LO] = (uint32_t)tsof;
 		f->reserved[REDWOOD_CAMERA_R_SOF_HI] = (uint32_t)(tsof >> 32);
-		f->reserved[REDWOOD_CAMERA_R_FPS_MILLI] = FPS_MILLI;
+		f->reserved[REDWOOD_CAMERA_R_FPS_MILLI] = front ? FPS_MILLI_F : FPS_MILLI;
 		__atomic_add_fetch(&hd->gen, 1, __ATOMIC_ACQ_REL);	/* even: done */
 		__atomic_store_n(&copy_slot, -1, __ATOMIC_RELEASE);	/* the ring may hand this slot to the WM again */
 		if (bad) {
@@ -282,9 +301,10 @@ static void power_down(void)
 		phy_off();
 		clocks_off();
 	}
-	static const char *const off[] = { BIN "camclk", "off", NULL }, *const pd[] = { BIN "camid", "--addr", "0x1a", NULL };
+	static const char *const off[] = { BIN "camclk", "off", NULL }, *const pd[] = { BIN "camid", "--addr", "0x1a", NULL },
+				 *const pdf[] = { BIN "camid", "--front", "--addr", "0x1a", NULL };
 	run(off);
-	run(pd);
+	run(front ? pdf : pd);
 	printf("camd: powered down\n");
 	fflush(stdout);
 }
@@ -295,14 +315,22 @@ static void *session(void *arg)
 	static const char *const steps[][6] = {
 		{ BIN "camclk", "pll2", "on", NULL }, { BIN "camclk", "pll0", "on", NULL },
 		{ BIN "camid", "--addr", "0x1a", "--keep", NULL }, { BIN "camclk", "mclk", "0", "24", NULL },
+	}, *const steps_f[][6] = {	/* cam-f1 */
+		{ BIN "camclk", "pll2", "on", NULL }, { BIN "camclk", "pll0", "on", NULL },
+		{ BIN "camid", "--front", "--addr", "0x1a", "--keep", NULL }, { BIN "camclk", "mclk", "2", "24", NULL },
 	};
 	int rc = 0;
+	front = sensor_want == 2;
+	cam_select(front);
+	gain_base = front ? 1024 : 512;
 	sh->latest_seq = 0, sh->published = 0, sh->dropped = 0;
+	sh->data_bytes = FRAME_BYTES;
 	cur_lines = cur_code = -1;
-	printf("camd: == session start\n");
+	cur_fl = front ? FL_F : 1608;
+	printf("camd: == session start, sensor %d (%s)\n", cam->sensor, cam->name);
 	powered = 1;
 	for (unsigned i = 0; i < sizeof steps / sizeof steps[0] && !rc && !want_stop && !term; i++)
-		rc = run(steps[i]) != 0;
+		rc = run(front ? steps_f[i] : steps[i]) != 0;
 	if (!rc && !want_stop && !term)
 		rc = precheck() || clocks_on() || phy_on(-1);
 	if (!rc && !want_stop && !term) {
@@ -396,7 +424,7 @@ static void command(struct client *c)
 		int code = -1;
 		if (g) {
 			g = g < GAIN_UNITY ? GAIN_UNITY : g > GAIN_MAX ? GAIN_MAX : g;
-			code = (int)(512u - 512u * GAIN_UNITY / g);	/* Sony 512 - 512/g */
+			code = (int)(gain_base - gain_base * GAIN_UNITY / g);	/* Sony 512 - 512/g (front 1024) */
 		}
 		exp_lines_req = m.a ? (int)(m.a > 0xffff ? 0xffff : m.a) : -1;
 		exp_code_req = code;
@@ -406,7 +434,18 @@ static void command(struct client *c)
 		break;
 	}
 	case REDWOOD_CAMERA_SENSOR:
-		reply(c, m.command, m.a == 1 ? 0 : -EINVAL);
+		if (m.a == 2 && getenv("CAMD_NO_FRONT") && !strcmp(getenv("CAMD_NO_FRONT"), "1")) {
+			reply(c, m.command, -EINVAL);
+			break;
+		}
+		if (m.a == 1 || m.a == 2) {	/* cam-f1: the main loop restarts a running session on the other one */
+			if (sensor_want != (int)m.a)
+				printf("camd: client fd %d: sensor %u\n", c->fd, m.a);
+			sensor_want = (int)m.a;
+			reply(c, m.command, 0);
+		} else {
+			reply(c, m.command, -EINVAL);
+		}
 		break;
 	case REDWOOD_CAMERA_FOCUS:
 	case REDWOOD_CAMERA_FLASH:
@@ -428,7 +467,7 @@ static int shm_create(void)
 {
 	size_t len = SUNFISH_CAMERA_HEAD + (size_t)SUNFISH_CAMERA_SLOTS * SUNFISH_CAMERA_SLOT_BYTES;
 	_Static_assert(SUNFISH_CAMERA_DATA_OFF >= sizeof(struct sunfish_camera_slot), "slot header");
-	_Static_assert(SUNFISH_CAMERA_DATA_OFF + FRAME_BYTES <= SUNFISH_CAMERA_SLOT_BYTES, "slot size");
+	_Static_assert(SUNFISH_CAMERA_DATA_OFF + FRAME_BYTES_MAX <= SUNFISH_CAMERA_SLOT_BYTES, "slot size");
 	_Static_assert(sizeof(struct sunfish_camera_shm) <= SUNFISH_CAMERA_HEAD, "shm head");
 	unlink(SUNFISH_CAMERA_SHM);
 	int fd = open(SUNFISH_CAMERA_SHM, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -452,7 +491,7 @@ static int shm_create(void)
 	sh->pid = (uint32_t)getpid();
 	__atomic_thread_fence(__ATOMIC_RELEASE);
 	memcpy(sh->magic, SUNFISH_CAMERA_SHM_MAGIC, 8);
-	printf("camd: %s: %zu B, %d slots of %u (data at +%u, %u B: 2016x1512 RAW10, the extra lines cut off)\n",
+	printf("camd: %s: %zu B, %d slots of %u (data at +%u, %u B: 2016x1512 RAW10 rear, the extra lines cut off)\n",
 	       SUNFISH_CAMERA_SHM, len, SUNFISH_CAMERA_SLOTS, SUNFISH_CAMERA_SLOT_BYTES, SUNFISH_CAMERA_DATA_OFF, FRAME_BYTES);
 	return 0;
 }
@@ -547,6 +586,11 @@ int main(int argc, char **argv)
 			} else {
 				joined = 0;
 			}
+		}
+		if (want && sess_running && !want_stop && (sensor_want == 2) != front) {	/* cam-f1 */
+			printf("camd: sensor %d asked: stopping, then starting it\n", sensor_want);
+			want_stop = 1;
+			sh->state = SUNFISH_CAMERA_STOPPING;
 		}
 		if (!want && sess_running && !want_stop) {
 			printf("camd: no client wants the camera: stopping\n");

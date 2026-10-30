@@ -5,8 +5,9 @@
  *   plus `bytes` bytes that camd skips; one struct sunfish_camera_reply back per command. SUNFISH_CAMERA_START powers
  *   the camera up (once per connection; the reply comes when frames flow or bring-up failed), _STOP or closing the
  *   connection drops it; when no connection has it started, everything goes down. EXPOSURE a lines, b gain (256 =
- *   1x, linear; 0 = keep); c, d ignored (frame length stays the mode's). SENSOR a 1 ok, others -EINVAL. FOCUS, FLASH,
- *   KEEP accepted, ignored.
+ *   1x, linear; 0 = keep); c, d ignored (frame length stays the mode's). SENSOR a 1 rear (default),
+ *   2 front (IMX355 1640x924, stride 2050; a running stream restarts on it; data_bytes and the frame header follow),
+ *   others -EINVAL. FOCUS, FLASH, KEEP accepted, ignored.
  * /var/run/sunfish-camera.shm (0666, mmap read-only): struct sunfish_camera_shm, then SUNFISH_CAMERA_SLOTS slots of
  *   slot_bytes at shm + head_bytes: struct sunfish_camera_slot (gen + the frame header), the RAW10 bytes at
  *   slot + data_offset (2016x1512, stride 2520: the ~12 KB of extra lines past 1512 are cut off).
