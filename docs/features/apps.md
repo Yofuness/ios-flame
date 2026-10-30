@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 03:55 files6/7: LocalStorage gets a real data container; pkd accepts it; Files' list unverified (night)
+- files6 boot (kernel111 CAMERA=1, 4438 mV): `lsreg -i` still (none) after boot; `lsreg -r` (63 s, "rebuild -> 1") then gave dataContainerURL /private/var/mobile/Containers/Data/PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 (made by containermanagerd: metadata 638 B; not the hand-made 718EBA02, which is now deleted).
+- files7 (pkd + fileproviderd + Files restarted): pkd: no "mis-configured" / "negative cache add" lines any more; fileproviderd discovers com.apple.FileProvider.LocalStorage (FPDLocalStorageExtension created, "default provider remains com.apple.FileProvider.LocalStorage"), "returning 3 providers"; Files' log has no "isn't available" line any more. LocalStorageFileProvider not running yet (it runs on browse). Files' Browse list not readable by the webcam at night brightness: user check (U13).
+- Reproduce (setup step): after a boot, `lsreg -r` once (makes the missing plug-in data containers), then restart pkd/fileproviderd or reboot. Whether the hand-made container was needed is unknown (containermanagerd was also wedged before the reboot).
+
 ### 2026-10-30 03:35 files5b: hand-made data container for LocalStorage (not yet picked up)
 - Copied PhotosFileProvider's container layout to PluginKitPlugin/718EBA02-812E-42A0-B1C1-CCEE1BC84BB9 with a metadata plist naming com.apple.FileProvider.LocalStorage (content class 4, uid/gid 501, no ParentBundleID). `lsreg -p`, then `lsreg -r` (rebuild -> 0): `lsreg -i` still dataContainerURL (none); pkd still "no sandbox data container". containermanagerd (process name "containermanager", pid 69) ignored SIGTERM (CPU rose 25.7 -> 32.2 s, then idle) and an lsreg call waited on it for ~1 min. Next: reboot so containermanagerd indexes the container at start (files6).
 

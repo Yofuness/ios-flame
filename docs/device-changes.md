@@ -53,6 +53,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-30 Files "On My iPhone": the hand-made container 718EBA02-... deleted again; containermanagerd made the real one (PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965) during `lsreg -r` after the files6 boot. Reproduce: boot, `lsreg -r`, restart pkd + fileproviderd (to go into docs/setup.md once U13 confirms).
 - 2026-10-30 Files "On My iPhone" (B37, under work): a hand-made plug-in data container for com.apple.FileProvider.LocalStorage at /private/var/mobile/Containers/Data/PluginKitPlugin/718EBA02-812E-42A0-B1C1-CCEE1BC84BB9 (Documents, Library/{Caches,Preferences}, SystemData, tmp owned mobile; .com.apple.mobile_container_manager.metadata.plist root:mobile 644 = PhotosFileProvider's with MCMMetadataIdentifier com.apple.FileProvider.LocalStorage, a new MCMMetadataUUID, no ParentBundleID); `lsreg -r` run once (LaunchServices rebuild). Undo: delete that directory. /var/local/bin/lsreg updated (-i, -c).
 - 2026-10-30 /var/local/bin/exq (phone tool, phone/tools/exq.m via tools/build-userland-linux.sh) for the Files investigation; LocalStorageFileProvider.appex re-registered with `lsreg -p` (it was already registered).
 - 2026-10-31 Metal bridge with planar IOSurface textures (615c313) installed via tools/sunfish-metal2-install.sh; previous bundle kept as /System/Library/Extensions/SweetMetal2.bundle.prev (`--undo`).

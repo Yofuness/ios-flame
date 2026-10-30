@@ -35,6 +35,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U9 [DONE 2026-10-30: Xbox controller pairs; AirPods crash bluetoothd] Bluetooth pairing: put headphones or a keyboard in pairing mode near the phone, tap it in Settings > Bluetooth. ~3 min.
 - U10 auto-rotate: when Claude says it's ready, turn the phone on its side and back (Calculator open). ~1 min.
 - U12 Camera app (when you're up): ready now (kernel111, camera on, camd idle, preview textures installed): open Camera (Utilities folder), say what you see (preview? colours?), switch to the front camera, take one photo each, check Photos. Keep Live Photo off. ~3 min. If backboardd misbehaves: Claude runs `tools/sunfish-metal2-install.sh --undo`.
+- U13 Files app: open Files > Browse: is "On My iPhone" listed now? (B37 fix, 2026-10-30.) ~1 min.
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U8 [DONE 2026-10-30: works] home swipe with a finger: from inside any app, swipe up from the bottom edge: does it go home? ~1 min. (B33)
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).

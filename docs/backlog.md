@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- B37 Files has no "On My iPhone": pkd rejects the LocalStorage FileProvider extension, "no sandbox data container" (files4); fix (lsreg -c) being written.
+- B37 Files has no "On My iPhone": cause = no plug-in data container (pkd "no sandbox data container"); after a boot + `lsreg -r` it has one and pkd/fileproviderd accept it (files7); user check U13.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
 - B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.
