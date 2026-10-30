@@ -35,6 +35,12 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:15 cam13 (kernel109, cam12r boot): read-only SMMU dump explains cam12's empty frame
+- `camrx smmu` (88dde8e, no writes): sCR0 0x00280406 (CLIENTPD 0, GFRE/GFIE 1, USFCFG 1 = unmatched streams fault and are terminated, SMCFCFG 1); 79 SMRs, 61 banks; sGFSR 0.
+- Valid SMRs 0-14, all translate-type S2CRs: 0x340/0xf, 0x2a0/0xf, 0x2c0/0xf -> CB0; 0x540 -> CB1; 0x300/0xf -> CB2; 0x800/0x440 -> CB3; 0x240/0x1 -> CB5; 0x1b21/24/25/26/27/28/2f -> CB6-12; 0x1b23 -> CB13. All banks bypass (SCTLR 0xe0, CBAR 0x1f000) except CB13 (SCTLR 0x127, M=1, CBAR 0x1f300, TTBR0 set).
+- **All 14 DT IFE SIDs: no SMR -> unmatched -> fault.** So cam12's IFE writes were terminated by the SMMU (buffer stayed 0). sGFSR 0 after cam12 although USF faults should set it: guess, the hypervisor handles global faults, and may be what reset the phone ~1 min later (unverified).
+- Next (cam14): `camrx capture --trap`: SMRs 0x900/0x460, 0x880/0x460, 0x820/0x440 -> a free bank with M=1 and no table walks (EPD0/EPD1): context faults record the SID, nothing lands.
+
 ### 2026-10-30 23:55 cam12 (kernel109, same boot): IFE wrote "a frame" but not to our buffer; RESET ~1 min later
 - `sunfish-cam-rx.sh --install --capture` (a47990d): slot1 0x9cb00000 + 0xB00000 zeroed in 0.126 s (2816 pages read back 0). camnoc 150 MHz then back to XO at cleanup. Stream ~1090 ms; **buf done at ~210 ms**; IFE VIOLATION 0, IRQ0 0x8000220, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0, WM0_STATUS0 0x9cb00000; CSID bytes 3810240/3810240. camrx exit 0.
 - **Frame region 0 of 3810240 nonzero, guard 0 nonzero**: the write did not land in the buffer.

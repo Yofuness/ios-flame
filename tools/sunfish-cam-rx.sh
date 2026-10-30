@@ -6,7 +6,8 @@
 #   tools/sunfish-cam-rx.sh [--install] [--capture] [SETTLE]     output also goes to work/cam/rx-<time>.log
 # --capture (stage d): instead of rx arm + camid --stream + rx report, `camrx capture` (arms the CSID, sets up the
 # IFE-lite WM0 + SMMU, runs the stream itself) writes /var/local/cam/frame.raw; it is fetched to
-# work/cam/frame-<time>.raw and turned into PNGs (tools/sunfish-raw2png.py).
+# work/cam/frame-<time>.raw and turned into PNGs (tools/sunfish-raw2png.py). CAPMODE picks the SMMU mode
+# (default "--trap": the IFE streams go to a faulting bank, nothing lands; "--bypass --sid 0xNNN" once known).
 # Everything is powered down at the end, also after a failed step.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -49,7 +50,7 @@ run "$B/camclk pll2 on" &&
 	run "$B/camrx clocks on" &&
 	run "$B/camrx phy on $SETTLE" || exit 1
 if [ $CAPTURE = 1 ]; then
-	run "$B/camrx capture /var/local/cam/frame.raw" || exit 1
+	run "$B/camrx capture /var/local/cam/frame.raw ${CAPMODE:---trap}" || exit 1
 	python3 -I tools/flame-files.py get /var/local/cam/frame.raw work/cam/frame-$TS.raw >/dev/null || exit 1
 	python3 -I tools/sunfish-raw2png.py work/cam/frame-$TS.raw | tee -a "$LOG"
 	exit 0
