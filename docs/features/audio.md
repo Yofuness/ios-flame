@@ -34,6 +34,10 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 05:05 jack3 (adspboot 1e414f0 --swr-clk-first): no reset; va_core clock vote fails, tx clocks ok
+- 4 runs (--swr-only 2/3/4/5, each a fresh kernel112 CAMERA=1 boot, sensors.off, 4437 mV): hw vote ok (status 0); clock 0x30b (va_core) "on: FAILED", 0x30c (tx_core) ok, 0x30d (tx_npl) ok (mask 0x6) -> all reads skipped by design; rc 0, no reset. Restored: sensors job up (adspboot pid 37), camd idle, btbridge up.
+- DT: va-macro clocks = va_core_clk only; tx-macro = tx_core_clk + tx_npl_clk; tx_swr_master is tx-macro's child. So the TX SoundWire (the codec's MBHC side) can be read with the two tx clocks. Next: per-group clock needs + the AFE status of the 0x30b failure.
+
 ### 2026-10-30 04:45 jack2 (kernel112 CAMERA=1, sensors.off; adspboot af54f5a): the va-macro read without its clock RESETS
 - Run 1 `--swr-probe --swr-only 1 --swr-nohw`: no vote; LPI gpio24 cfg 0x62b58000 = 0x00000401, in/out 0x62b58004 = 0; rc 0.
 - Run 2 `--swr-only 1` (hw vote 0x100F4 block 2 -> ok, status 0): same gpio24 values; rc 0.
