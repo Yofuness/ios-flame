@@ -53,13 +53,17 @@ static uint64_t dm_last_report, dm_written;
 /*
  * B46 dm2: type-2 (9-axis, x = magnetic north) reports for Compass (fUseNorthRef=1). The compass streams too while
  * the fusion runs; hard-iron box in MAGCAL_PATH (saved every 30 s). SNS_DM_TYPE=3 turns this off (type 3 as dm1);
- * default: type 2 while mag samples arrive (last one < 1 s ago), else 3. /var/local/dm-yaw: test yaw offset, deg.
+ * default: type 2 while mag samples arrive (dm8: last one < 5 s ago, SNS_MAG_HOLD=0: 1 s), else 3. /var/local/dm-yaw: test yaw offset, deg.
  */
 #define MAGCAL_PATH "/var/local/magcal.txt"
 #define DM_YAW_PATH "/var/local/dm-yaw"
 static int dm_type_env;		/* 0 auto, 2, 3 */
 static int dm_type_last = 3;
 static uint64_t dm_last_mag;
+/* dm8: mag gaps per status window (all compass samples, ticks); SNS_HEADING_TRACE=1: "hdg" lines twice a second */
+static uint64_t dm_mag_prev, dm_gap_max, dm_trace_last;
+static unsigned dm_gap_200, dm_gap_1s;
+static int dm_trace;
 static long dm_last_save, dm_last_yaw;
 static float dm_yaw;
 /*
@@ -91,7 +95,14 @@ static void dm_feed(const struct motion_sample *m)
 		return;
 	}
 	if (m->type == MOTION_TYPE_COMPASS) {	/* dm2: uT, same axes as the kernel's compass events */
-		if (dm_mag(&dm, m->v) == 0)
+		if (dm_mag_prev && ts > dm_mag_prev) {	/* dm8 */
+			uint64_t g = ts - dm_mag_prev;
+			dm_gap_max = g > dm_gap_max ? g : dm_gap_max;
+			dm_gap_200 += g > 19200000ull / 5;
+			dm_gap_1s += g > 19200000ull;
+		}
+		dm_mag_prev = ts;
+		if (dm_mag_ts(&dm, m->v, ts) == 0)
 			dm_last_mag = ts;
 		return;
 	}
@@ -101,13 +112,22 @@ static void dm_feed(const struct motion_sample *m)
 	dm_last_report = ts;
 	struct motion_devmotion d;
 	memset(&d, 0, sizeof(d));
-	int t = dm_type_env ? dm_type_env : (dm_last_mag && ts - dm_last_mag < 19200000ull) ? 2 : 3;
+	/* dm8: type 2 for DM_MAG_HOLD_S after the last mag (SNS_MAG_HOLD=0: 1 s) */
+	int t = dm_type_env ? dm_type_env : dm_last_mag ? dm_type_auto(&dm, ts, dm.cal.hold_off ? 1.0 : DM_MAG_HOLD_S) : 3;
 	if (t != dm_type_last)
 		printf("sns: devmotion report type %d\n", t);
 	dm_type_last = t;
 	if (t == 2) {
 		struct dm_report2 r;
 		dm_report2(&dm, ts, dm_yaw, &r);
+		if (dm_trace && ts - dm_trace_last >= 19200000ull / 2) {	/* dm8 */
+			float h, a;
+			memcpy(&h, (const char *)&r + offsetof(struct dm_report2, heading), sizeof(h));
+			memcpy(&a, (const char *)&r + offsetof(struct dm_report2, heading_acc), sizeof(a));
+			printf("sns: hdg %.2f %.1f %.0f %.0f\n", (double)ts / 19200000.0, h, a,
+			    dm.mag_raw_ts ? (double)(ts - dm.mag_raw_ts) / 19200.0 : -1.0);
+			dm_trace_last = ts;
+		}
 		d.len = sizeof(r);
 		memcpy(d.bytes, &r, sizeof(r));
 	} else {
@@ -312,6 +332,12 @@ static int start(void)
 	e = getenv("SNS_HEADING_LP");	/* dm7: heading low-pass, 0 = off */
 	if (e && !strcmp(e, "0"))
 		dm.cal.heading_tc = 0;
+	e = getenv("SNS_MAG_HOLD");	/* dm8 */
+	dm.cal.hold_off = e && !strcmp(e, "0");
+	e = getenv("SNS_MAG_GATE");
+	dm.cal.gate_off = e && !strcmp(e, "0");
+	e = getenv("SNS_HEADING_TRACE");
+	dm_trace = e && !strcmp(e, "1");
 	e = getenv("SNS_DM_TYPE");
 	dm_type_env = e && (!strcmp(e, "2") || !strcmp(e, "3")) ? atoi(e) : 0;
 	if (dm_env)
@@ -356,7 +382,7 @@ static int follow(void)
 	if (dm_now != dm_want) {
 		printf("sns: devmotion fusion %s (%s)\n", dm_now ? "on" : "off", dm_why);
 		if (dm_now)
-			dm_init(&dm, 0.04f);	/* keeps the fit and the SEE biases */
+			dm_init(&dm, 0.04f), dm_mag_prev = 0;	/* keeps the fit and the SEE biases */
 		else if (dm.cal.have_cal && dm_magcal_save(&dm, MAGCAL_PATH))	/* O13: save on stop */
 			printf("sns: %s: %s\n", MAGCAL_PATH, strerror(errno));
 	}
@@ -543,6 +569,9 @@ void sns_tick(const struct sns_link_ops *ops)
 			    dm_mag_accuracy(&dm), dm_mag_cal_dsp(&dm) ? "dsp" : dm.cal.have_cal ? "fit" : "none", dm.cal.r,
 			    dm.cal.res, dm.cal.n, dm.cal.ring_n, b[0], b[1], b[2], dm.see_mag_st, dm_yaw, dm.see_gyro_st,
 			    dm.see_gyro_bias[0], dm.see_gyro_bias[1], dm.see_gyro_bias[2]);
+			printf(", mag gaps >200ms %u >1s %u max %llu ms, gate rej r %u dip %u", dm_gap_200, dm_gap_1s,
+			    (unsigned long long)(dm_gap_max / 19200), dm.rej_r, dm.rej_dip);	/* dm8 */
+			dm_gap_200 = dm_gap_1s = 0, dm_gap_max = 0;
 		}
 		printf("\n");
 		last_print = now;

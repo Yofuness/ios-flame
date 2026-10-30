@@ -69,6 +69,18 @@ _Static_assert(offsetof(struct dm_report2, mag_bias) == 0x4c, "dm_report2 mag_bi
 #define DM_HEADING_TC 0.3f	/* s: low-pass of the published heading @0x44 (SNS_HEADING_LP=0: off) */
 #define DM_MAG_MAX 200.0f	/* uT: |m| above this is an outlier (Earth's field is 25-65 uT) */
 #define DM_MAG_JUMP 60.0f	/* uT: a step this big from the last sample is an outlier */
+/*
+ * dm8: mag gaps and transients. The MARG correction skips a mag older than DM_MAG_STALE_S (IMU-only meanwhile, the
+ * heading still comes from q); the report keeps heading valid until no mag for DM_MAG_HOLD_S (SNS_MAG_HOLD=0: old 1 s
+ * type-3 fallback, no skip). Gate (SNS_MAG_GATE=0: off): a sample whose calibrated |m| is > DM_MAG_GATE_R off the fit
+ * radius, or whose dip vs gravity is > DM_MAG_GATE_DIP deg off the running median, is not used for the correction.
+ */
+#define DM_MAG_STALE_S 0.25
+#define DM_MAG_HOLD_S 5.0
+#define DM_MAG_GATE_R 0.25f
+#define DM_MAG_GATE_DIP 10.0f
+#define DM_MAG_DIP_N 15		/* dips in the running median */
+#define DM_MAG_GATE_STREAK 50	/* this many rejects in a row: accept anyway (the field really changed) */
 
 struct dm_fusion {
 	float q[4];		/* w x y z: device -> earth (z up) */
@@ -88,7 +100,15 @@ struct dm_fusion {
 		int have_pend;			/* a > DM_MAG_STEP change waiting for a second fit */
 		float pend[3];
 		float heading_tc;		/* s, 0 = no heading low-pass */
+		int hold_off, gate_off;		/* dm8: env switches (SNS_MAG_HOLD=0, SNS_MAG_GATE=0) */
 	} cal;
+	/* dm8: mag used for the correction (gated), its time and the raw sample's time (ticks; 0 = untimed) */
+	float mag_use[3];
+	int have_mag_use;
+	uint64_t mag_use_ts, mag_raw_ts;
+	float dip[DM_MAG_DIP_N];
+	int dip_n, dip_i, rej_streak;
+	unsigned rej_r, rej_dip;	/* gate rejects (since dm_init) */
 	float hd_out;			/* dm7: low-passed heading */
 	uint64_t hd_ts;
 	int hd_have;
@@ -105,6 +125,10 @@ void dm_gyro(struct dm_fusion *f, const float g[3], uint64_t ts, double ticks_pe
 void dm_report3(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_report3 *r);
 /* dm2: one raw mag sample (uT); dm7: feeds the sphere-fit ring (outliers rejected). Returns 0 kept, -1 rejected. */
 int dm_mag(struct dm_fusion *f, const float m[3]);
+/* dm8: the same with the sample time (ticks, 19.2 MHz) for the staleness checks */
+int dm_mag_ts(struct dm_fusion *f, const float m[3], uint64_t ts);
+/* dm8: report type in auto mode: 2 while a mag sample came within hold_s, else 3 */
+int dm_type_auto(const struct dm_fusion *f, uint64_t ts, double hold_s);
 int dm_mag_accuracy(const struct dm_fusion *f);	/* -1 uncalibrated, 0..2 */
 void dm_mag_bias(const struct dm_fusion *f, float b[3]);
 /* dm7: one sphere fit over the samples (exposed for tests): 0 ok (c, r, rms residual), -1 singular */

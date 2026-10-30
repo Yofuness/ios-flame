@@ -189,6 +189,69 @@ int main(void)
 		    r.heading);
 		fails += !ok;
 	}
+	/* dm8: a 1.5 s mag gap keeps type 2 and the heading; one 30 uT spike is gated */
+	{
+		const float bias[3] = { 12, -30, 5 }, north[3] = { 0, 20, -40 };
+		float mg[3] = { north[0] + bias[0], north[1] + bias[1], north[2] + bias[2] };
+		memset(&f, 0, sizeof(f));
+		dm_init(&f, 0.04f);
+		f.cal.have_cal = 1, f.cal.acc = 2, f.cal.r = 45;
+		memcpy(f.cal.c, bias, sizeof(f.cal.c));
+		dm_accel(&f, acc);
+		uint64_t ts = 19200000;
+		const float gd[3] = { 0, 0, 0.002f };	/* a little gyro drift: IMU-only yaw moves slowly */
+		for (int i = 0; i < 500; i++, ts += 192000) {
+			if (i % 2 == 0)
+				dm_mag_ts(&f, mg, ts);
+			dm_gyro(&f, gd, ts, 19200000.0);
+		}
+		dm_report2(&f, ts, 0, &r);
+		float h0 = heading(&r);
+		int t2 = 1;
+		for (int i = 0; i < 150; i++, ts += 192000) {	/* 1.5 s without mag */
+			dm_gyro(&f, gd, ts, 19200000.0);
+			t2 &= dm_type_auto(&f, ts, DM_MAG_HOLD_S) == 2;
+		}
+		dm_report2(&f, ts, 0, &r);
+		check("1.5 s mag gap: heading kept", heading(&r), h0, 2);
+		ok = t2 && r.status == DM_STATUS_HEADING && r.heading_acc == 10;
+		printf("%s 1.5 s mag gap: type 2, status 0x%x acc %.0f\n", ok ? "ok  " : "FAIL", r.status, r.heading_acc);
+		fails += !ok;
+		for (int i = 0; i < 100; i++, ts += 192000) {
+			if (i % 2 == 0)
+				dm_mag_ts(&f, mg, ts);
+			dm_gyro(&f, gd, ts, 19200000.0);
+		}
+		dm_report2(&f, ts, 0, &r);
+		h0 = heading(&r);
+		float sp[3] = { mg[0] + 30, mg[1], mg[2] };
+		unsigned rj = f.rej_r + f.rej_dip;
+		dm_mag_ts(&f, sp, ts);
+		for (int i = 0; i < 4; i++, ts += 192000)
+			dm_gyro(&f, gd, ts, 19200000.0);
+		dm_mag_ts(&f, mg, ts);
+		for (int i = 0; i < 50; i++, ts += 192000)
+			dm_gyro(&f, gd, ts, 19200000.0);
+		dm_report2(&f, ts, 0, &r);
+		check("30 uT spike: heading kept", heading(&r), h0, 2);
+		ok = f.rej_r + f.rej_dip == rj + 1;
+		printf("%s spike gated (rej r %u dip %u)\n", ok ? "ok  " : "FAIL", f.rej_r, f.rej_dip);
+		fails += !ok;
+		/* turning during a gap: the gyro alone moves q, the old mag direction doesn't pull it back (> 0.25 s) */
+		const float turn[3] = { 0, 0, -30 * (float)M_PI / 180 };	/* clockwise from above: heading +30 deg/s */
+		dm_report2(&f, ts, 0, &r);
+		h0 = heading(&r);
+		for (int i = 0; i < 150; i++, ts += 192000)
+			dm_gyro(&f, turn, ts, 19200000.0);
+		dm_report2(&f, ts, 0, &r);
+		check("turn in a 1.5 s gap: gyro only", heading(&r), fmodf(h0 + 45, 360), 1.5f);
+		ts += 19200000ull * 6;	/* no mag for 6 s: heading invalid, type 3 */
+		dm_gyro(&f, gd, ts, 19200000.0);
+		dm_report2(&f, ts, 0, &r);
+		ok = r.status == 0 && r.heading_acc == -1 && dm_type_auto(&f, ts, DM_MAG_HOLD_S) == 3;
+		printf("%s 6 s without mag: status 0x%x acc %.0f\n", ok ? "ok  " : "FAIL", r.status, r.heading_acc);
+		fails += !ok;
+	}
 	/* O13: interest from the status text (devmotion8) and the 5 s hold */
 	const char *stx = "devmotion   page 0xff0c usage 0x04 clients 2 ReportInterval 0 us (set by iOS) events 0 (none yet)\n"
 	    "devmotion8  page 0xff0c usage 0x08 clients 2 ReportInterval 20000 us (set by iOS) events 5\n"

@@ -52,12 +52,12 @@ void dm_accel(struct dm_fusion *f, const float a[3])
 /* dm2: calibrated, normalised mag in m when the calibration is usable (accuracy >= 0) */
 static int dm_mag_cal(const struct dm_fusion *f, float m[3])
 {
-	if (!f->have_mag || dm_mag_accuracy(f) < 0)
+	if (!f->have_mag_use || dm_mag_accuracy(f) < 0)
 		return 0;
 	float b[3];
 	dm_mag_bias(f, b);
 	for (int i = 0; i < 3; i++)
-		m[i] = f->mag[i] - b[i];
+		m[i] = f->mag_use[i] - b[i];	/* dm8: the last sample that passed the gate */
 	float n = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
 	if (n < 1.0f)
 		return 0;
@@ -184,7 +184,56 @@ static void dm_mag_fit(struct dm_magcal *k)
 	k->have_cal = 1;
 }
 
+/* dm8: 1 = use this sample for the correction. Needs a calibration and accel; dips of all samples feed the median. */
+static int dm_mag_gate(struct dm_fusion *f, const float m[3])
+{
+	float b[3], c[3];
+	float an = sqrtf(f->acc[0] * f->acc[0] + f->acc[1] * f->acc[1] + f->acc[2] * f->acc[2]);
+	/* not before the seed: the seed must come from the current sample, not an older one that passed */
+	if (f->cal.gate_off || !f->mag_seeded || dm_mag_accuracy(f) < 0 || !f->have_acc || an < 1e-3f)
+		return 1;
+	dm_mag_bias(f, b);
+	for (int i = 0; i < 3; i++)
+		c[i] = m[i] - b[i];
+	float n = sqrtf(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+	if (n < 1.0f)
+		return 1;
+	float cd = (c[0] * f->acc[0] + c[1] * f->acc[1] + c[2] * f->acc[2]) / (n * an);
+	float dip = acosf(cd > 1 ? 1 : cd < -1 ? -1 : cd) * 180.0f / (float)M_PI, med = 0;
+	int ok = 1;
+	if (f->dip_n >= 5) {	/* median of the ring (small: insertion sort of a copy) */
+		float t[DM_MAG_DIP_N];
+		memcpy(t, f->dip, sizeof(t));
+		for (int i = 1; i < f->dip_n; i++)
+			for (int j = i; j > 0 && t[j - 1] > t[j]; j--) {
+				float x = t[j];
+				t[j] = t[j - 1], t[j - 1] = x;
+			}
+		med = t[f->dip_n / 2];
+	}
+	f->dip[f->dip_i] = dip;
+	f->dip_i = (f->dip_i + 1) % DM_MAG_DIP_N;
+	f->dip_n += f->dip_n < DM_MAG_DIP_N;
+	if (!dm_mag_cal_dsp(f) && f->cal.r > 0 && fabsf(n - f->cal.r) > DM_MAG_GATE_R * f->cal.r)
+		ok = 0, f->rej_r++;
+	else if (f->dip_n > 5 && fabsf(dip - med) > DM_MAG_GATE_DIP)
+		ok = 0, f->rej_dip++;
+	if (ok || ++f->rej_streak > DM_MAG_GATE_STREAK)
+		return f->rej_streak = 0, 1;
+	return 0;
+}
+
 int dm_mag(struct dm_fusion *f, const float m[3])
+{
+	return dm_mag_ts(f, m, 0);
+}
+
+int dm_type_auto(const struct dm_fusion *f, uint64_t ts, double hold_s)
+{
+	return f->mag_raw_ts && ts >= f->mag_raw_ts && (double)(ts - f->mag_raw_ts) < hold_s * 19200000.0 ? 2 : 3;
+}
+
+int dm_mag_ts(struct dm_fusion *f, const float m[3], uint64_t ts)
 {
 	float n = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
 	if (!isfinite(n) || n > DM_MAG_MAX)
@@ -212,6 +261,11 @@ int dm_mag(struct dm_fusion *f, const float m[3])
 		}
 	}
 	f->have_mag = 1;
+	f->mag_raw_ts = ts;
+	if (dm_mag_gate(f, m)) {	/* dm8 */
+		memcpy(f->mag_use, m, sizeof(f->mag_use));
+		f->have_mag_use = 1, f->mag_use_ts = ts;
+	}
 	if (!f->mag_seeded && f->have_acc)
 		dm_seed_mag(f);
 	return 0;
@@ -313,7 +367,10 @@ void dm_gyro(struct dm_fusion *f, const float gr[3], uint64_t ts, double ticks_p
 	float ax = f->acc[0], ay = f->acc[1], az = f->acc[2];
 	float an = sqrtf(ax * ax + ay * ay + az * az);
 	float m[3];
-	if (f->have_acc && an > 1e-3f && dm_mag_cal(f, m)) {
+	/* dm8: a stale mag (gap) is not used: IMU-only until a fresh one comes */
+	int stale = !f->cal.hold_off && f->mag_use_ts && ts > f->mag_use_ts &&
+	    (double)(ts - f->mag_use_ts) > DM_MAG_STALE_S * ticks_per_s;
+	if (f->have_acc && an > 1e-3f && !stale && dm_mag_cal(f, m)) {
 		/* dm2: Madgwick's MARG update (x-io MadgwickAHRS.c): earth field b = (bx, 0, bz), x = magnetic north */
 		float mx = m[0], my = m[1], mz = m[2];
 		ax /= an, ay /= an, az /= an;
@@ -415,6 +472,8 @@ void dm_report2(struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm_repor
 {
 	float q[4], ua[3], b[3];
 	int acc = dm_mag_accuracy(f);
+	if (!f->cal.hold_off && f->mag_raw_ts && ts > f->mag_raw_ts && (double)(ts - f->mag_raw_ts) > DM_MAG_HOLD_S * 19200000.0)
+		acc = -1;	/* dm8: no mag for 5 s: heading invalid */
 	memset(r, 0, sizeof(*r));
 	r->type = 2;
 	r->mag_accuracy = acc < 0 ? 0xff : (uint8_t)acc;
