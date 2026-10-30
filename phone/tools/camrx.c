@@ -1602,6 +1602,9 @@ static int cap_zero(uint64_t pa, uint32_t len)
 
 /* cam16: the IFE-lite WM writes through SID 0x8c0 and 0xcc0: --sid-mask 0x400 makes the bypass SMR cover both */
 static uint16_t sid_mask;
+/* cam18: SID 0xcc0 carries the odd 1 KB blocks and passing it resets the phone; --addr-offset 0x400 moves the frame
+ * 1 KB up, so a second capture gets the other half through SID 0x8c0 (tools/sunfish-cam-merge.py joins them) */
+static uint32_t addr_off;
 
 static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid, int xlate)
 {
@@ -1693,7 +1696,7 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 	if (rx_arm())
 		return 1;
 	cap.armed = 1;
-	if (ife_config((uint32_t)cap.pa))
+	if (ife_config((uint32_t)(cap.pa + addr_off)))
 		return 1;
 	stage("sensor stream");
 	printf("camrx: stream command: %s\n", cmd);
@@ -1748,11 +1751,12 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 		cam_smmu_samples_report();	/* cam18 */
 		int tf = cam_smmu_trap_report();	/* --bypass: the other IFE SIDs' trap bank */
 		tf |= cs.trap >= 0 && fs.b[cs.trap] > 0;	/* the sampler cleared them */
-		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, cap.len - FRAME_BYTES);
+		uint64_t nf = nonzero(cap.pa + addr_off, FRAME_BYTES),
+			 ng = nonzero(cap.pa + addr_off + FRAME_BYTES, cap.len - addr_off - FRAME_BYTES);
 		printf("camrx: nonzero bytes: frame %llu of %u, guard %llu of %u%s\n", (unsigned long long)nf, FRAME_BYTES,
-		       (unsigned long long)ng, cap.len - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
+		       (unsigned long long)ng, cap.len - addr_off - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
 		if (ng)
-			guard_where(cap.pa, cap.len);
+			guard_where(cap.pa + addr_off, cap.len - addr_off);
 		/* no WM0 byte-count/last-address register in the notes (camera-stage-d.md): raw values only */
 		printf("camrx: wm0: STATUS0 %#x STATUS1 %#x IMAGE_ADDR %#x WIDTH %#x HEIGHT %#x STRIDE %#x FRAME_INC %#x\n",
 		       ir(WM0_STATUS0), ir(WM0_STATUS1), ir(WM0_IMAGE_ADDR), ir(WM0_WIDTH), ir(WM0_HEIGHT), ir(WM0_STRIDE),
@@ -1762,7 +1766,7 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 			       tf ? "fault caught (SID above)" : "NO fault in the trap bank: the IFE stream is not one of the 3 SMRs",
 			       (unsigned long long)nf, (unsigned long long)ng);
 		bad = trap ? (!tf || nf || ng) : ((fsr & 0x800001feu) || ng);
-		if (save_frame(cap.pa, out)) {
+		if (save_frame(cap.pa + addr_off, out)) {
 			printf("camrx: writing %s failed\n", out);
 			bad = 1;
 		} else {
@@ -1827,7 +1831,11 @@ int main(int argc, char **argv)
 				xlate = byp = 1, sid = 0x8c0, sid_mask = 0x400;
 			else if (!strcmp(argv[i], "--sid") && i + 1 < argc)
 				sid = (int)(strtoul(argv[++i], NULL, 0) & 0x7fff);
-			else if (!strcmp(argv[i], "--sid-mask") && i + 1 < argc)
+			else if (!strcmp(argv[i], "--addr-offset") && i + 1 < argc) {
+				addr_off = (uint32_t)strtoul(argv[++i], NULL, 0);
+				if (addr_off & 0x3ff || addr_off >= 0x10000)
+					goto usage;
+			} else if (!strcmp(argv[i], "--sid-mask") && i + 1 < argc)
 				sid_mask = (uint16_t)(strtoul(argv[++i], NULL, 0) & 0x7fff);
 			else if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
 				cmd = argv[++i];
@@ -1846,7 +1854,7 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid-mask 0xM]|--xlate "
+			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid-mask 0xM] [--addr-offset 0x400]|--xlate "
 			"[--stream-cmd \"CMD\"] [--alloc32]\n");
 	return 2;
 }
