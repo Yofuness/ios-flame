@@ -13,6 +13,8 @@
  */
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <pthread.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -106,10 +108,29 @@ static void *need(void *h, const char *sym)
 	return p;
 }
 
-/* B31: print where a crash happened (async-signal-safe: snprintf on a stack buffer + write) */
+/* B31: a crash while one message is decoded/printed (seen: SIGSEGV at 0x130 inside
+ * copy_formatted_message when an app crashed) skips that message: the handler jumps back to on_entry.
+ * Only on the thread inside on_entry; anywhere else it prints and exits as before. OSLOG_NOSKIP=1 turns it off. */
+static sigjmp_buf entry_jmp;
+static pthread_t entry_thread;
+static volatile sig_atomic_t in_entry;
+static int noskip;
+static unsigned long skipped;
+
 static void on_segv(int sig, siginfo_t *si, void *uc)
 {
 	char b[96];
+	if (in_entry && !noskip && pthread_equal(pthread_self(), entry_thread)) {
+		in_entry = 0;
+		skipped++;
+		if (skipped <= 20 || skipped % 100 == 0) {
+			int k = snprintf(b, sizeof(b), "oslog: skipped a message (SIG%s at %p, %lu so far)\n",
+					 sig == SIGBUS ? "BUS" : "SEGV", si->si_addr, skipped);
+			if (k > 0)
+				write(2, b, (size_t)k);
+		}
+		siglongjmp(entry_jmp, 1);
+	}
 	unsigned long pc = 0;
 #if defined(__arm64__)
 	pc = (unsigned long)((ucontext_t *)uc)->uc_mcontext->__ss.__pc;
@@ -146,9 +167,22 @@ static bool on_entry(os_activity_stream_entry_t e, int err)
 	if (want_name && !strstr(proc, want_name))
 		return true;
 	os_log_message_t m = &e->log_message;
+	/* B31: a fault below lands here; the message (and a leaked text) is dropped */
+	entry_thread = pthread_self();
+	static __thread int have_alt;	/* sigaltstack is per thread: give each stream thread one, once */
+	if (!have_alt) {
+		stack_t ss = { .ss_sp = malloc(64 * 1024), .ss_size = 64 * 1024, .ss_flags = 0 };
+		if (ss.ss_sp)
+			sigaltstack(&ss, NULL);
+		have_alt = 1;
+	}
+	if (sigsetjmp(entry_jmp, 1))
+		return true;
+	in_entry = 1;
 	char *text = copy_formatted_message(m);
 	const char *t = text ? text : (m->format ? m->format : "");
 	if (grep && !strstr(t, grep)) {
+		in_entry = 0;
 		free(text);
 		return true;
 	}
@@ -221,10 +255,11 @@ int main(int argc, char **argv)
 	if (optind != argc || (want_pid > 0 && want_name))
 		usage();
 	setvbuf(stdout, NULL, _IOLBF, 0);	/* line-buffered: a crash loses at most the current line */
+	noskip = getenv("OSLOG_NOSKIP") != NULL;
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_sigaction = on_segv;
-	sa.sa_flags = SA_SIGINFO;
+	sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
 	sigaction(SIGSEGV, &sa, NULL);
 	sigaction(SIGBUS, &sa, NULL);
 	signal(SIGPIPE, SIG_IGN);	/* a closed reader shows up as write errors, not a silent kill */
