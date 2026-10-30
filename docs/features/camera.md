@@ -35,6 +35,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:40 cam34: BOTH CAMERAS GIVE REAL PICTURES; the static is a wrong row stride (lines are 16-byte aligned)
+- kernel127, daylight. Rear (camclient -n 2 -o; camd had been in FAULT after the Camera.app session: killed, launchd restarted it, START 0 after 4.35 s): with stride 2528 the frame shows the red circuit board right in front of the lens (blurry); with our stride 2520 it is diagonal stripes = Camera.app's static. Front (tools/sunfish-cam-rx.sh --front --capture, 1894200 B): with stride 2064 (data 2050 B) it shows the ceiling and the user's iPhone 11 with its flash dot; green cast (no white balance). Shots: work/cam/cam34-rear-s2528.png, cam34-front-view.png.
+- Stride measured by the minimum vertical row difference of the high bytes: rear 2520 -> 37.9, 2528 -> 0.49; front 2050 -> ~20, 2064 -> 4.96. Rule: stride = align16(width * 10 / 8).
+- Rear raw: high-byte mean 16.5 (black ~16), max 24: dark scene at 1592 lines, gain 1, 16.5 ms. Two frames 1 s apart nearly identical (mean abs diff 0.16), 0 torn.
+- Camera.app (20 s): "START -> 0 after 3543 ms", 2016x1512 60.1 fps, PrimaryScaler 1504x1128 420f, "frame 6: exposure 16.5 ms, gain 1.0x, ... lux 150, 5351 K"; preview = green/cyan diagonal streaks (same shear). The front camera shows nothing in Camera.app: camd has no front path yet.
+- Fix in progress: stride helper everywhere + camd copies height*stride.
+
 ### 2026-10-30 16:30 Camera static, read-only analysis: nobody has looked at a picture from this camera yet
 - Path (code): sensor 2016x1512 MIPI RAW10 packed, stride 2520 -> unpack camera_isp.c:853-862 -> camd copies frames from the carveout via /dev/pmem 64 KB at a time (camd.c:265) into a shared slot -> camera_client copies out (camera_client.c:256) -> camera_device announces 420f/420v/BGRA, render_into fills NV12 with CoreVideo's per-plane bytesPerRow (camera_device.c:1292-1298, 1453) -> backboardd planarFill converts 420f to RGBA (NativeBridgeMetalFrontend.mm:1964-2018). Formats agree on paper.
 - Every raw2png/camisp output since cam16 is logged "not viewed"; only mean, zero blocks and md5 were checked. Ranked: (1) the raw data is noise/stale (cam19 comb histogram, "exposure 0.0 ms", /dev/pmem reads of the DMA carveout without cache maintenance, RGGB/black level guessed); (2) backboardd reads the IOSurface planes wrongly (plane bytesPerRow, xnu 0235 offset); (3) torn slots (would give bands, least likely).
