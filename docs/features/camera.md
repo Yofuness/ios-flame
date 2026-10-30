@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:00 af1: the lens chips answer (kernel128, xnu 0247 kern.sweet_camvaf)
+- `camid --lens-probe` (read-only): "AF 0x72 reg 0xB3: ACK, 00" (raw e5 00 00 00), "OIS 0x3e reg 0xF100: ACK, 00 00 00 00". Kernel: "SWEET CAMVAF: 0xcb00 TYPE 0x10 SUBTYPE 0x10, gpio1 0xc000 TYPE 0x10 SUBTYPE 0x10", before 40 00 41 00 42 04 44 00 45 01 46 80, on, off 18 ms later. So the VAF rail and address are right. Camera preview fine afterwards. 4455 mV. Next: init + one small move.
+
 ### 2026-10-30 20:30 Autofocus plan (static decode, research/notes/camera-af.md; nothing run yet)
 - AF chip LC898219XI at 7-bit 0x72 on CCI0 m0; position = 12-bit big-endian write to register 0x84; init E0=01, poll B3==00, 8A=A5, 89=3F, 87=1D, 84=0000; range codes 400..725 (inferred). OIS/EEPROM chip LC898123F40 at 0x3e stays off. VAF rail = PM6150L GPIO12 (0xcb00, inferred): needs a kernel sysctl (0247). Steps: read-only probe -> init -> one small move -> camid F + camd FOCUS -> AF tuning. Hard limits: 400..725, max 20 codes per write, >= 2 ms apart; no writes to 0x3e.
 
