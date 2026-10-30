@@ -1,0 +1,192 @@
+diff --git a/crates/metal2vulkan-runtime/src/buffer_texture.rs b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+--- a/crates/metal2vulkan-runtime/src/buffer_texture.rs
++++ b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+@@ -1206,23 +1206,40 @@
+             true => 4,
+             false => self.texel_bytes,
+         };
+-        let staging = if at.is_multiple_of(align) {
+-            None
++        // 0109 (B29): Turnip on the A6xx copies a buffer whose rows are not 64-byte multiples
++        // one 2D blit per row (`tu_copy_buffer_to_image`), suspected of the sheared rows; such a
++        // plain color texture's copies go through a staging buffer of rows 64 bytes apart
++        // (after ios-redfin's 0104, without its rotation kernel). On: M2V_SHADOW_REPACK=1.
++        let repack = shadow_repack()
++            && aspects == vk::ImageAspectFlags::COLOR
++            && matches!(self.texel_bytes, 1 | 2 | 4 | 8 | 16)
++            && layout.row_bytes.is_multiple_of(self.texel_bytes)
++            && !layout.row_pitch.is_multiple_of(64);
++        let (staging, pitch, slice_pitch) = if repack {
++            let pitch = layout.row_bytes.next_multiple_of(64);
++            let staging = self.staging_repacked(layout, at, pitch)?;
++            (Some(staging), pitch, pitch * layout.rows)
++        } else if at.is_multiple_of(align) {
++            (None, layout.row_pitch, layout.slice_pitch)
+         } else {
+-            Some(self.staging(layout, at)?)
++            let staging = self.staging(layout, at)?;
++            (Some(staging), layout.row_pitch, layout.slice_pitch)
+         };
+         let start = staging
+             .as_ref()
+             .map_or(at, |staging| staging.into.dst_offset);
+         let width = layout.row_bytes / self.texel_bytes;
++        if repack {
++            repack_log(width, layout.rows, self.texel_bytes, layout.row_pitch, pitch);
++        }
+         // The descriptor's checks bound a texture's extent and slices to `u32`s.
+         let slices = layout.slices as u32;
+         let regions = (0..slices)
+             .map(|slice| vk::BufferImageCopy {
+                 // Metal's slices are multiples of 128 bytes apart.
+-                buffer_offset: start + layout.slice_pitch * u64::from(slice),
++                buffer_offset: start + slice_pitch * u64::from(slice),
+                 // Metal's rows are multiples of 16 bytes, so of every texel size.
+-                buffer_row_length: (layout.row_pitch / self.texel_bytes) as u32,
++                buffer_row_length: (pitch / self.texel_bytes) as u32,
+                 buffer_image_height: 0,
+                 image_subresource: vk::ImageSubresourceLayers {
+                     aspect_mask: aspects,
+@@ -1263,6 +1280,54 @@
+         })
+     }
+ 
++    /// 0109 (B29): the staging buffer of a shadowed texture over the texels laid out as `layout`,
++    /// which start at `at` of the buffer's `VkBuffer`: its rows `pitch` bytes apart (a multiple
++    /// of 64), slices `pitch` x rows apart, copied in and back one row each.
++    fn staging_repacked(
++        &self,
++        layout: &BufferLayout,
++        at: u64,
++        pitch: u64,
++    ) -> Result<ShadowStaging, Error> {
++        let hazard = self.options.hazard_tracking_mode()?;
++        let options =
++            ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
++        let size = pitch * layout.rows * layout.slices;
++        let buffer = self.buffer.device().own_buffer(size.max(4), options)?;
++        let (_, start) = buffer.at(0);
++        let rows: Vec<(u64, u64)> = (0..layout.slices)
++            .flat_map(|slice| {
++                (0..layout.rows).map(move |row| {
++                    let i = slice * layout.rows + row;
++                    (slice * layout.slice_pitch + row * layout.row_pitch, i * pitch)
++                })
++            })
++            .collect();
++        let copy = |(src, dst): (u64, u64)| vk::BufferCopy {
++            src_offset: src,
++            dst_offset: dst,
++            size: layout.row_bytes,
++        };
++        let rows_in = rows
++            .iter()
++            .map(|&(texels, staged)| copy((at + texels, start + staged)))
++            .collect();
++        let back = rows
++            .iter()
++            .map(|&(texels, staged)| copy((start + staged, at + texels)))
++            .collect();
++        Ok(ShadowStaging {
++            into: vk::BufferCopy {
++                src_offset: at,
++                dst_offset: start,
++                size,
++            },
++            back,
++            buffer,
++            rows_in,
++        })
++    }
++
+     /// The staging buffer of a shadowed texture or a texture buffer over the texels laid out as
+     /// `layout`, which start at `at` of the buffer's `VkBuffer`: the texels' bytes from the first
+     /// to the last, at its start, of the texture's hazard tracking, in a buffer of whole 4-byte
+@@ -1295,6 +1360,7 @@
+             },
+             back,
+             buffer,
++            rows_in: Vec::new(),
+         })
+     }
+ 
+@@ -1526,3 +1592,31 @@
+         _ => Err(Error::NotImplemented(RuntimeGap::Textures)),
+     }
+ }
++
++/// 0109 (B29): `M2V_SHADOW_REPACK=1`, read once: shadow copies of rows not 64-byte multiples
++/// go through a staging buffer of 64-byte rows (`Texels::shadow_copies`).
++fn shadow_repack() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("M2V_SHADOW_REPACK").is_some_and(|v| v == "1"))
++}
++
++/// 0109 (B29): the first 8 repacked textures, into /dev/console and /var/local/mtl2.log as
++/// 0107's lines are.
++fn repack_log(width: u64, height: u64, texel_bytes: u64, pitch: u64, repacked: u64) {
++    use std::io::Write;
++    use std::sync::atomic::{AtomicU32, Ordering};
++    static LOGGED: AtomicU32 = AtomicU32::new(0);
++    if LOGGED.fetch_add(1, Ordering::Relaxed) >= 8 {
++        return;
++    }
++    let line = format!(
++        "MTL2[{} {}]: B29 repack {width}x{height} fmt {texel_bytes}B row {pitch} -> {repacked}\n",
++        std::process::id(),
++        std::env::args().next().unwrap_or_default()
++    );
++    for path in ["/dev/console", "/var/local/mtl2.log"] {
++        if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
++            let _ = file.write_all(line.as_bytes());
++        }
++    }
++}
+diff --git a/crates/metal2vulkan-runtime/src/shadow.rs b/crates/metal2vulkan-runtime/src/shadow.rs
+--- a/crates/metal2vulkan-runtime/src/shadow.rs
++++ b/crates/metal2vulkan-runtime/src/shadow.rs
+@@ -283,6 +283,9 @@
+     pub(super) into: vk::BufferCopy,
+     /// Each row of texels from the staging buffer back into the texture's buffer.
+     pub(super) back: Vec<vk::BufferCopy>,
++    /// 0109 (B29): each row from the texture's buffer into the staging buffer, rows 64 bytes
++    /// apart there (`M2V_SHADOW_REPACK=1`); empty copies `into` whole.
++    pub(super) rows_in: Vec<vk::BufferCopy>,
+ }
+ 
+ impl ShadowStaging {
+@@ -820,7 +823,11 @@
+         unsafe {
+             if into_shadow {
+                 if let Some(staging) = staging {
+-                    device.cmd_copy_buffer(command_buffer, buffer, texels, &[staging.into]);
++                    let rows: &[vk::BufferCopy] = match staging.rows_in.as_slice() {
++                        [] => std::slice::from_ref(&staging.into),
++                        rows => rows,
++                    };
++                    device.cmd_copy_buffer(command_buffer, buffer, texels, rows);
+                     Barrier::everything().record(device, command_buffer);
+                 }
+                 device.cmd_copy_buffer_to_image(
+diff --git a/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs b/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
+--- a/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
++++ b/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
+@@ -178,6 +178,7 @@
+             },
+             back,
+             buffer,
++            rows_in: Vec::new(),
+         })
+     }
+ 
+diff --git a/crates/metal2vulkan-runtime/src/texture/heap_tiled.rs b/crates/metal2vulkan-runtime/src/texture/heap_tiled.rs
+--- a/crates/metal2vulkan-runtime/src/texture/heap_tiled.rs
++++ b/crates/metal2vulkan-runtime/src/texture/heap_tiled.rs
+@@ -1248,6 +1248,7 @@
+             },
+             back,
+             buffer,
++            rows_in: Vec::new(),
+         })
+     }
+ 
