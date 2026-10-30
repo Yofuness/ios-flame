@@ -71,6 +71,25 @@ extern "C" void sm2_logs(const char *);
 #define NBLOG(...) do{NSString *nbText=[NSString stringWithFormat:__VA_ARGS__];sm2_logs(nbText.UTF8String);noteProblem(nbText);}while(0)
 // 0106 (B29, diagnostic): 1-byte texel textures' row pitch, logged without counting as a problem. Off: M2V_B29_LOG=0.
 #define B29LOG(...) do{const char *nbOff=getenv("M2V_B29_LOG");if(!nbOff||strcmp(nbOff,"0"))sm2_logs([NSString stringWithFormat:__VA_ARGS__].UTF8String);}while(0)
+// 0110 (B44, diagnostic): one line per distinct (path, format, width, height, row bytes) of every texture creation, view and upload
+// ("B44 <path> fmt .. type .. WxHxD levels .. storage .. usage .. row .. <extra>"), at most 2000 per process. On: /var/local/mtl2-b44log
+// exists (checked once).
+static bool b44On() {static const bool on=access("/var/local/mtl2-b44log",F_OK)==0;return on;}
+static void b44Log(const char *path,uint64_t fmt,uint64_t type,uint64_t w,uint64_t h,uint64_t z,uint64_t levels,uint64_t storage,uint64_t usage,uint64_t row,NSString *extra) {
+ if(!b44On())return;
+ static std::mutex lock;static std::unordered_map<uint64_t,bool> seen;
+ uint64_t key=std::hash<std::string>()(path);
+ for(uint64_t v:{fmt,w,h,row})key=(key^v)*0x100000001b3ULL;
+ {std::lock_guard<std::mutex> hold(lock);if(seen.size()>=2000 || !seen.emplace(key,true).second)return;}
+ sm2_logs([NSString stringWithFormat:@"B44 %s fmt %llu type %llu %llux%llux%llu levels %llu storage %llu usage %llu row %llu %@",path,fmt,type,w,h,z,levels,storage,usage,row,extra?:@""].UTF8String);
+}
+static void b44Desc(const char *path,MTLTextureDescriptor *d,uint64_t row,NSString *extra) {
+ if(b44On()&&d)b44Log(path,d.pixelFormat,d.textureType,d.width,d.height,d.textureType==MTLTextureType3D?d.depth:d.arrayLength,d.mipmapLevelCount,d.storageMode,d.usage,row,extra);
+}
+static void b44Tex(const char *path,id<MTLTexture> t,uint64_t row,NSString *extra) {
+ if(b44On()&&t)b44Log(path,t.pixelFormat,t.textureType,t.width,t.height,t.textureType==MTLTextureType3D?t.depth:t.arrayLength,t.mipmapLevelCount,t.storageMode,t.usage,row,extra);
+}
+#define B44R(r) [NSString stringWithFormat:@"region %lu,%lu,%lu %lux%lux%lu",(unsigned long)(r).origin.x,(unsigned long)(r).origin.y,(unsigned long)(r).origin.z,(unsigned long)(r).size.width,(unsigned long)(r).size.height,(unsigned long)(r).size.depth]
 // The pixel formats textures were asked for (first eight distinct), with how many were refused: native_bridge_metal_formats.
 static uint32_t gFormats[8];static unsigned gFormatCount;static std::atomic<uint64_t> gTextureRefusals;
 static void noteFormat(uint32_t format,bool made) {
@@ -234,6 +253,7 @@ NB_RESOURCE_SPI
 - (id<MTLTexture>)view:(NmbTexture *)handle {
  if(!handle){NBLOG(@"native-metal: texture view refused: %@",lastError());return nil;}
  NBTexture *view=[NBTexture new];view.handle=handle;NmbTextureDescriptor descriptor;nmb_texture_describe(handle,&descriptor);view.descriptor=descriptor;
+ if(b44On())b44Tex("view",(id<MTLTexture>)view,_rowBytes,[NSString stringWithFormat:@"parent fmt %lu %lux%lu surface %d",(unsigned long)self.pixelFormat,(unsigned long)self.width,(unsigned long)self.height,_surface!=nullptr]);
  view.parent=(id<MTLTexture>)self;view.buffer=_buffer;view.offset=_offset;view.rowBytes=_rowBytes;
  if(_surface)view.surface=(IOSurfaceRef)CFRetain(_surface);
  return (id<MTLTexture>)view;
@@ -248,6 +268,7 @@ NB_RESOURCE_SPI
 - (void)replaceRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level slice:(NSUInteger)slice withBytes:(const void *)bytes bytesPerRow:(NSUInteger)row bytesPerImage:(NSUInteger)image {
  const uint64_t region[6]={r.origin.x,r.origin.y,r.origin.z,r.size.width,r.size.height,r.size.depth};
  const uint64_t length=(r.size.depth>1?image*(r.size.depth-1):0)+row*r.size.height;
+ if(b44On())b44Tex("replaceRegion",(id<MTLTexture>)self,row,[NSString stringWithFormat:@"%@ level %lu slice %lu image %lu surface %d buffer %d",B44R(r),(unsigned long)level,(unsigned long)slice,(unsigned long)image,_surface!=nullptr,_buffer!=nil]);
  if(!nmb_texture_replace(_handle,region,level,slice,bytes,row,image,length))NBLOG(@"native-metal: replaceRegion refused: %@",lastError());
 }
 - (void)replaceRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level withBytes:(const void *)bytes bytesPerRow:(NSUInteger)row {
@@ -256,6 +277,7 @@ NB_RESOURCE_SPI
 - (void)getBytes:(void *)bytes bytesPerRow:(NSUInteger)row bytesPerImage:(NSUInteger)image fromRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level slice:(NSUInteger)slice {
  const uint64_t region[6]={r.origin.x,r.origin.y,r.origin.z,r.size.width,r.size.height,r.size.depth};
  const uint64_t length=(r.size.depth>1?image*(r.size.depth-1):0)+row*r.size.height;
+ if(b44On())b44Tex("getBytes",(id<MTLTexture>)self,row,[NSString stringWithFormat:@"%@ level %lu slice %lu image %lu",B44R(r),(unsigned long)level,(unsigned long)slice,(unsigned long)image]);
  if(!nmb_texture_get_bytes(_handle,bytes,row,image,length,region,level,slice))NBLOG(@"native-metal: getBytes refused: %@",lastError());
 }
 - (void)getBytes:(void *)bytes bytesPerRow:(NSUInteger)row fromRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level {
@@ -293,10 +315,12 @@ static uint64_t sweetTexelBytes(MTLPixelFormat f);
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset bytesPerRow:(NSUInteger)row {
  // 0107 (B29, diagnostic): 1-byte texels or rows not 64-byte aligned, the layouts Turnip refuses. Off: M2V_B29_LOG=0.
  if(sweetTexelBytes(d.pixelFormat)==1 || row%64)B29LOG(@"B29 bufferTexture %lux%lu fmt %lu usage %lu storage %lu offset %lu row %lu len %lu",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,(unsigned long)d.usage,(unsigned long)d.storageMode,(unsigned long)offset,(unsigned long)row,(unsigned long)self.length);
+ if(b44On())b44Desc("bufferTexture",d,row,[NSString stringWithFormat:@"offset %lu len %lu",(unsigned long)offset,(unsigned long)self.length]);
  return (id<MTLTexture>)textureOnBuffer(self,d,offset,row,false);
 }
 - (id<MTLTexture>)newLinearTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset bytesPerRow:(NSUInteger)row bytesPerImage:(NSUInteger)image {
  NmbTextureDescriptor descriptor;if(!textureDescriptor(d,&descriptor))return nil;
+ if(b44On())b44Desc("linearTexture",d,row,[NSString stringWithFormat:@"offset %lu image %lu len %lu",(unsigned long)offset,(unsigned long)image,(unsigned long)self.length]);
  NmbTexture *handle=nmb_texture_new_linear(self.handle,&descriptor,offset,row,image);
  if(!handle){NBLOG(@"native-metal: linear texture refused: %@",lastError());return nil;}
  NBTexture *texture=[NBTexture new];texture.handle=handle;nmb_texture_describe(handle,&descriptor);texture.descriptor=descriptor;
@@ -1243,6 +1267,8 @@ struct CullEntry {bool fill=false,clearOK=false;float col[4]={};uint64_t bind=0;
               toTexture:(id<MTLTexture>)d destinationSlice:(NSUInteger)ds destinationLevel:(NSUInteger)dl destinationOrigin:(MTLOrigin)dO {
  if(![self textures:NB_OBJECTS(s,d) count:2])return;
  const uint64_t a[3]={so.x,so.y,so.z},size[3]={z.width,z.height,z.depth},b[3]={dO.x,dO.y,dO.z};
+ if(b44On())b44Tex("blitTexToTex",d,0,[NSString stringWithFormat:@"src fmt %lu %lux%lu at %lu,%lu size %lux%lu dst at %lu,%lu level %lu/%lu slice %lu/%lu",(unsigned long)s.pixelFormat,(unsigned long)s.width,(unsigned long)s.height,
+  (unsigned long)so.x,(unsigned long)so.y,(unsigned long)z.width,(unsigned long)z.height,(unsigned long)dO.x,(unsigned long)dO.y,(unsigned long)sl,(unsigned long)dl,(unsigned long)ss,(unsigned long)ds]);
  [self check:nmb_blit_copy_texture(self.handle,[(NBTexture *)s handle],ss,sl,a,size,[(NBTexture *)d handle],ds,dl,b) what:"copyFromTexture:toTexture:"];
 }
 - (void)copyFromTexture:(id<MTLTexture>)s toTexture:(id<MTLTexture>)d {
@@ -1259,12 +1285,14 @@ struct CullEntry {bool fill=false,clearOK=false;float col[4]={};uint64_t bind=0;
      destinationOrigin:(MTLOrigin)dO {
  if(![self buffers:NB_OBJECTS(s) count:1] || ![self textures:NB_OBJECTS(d) count:1])return;
  const uint64_t size[3]={z.width,z.height,z.depth},b[3]={dO.x,dO.y,dO.z};
+ if(b44On())b44Tex("blitBufToTex",d,row,[NSString stringWithFormat:@"%@ offset %lu image %lu level %lu slice %lu buflen %lu",B44R(MTLRegionMake3D(dO.x,dO.y,dO.z,z.width,z.height,z.depth)),(unsigned long)o,(unsigned long)image,(unsigned long)level,(unsigned long)slice,(unsigned long)s.length]);
  [self check:nmb_blit_buffer_to_texture(self.handle,[(NBBuffer *)s handle],o,row,image,size,[(NBTexture *)d handle],slice,level,b) what:"copyFromBuffer:toTexture:"];
 }
 - (void)copyFromTexture:(id<MTLTexture>)s sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level sourceOrigin:(MTLOrigin)so sourceSize:(MTLSize)z
                toBuffer:(id<MTLBuffer>)d destinationOffset:(NSUInteger)o destinationBytesPerRow:(NSUInteger)row destinationBytesPerImage:(NSUInteger)image {
  if(![self textures:NB_OBJECTS(s) count:1] || ![self buffers:NB_OBJECTS(d) count:1])return;
  const uint64_t a[3]={so.x,so.y,so.z},size[3]={z.width,z.height,z.depth};
+ if(b44On())b44Tex("blitTexToBuf",s,row,[NSString stringWithFormat:@"%@ offset %lu image %lu level %lu slice %lu",B44R(MTLRegionMake3D(so.x,so.y,so.z,z.width,z.height,z.depth)),(unsigned long)o,(unsigned long)image,(unsigned long)level,(unsigned long)slice]);
  [self check:nmb_blit_texture_to_buffer(self.handle,[(NBTexture *)s handle],slice,level,a,size,[(NBBuffer *)d handle],o,row,image) what:"copyFromTexture:toBuffer:"];
 }
 - (void)generateMipmapsForTexture:(id<MTLTexture>)t {
@@ -1638,6 +1666,7 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d,NmbRenderPipelineDes
 }
 - (id<MTLTexture>)textureWithDescriptor:(MTLTextureDescriptor *)d offset:(uint64_t)offset {
  NmbTextureDescriptor descriptor;if(!textureDescriptor(d,&descriptor))return nil;
+ if(b44On())b44Desc("heapTexture",d,0,nil);
  NmbTexture *handle=nmb_heap_new_texture(_handle,&descriptor,offset);
  if(!handle){NBLOG(@"native-metal: heap texture refused: %@",lastError());return nil;}
  NBTexture *texture=[NBTexture new];texture.handle=handle;nmb_texture_describe(handle,&descriptor);texture.descriptor=descriptor;
@@ -1774,7 +1803,9 @@ static char sweetMemoryOwnerKey;
 - (void)finalizeTextureMemory:(void *)memory {(void)memory;}
 - (void)copyFromLinearBytes:(const void *)src linearOffset:(NSUInteger)offset linearBytesPerRow:(NSUInteger)srcRow linearBytesPerImage:(NSUInteger)image
             toTextureMemory:(void *)dst textureSlice:(NSUInteger)slice textureLevel:(NSUInteger)level textureRegion:(MTLRegion)r {
- (void)image;if(slice || level)return;
+ (void)image;
+ if(b44On())b44Log("layoutUpload",0,0,_row/(_texel?_texel:1)*_bw,_height*_bh,1,1,0,0,srcRow,[NSString stringWithFormat:@"%@ offset %lu level %lu slice %lu texel %llu block %ux%u",B44R(r),(unsigned long)offset,(unsigned long)level,(unsigned long)slice,(unsigned long long)_texel,_bw,_bh]);
+ if(slice || level)return;
  const NSUInteger x0=r.origin.x/_bw,y0=r.origin.y/_bh,w=(r.size.width+_bw-1)/_bw,h=(r.size.height+_bh-1)/_bh;
  for(NSUInteger y=0;y<h && y0+y<_height;y++)
   memcpy((uint8_t *)dst+(y0+y)*_row+x0*_texel,(const uint8_t *)src+offset+y*srcRow,w*_texel);
@@ -1913,6 +1944,7 @@ static char sweetMemoryOwnerKey;
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d {
  NmbTextureDescriptor descriptor;if(!textureDescriptor(d,&descriptor))return nil;
+ if(b44On())b44Desc("texture",d,0,nil);
  NmbTexture *handle=nmb_texture_new(gDevice,&descriptor);noteFormat((uint32_t)descriptor.format,handle!=nullptr);
  if(!handle){NBLOG(@"native-metal: texture refused: %@",lastError());return nil;}
  NBTexture *texture=[NBTexture new];texture.handle=handle;nmb_texture_describe(handle,&descriptor);texture.descriptor=descriptor;return (id<MTLTexture>)texture;
@@ -1975,6 +2007,8 @@ static void planarFill(NBTexture *t) {
   const OSType fourcc=IOSurfaceGetPixelFormat(surface);const NSUInteger f=d.pixelFormat;
   const bool yuv=(f==500 || f==501) && (fourcc=='420v' || fourcc=='420f'),xr=(f==550 || f==551);
   if(!planarOn() || plane || (!yuv && !xr) || IOSurfaceGetPlaneCount(surface)<2 || d.textureType!=MTLTextureType2D){planarRefused(fourcc,f,plane);return nil;}
+  if(b44On())b44Desc("iosurfacePlanar",d,IOSurfaceGetBytesPerRowOfPlane(surface,0),[NSString stringWithFormat:@"surface %c%c%c%c %zux%zu planes %zu",
+   (char)(fourcc>>24),(char)(fourcc>>16),(char)(fourcc>>8),(char)fourcc,IOSurfaceGetWidth(surface),IOSurfaceGetHeight(surface),IOSurfaceGetPlaneCount(surface)]);
   MTLTextureDescriptor *own=[d copy];
   own.pixelFormat=yuv?(f==501?MTLPixelFormatRGBA8Unorm_sRGB:MTLPixelFormatRGBA8Unorm):(f==551?MTLPixelFormatBGRA8Unorm_sRGB:MTLPixelFormatBGRA8Unorm);
   own.storageMode=MTLStorageModeShared;own.usage=MTLTextureUsageShaderRead;own.mipmapLevelCount=1;
@@ -1993,6 +2027,8 @@ static void planarFill(NBTexture *t) {
   B29LOG(@"B29 iosurface %lux%lu fmt %lu surface %c%c%c%c %zux%zu bpe %zu bpr %zu plane %lu pitch %zu",(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat,
    (char)(fourcc>>24),(char)(fourcc>>16),(char)(fourcc>>8),(char)fourcc,IOSurfaceGetWidth(surface),IOSurfaceGetHeight(surface),IOSurfaceGetBytesPerElement(surface),
    IOSurfaceGetBytesPerRow(surface),(unsigned long)plane,IOSurfaceGetBytesPerRow(surface));
+ if(b44On())b44Desc("iosurface",d,IOSurfaceGetBytesPerRow(surface),[NSString stringWithFormat:@"surface %c%c%c%c %zux%zu bpe %zu plane %lu alloc %zu",
+  (char)(fourcc>>24),(char)(fourcc>>16),(char)(fourcc>>8),(char)fourcc,IOSurfaceGetWidth(surface),IOSurfaceGetHeight(surface),IOSurfaceGetBytesPerElement(surface),(unsigned long)plane,allocation]);
  NBTexture *texture=textureOnBuffer(buffer,d,0,IOSurfaceGetBytesPerRow(surface),true);if(!texture)return nil;
  texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;
 }
