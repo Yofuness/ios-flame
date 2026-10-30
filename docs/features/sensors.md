@@ -16,6 +16,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:15 Ambient light: samples reach backboardd, brightness doesn't follow yet (kernel112, sweetmotion=0x37, sweetbl=2; boot sp16r)
+- research/notes/ambient-light.md: the ADSP lists "als + prox TCS3701"; adspboot's SNS follow already handles ALS; the kernel ALS service exists and backboardd opens it like an AppleALS.
+- At boot the sensors job finds its sensors only after ~30 s (two 10 s retries) while backboardd asks for ALS at 26 s and sets ReportInterval 0 at 45.8 s together with the screen's brightness 0 (display sleep), so no ALS during the first minute. After `K` (lock) + `H` (wake): "sns: als: start", 254 then 752 ALS samples posted, backboardd ReportInterval 400000 (ALSIntegrationMode 2/3).
+- `m fake als 20000 5000` for 15 s, then `m fake als 1 5000`: the kernel logs each fake sample with 1 client, but SweetBacklight gets NO setProperties (slider stays at its minimum, position 0x1). So CoreBrightness ignores the lux or auto-brightness is off. backboardd prefs: BKALSUserPreferences present (S 0, E2 2000), no BKEnableALS key.
+- Next: CoreBrightness RE for the enable gate / missing service properties (ALSSensorMax is absent) (investigator, in progress).
+
 ### 2026-10-30 19:45 Auto-rotate from the boot job confirmed by the user (u10h, kernel108 defaults)
 - Fresh boot with the new defaults (sweetmotion=0x37, launchd org.iosonpixel.sensors via tools/sunfish-install-sensors.sh): the feed starts by itself (adspboot pid 37, "SNS service 400 ... starting in 10 s", orientation posts). The user: Calculator auto-rotates just fine.
 
