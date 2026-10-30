@@ -48,6 +48,11 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 17:45 B44 round 3 (read-only): not compressed textures; correction to rp1
+- Correction to rp1 (13:00): "the repack fired 8 times, none in the apps" is wrong: 8 is only the log cap in bridge patch 0109 (repack_log, LOGGED >= 8); the repack ran for every shadow and still changed nothing.
+- Log census (all ../logs/boots, ~60.7k "B29" lines): only uncompressed formats reach the buffer-texture path (A8, RGBA8, BGRA8; RGBA16F/RG8/BGR10XR as aliases), all drawn by backboardd; no ASTC/ETC/PVRTC anywhere (the bridge handles ASTC/ETC2 separately, NativeBridgeMetalFrontend.mm:1727-1870). Colours in the garbled art are right; only the geometry is broken.
+- Ranked guesses: 1 Turnip GMEM tiling bug for Core Animation's offscreen image draws; 2 missing sync (texture read before its copy/render ends); 3 an unlogged path (IOSurface decodes, replaceRegion). Next: /var/local/mtl2-tu-debug = `sysmem`, then `flushall,syncdraw` (gm1/gm2), flame-shot Voice Memos, Tips, Control Center. Notes: research/notes/garbled-textures.md "Round 3".
+
 ### 2026-10-30 16:50 ext1: APP EXTENSIONS WORK (kernel123, fake taps + flame-shot, no reboot)
 - Widgets (Today view): Notes widget shows real notes, Battery widget 100%; a third large widget stays a grey skeleton. Widget gallery ("+" in jiggle mode) lists Smart Stack, Notes, Weather (skeleton), Reminders, Calendar ("FRIDAY 30").
 - Share sheet (from Notes): AirDrop (blank icon), Messages, Mail, Reminders, Copy, Markup, Print, Save to Filza, Save to Files.
