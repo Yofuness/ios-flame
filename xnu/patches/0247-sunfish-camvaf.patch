@@ -1,0 +1,178 @@
+From ce44d23e3d29e1d448ec1702021076dc3e683ee1 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 17:52:31 -0400
+Subject: [PATCH] 0247 sunfish: kern.sweet_camvaf drives cam_vaf (PM6150L GPIO
+ 12, inferred 0xcb00), off by default, TYPE/SUBTYPE checked on first change
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_spmi.c | 122 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 120 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 3580bc0..8108ca6 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -11,6 +11,7 @@
+  * (sweetampreset=1): MODE/VIN/PULL/OUT_SRC/OUT_DRV/EN only.
+  * 0218: and PM6150L GPIO 1/4/5/6 (SID 4, 0xc000/0xc300/0xc400/0xc500), the SLG51000
+  * camera PMIC enable/cs lines (sweetcampmic=1 read, =2 drive), same registers.
++ * 0247: and PM6150L GPIO 12 (SID 4, 0xcb00), the lens motor rail cam_vaf (kern.sweet_camvaf).
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -107,6 +108,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	ok = ok || (sid == 4 && (peripheral == 0xc7 || peripheral == 0xca)); /* 0217: amp reset GPIOs */
+ 	ok = ok || (sid == 4 && (peripheral == 0xc0 || peripheral == 0xc3 ||
+ 	    peripheral == 0xc4 || peripheral == 0xc5)); /* 0218: SLG51000 GPIOs */
++	ok = ok || (sid == 4 && peripheral == 0xcb); /* 0247: cam_vaf GPIO */
+ 	ok = ok || (sid == 0 && peripheral == 0x08); /* 0197: PM6150 PON reasons, read only */
+ 	if (!sp_ready || !out || addr > 0xffffu || !ok) {
+ 		return -1;
+@@ -151,6 +153,7 @@ static vm_offset_t sp_chnl;
+ static uint16_t sp_chnl_apid = SP_NO_APID;
+ 
+ static bool campmic_writes; /* 0218: set only inside campmic_late with sweetcampmic=2 */
++static bool camvaf_writes; /* 0247: set only inside the kern.sweet_camvaf handler */
+ 
+ int
+ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+@@ -167,7 +170,10 @@ sweet_spmi_write(unsigned sid, unsigned addr, uint8_t val)
+ 	bool camgpio = campmic_writes && sid == 4 &&
+ 	    (per == 0xc0 || per == 0xc3 || per == 0xc4 || per == 0xc5) &&
+ 	    reg >= 0x40 && reg <= 0x46 && reg != 0x43;
+-	if (addr > 0xffffu || !(torch || ampgpio || camgpio)) {
++	/* 0247: PM6150L GPIO 12 (cam_vaf), only from kern.sweet_camvaf; never 0x41 or 0x43 */
++	bool vafgpio = camvaf_writes && sid == 4 && per == 0xcb &&
++	    reg >= 0x40 && reg <= 0x46 && reg != 0x41 && reg != 0x43;
++	if (addr > 0xffffu || !(torch || ampgpio || camgpio || vafgpio)) {
+ 		printf("SWEET TORCH: refused write sid %u %#x <- %#x\n", sid, addr, val);
+ 		return EPERM;
+ 	}
+@@ -479,10 +485,122 @@ ampreset_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ 	}
+ }
+ 
+-/* Called from SweetBattery::start; no-op without sweetampreset=1 or sweetcampmic=1/2. */
++/*
++ * 0247: kern.sweet_camvaf (0/1, default 0, root) drives PM6150L GPIO 12 = cam_vaf. Base 0xcb00 is
++ * inferred (GPIO n = 0xc000 + (n - 1) * 0x100), so the first change checks TYPE/SUBTYPE against
++ * GPIO 1 (0218) and answers EIO for good if it is no GPIO. Nothing touches SPMI until a write of 1.
++ */
++#define CAMVAF_BASE 0xcb00u
++static IOLock *camvaf_lock;
++static int camvaf_on, camvaf_checked; /* checked: 0 not yet, 1 a GPIO, -1 refused */
++static uint8_t camvaf_subtype;
++
++/* Same registers as gpio_out_high, level low. */
++static int
++gpio_out_low(unsigned b, uint8_t subtype)
++{
++	int err;
++	if (subtype >= 0x10 && subtype <= 0x13) {
++		if ((err = sweet_spmi_write(4, b + 0x40, 0x01)) == 0 &&
++		    (err = sweet_spmi_write(4, b + 0x44, 0x00)) == 0) {
++			err = sweet_spmi_write(4, b + 0x46, 0x80);
++		}
++	} else {
++		if ((err = sweet_spmi_write(4, b + 0x40, 0x10)) == 0) {
++			err = sweet_spmi_write(4, b + 0x46, 0x80);
++		}
++	}
++	return err;
++}
++
++static void
++camvaf_check(void)
++{
++	uint8_t type = 0, ref_type = 0, ref_subtype = 0;
++	camvaf_checked = -1;
++	if (sweet_spmi_init() != 0 ||
++	    sweet_spmi_read(4, CAMVAF_BASE + 0x04, &type) != 0 ||
++	    sweet_spmi_read(4, CAMVAF_BASE + 0x05, &camvaf_subtype) != 0 ||
++	    sweet_spmi_read(4, 0xc000u + 0x04, &ref_type) != 0 ||
++	    sweet_spmi_read(4, 0xc000u + 0x05, &ref_subtype) != 0) {
++		printf("SWEET CAMVAF: TYPE/SUBTYPE read failed: refused\n");
++		return;
++	}
++	/* Linux pinctrl-spmi-gpio: TYPE 0x10; subtypes 1, 5, 9, 0xd, 0x10-0x13 */
++	uint8_t st = camvaf_subtype;
++	bool known = st == 0x01 || st == 0x05 || st == 0x09 || st == 0x0d || (st >= 0x10 && st <= 0x13);
++	bool ok = type == 0x10 && ref_type == 0x10 && known;
++	printf("SWEET CAMVAF: %#x TYPE %#x SUBTYPE %#x, gpio1 %#x TYPE %#x SUBTYPE %#x%s\n",
++	    CAMVAF_BASE, type, st, 0xc000u, ref_type, ref_subtype, ok ? "" : ": not a GPIO, refused");
++	if (ok) {
++		gpio_dump("CAMVAF", "before", CAMVAF_BASE);
++		camvaf_checked = 1;
++	}
++}
++
++static int
++sysctl_sweet_camvaf SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int v = camvaf_on, changed = 0;
++	int err = sysctl_io_number(req, v, sizeof(v), &v, &changed);
++	if (err || !changed) {
++		return err;
++	}
++	if (v != 0 && v != 1) {
++		return EINVAL;
++	}
++	IOLockLock(camvaf_lock);
++	if (v == camvaf_on) {
++		IOLockUnlock(camvaf_lock);
++		return 0;
++	}
++	if (camvaf_checked == 0) {
++		camvaf_check();
++	}
++	if (camvaf_checked != 1) {
++		IOLockUnlock(camvaf_lock);
++		return EIO;
++	}
++	camvaf_writes = true;
++	err = v ? gpio_out_high(CAMVAF_BASE, camvaf_subtype) : gpio_out_low(CAMVAF_BASE, camvaf_subtype);
++	if (err && v) {
++		(void)gpio_out_low(CAMVAF_BASE, camvaf_subtype);
++	}
++	camvaf_writes = false;
++	if (err) {
++		printf("SWEET CAMVAF: write failed %d\n", err);
++	} else {
++		camvaf_on = v;
++		printf("SWEET CAMVAF: %s\n", v ? "on" : "off");
++	}
++	IOLockUnlock(camvaf_lock);
++	return err;
++}
++
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_camvaf,
++    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    0, 0, sysctl_sweet_camvaf, "I", "sunfish cam_vaf rail, PM6150L GPIO 12 (0247)");
++
++static void
++camvaf_register_late(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	camvaf_lock = IOLockAlloc();
++	if (camvaf_lock) {
++		sysctl_register_oid(&sysctl__kern_sweet_camvaf);
++	}
++}
++
++/* Called from SweetBattery::start; no-op without sweetampreset=1 or sweetcampmic=1/2 (0247: but for the OID). */
+ void
+ sweet_ampreset_register(void)
+ {
++	thread_call_t vc = thread_call_allocate(camvaf_register_late, NULL); /* 0247 */
++	if (vc) {
++		uint64_t vd;
++		clock_interval_to_deadline(10, NSEC_PER_SEC, &vd);
++		thread_call_enter_delayed(vc, vd);
++	}
+ 	(void)PE_parse_boot_argn("sweetampreset", &ampreset_on, sizeof(ampreset_on));
+ 	(void)PE_parse_boot_argn("sweetcampmic", &campmic_mode, sizeof(campmic_mode)); /* 0218 */
+ 	if (ampreset_on != 1 && campmic_mode != 1 && campmic_mode != 2) {
+-- 
+2.56.0
+

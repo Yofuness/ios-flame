@@ -20,17 +20,25 @@
  * 0x10, 0x36, 0x2d (CCI reset after each NACK) and prints the raw bytes at 0x0016 and 0x0000 of the first that ACKs.
  * --dry-run: reads only the SLG51000, GCC, TLMM and the TITAN_TOP GDSC; every write and every other read is
  * printed as planned. Without --keep everything is powered down at exit (error and SIGINT/SIGTERM too).
+ * --lens-probe (rear AF step B, research/notes/camera-af.md): after the power-up and CCI setup, kern.sweet_camvaf=1, 8 ms,
+ * then only reads: 0xB3 at 0x72 (LC898219, 1-byte address), 4 bytes of 0xF100 at 0x3e (LC898123, 16-bit address); ACK/NACK
+ * and values printed; kern.sweet_camvaf=0, power down. No sensor ID read, no stream. Refused while camd has a session.
+ * Stop camd's clients first (Camera.app); camd has no off file and launchd restarts it after a kill; an idle camd is fine.
  * Hazard rule: no CAMCC register but GDSC/GDSC_CLK before the GDSC is on, no CCI register before the GDSC and
  * the cci_0 branch are on (enforced in mrd/mwr). Needs SE9 clocks + pins (boot with sweetse9=2).
  */
+#include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include "geni_i2c.h"
 #include "pmem.h"
+#include "../camera/sunfish_camera.h"
 
 #define SLG		0x75
 #define MATRIX_CONF_A	0x110d
@@ -64,6 +72,7 @@
 #define TLMM_N		0x3900000
 
 static int dry, keep, front, mclk_asis;
+static int lens_probe, vaf_set;	/* --lens-probe; vaf_set: kern.sweet_camvaf may be 1 */
 static const char *stream_file;
 static int hold = 1, exp_lines = -1, gain_code = -1;	/* e1/e2: --hold, --exposure, --gain */
 static int gdsc_on, cci_clk_on, in_pd;
@@ -199,10 +208,29 @@ static void ldo_off(int n)
 	gi2c_unlock();
 }
 
+/* --lens-probe: the lens motor rail; 0 or -1 (printed) */
+static int vaf_write(int v)
+{
+	if (dry) {
+		printf("[dry] kern.sweet_camvaf = %d\n", v);
+		return 0;
+	}
+	if (sysctlbyname("kern.sweet_camvaf", NULL, NULL, &v, sizeof v)) {
+		printf("camid: kern.sweet_camvaf = %d failed: %s\n", v, strerror(errno));
+		return -1;
+	}
+	printf("camid: kern.sweet_camvaf = %d\n", v);
+	return 0;
+}
+
 static void power_down(void)
 {
 	if (in_pd++)
 		return;
+	if (vaf_set) {	/* also on die() and signals */
+		vaf_set = 0;
+		(void)vaf_write(0);
+	}
 	if (keep) {
 		printf("camid: --keep: left powered\n");
 		return;
@@ -620,6 +648,96 @@ static void cci_reset(void)
 	printf("camid: cci reset done, status %#x\n", s);
 }
 
+/* --lens-probe: n (<= 8) bytes of reg, 1- or 2-byte address, no writes to the slave's registers; 0 or -1 (NACK) */
+static int lens_read(unsigned a, int wide, unsigned reg, unsigned n, uint8_t *out)
+{
+	uint32_t w1[3] = { 1 | a << 4, wide ? 9 | 2 << 4 | (reg >> 8) << 8 | (reg & 0xff) << 16 : 9 | 1 << 4 | reg << 8, 0x108 };
+	uint32_t w2[3] = { 1 | a << 4, 10 | n << 4, 0x108 };
+	if (dry) {
+		printf("[dry] cci rd 0x%02x %#x, %u bytes\n", a, reg, n);
+		return -1;
+	}
+	if (cci_run(w1, 3, cci_q_report) || cci_run(w2, 3, cci_rd_done))
+		return -1;
+	uint32_t lvl = mrd(CCI + 0x11c + cci_mo);
+	uint8_t b[8 * 4];
+	unsigned nb = 0;
+	if (lvl > 8)
+		lvl = 8;
+	for (unsigned i = 0; i < lvl; i++) {
+		uint32_t v = mrd(CCI + 0x118 + cci_mo);
+		for (int k = 0; k < 4; k++)
+			b[nb++] = (v >> (8 * k)) & 0xff;
+	}
+	printf("camid: lens: 0x%02x %#x: level %u raw:", a, reg, lvl);
+	for (unsigned i = 0; i < nb; i++)
+		printf(" %02x", b[i]);
+	printf("\n");
+	if (nb < n + 1) {
+		printf("camid: lens: 0x%02x %#x: short read\n", a, reg);
+		return -1;
+	}
+	memcpy(out, b + 1, n);	/* b[0] is the slave echo */
+	return 0;
+}
+
+/* A NACK poisons the next transfer: reset + reprogram the master, as the front's probe loop does */
+static void lens_recover(void)
+{
+	cci_reset();
+	mwr(CCI + 0x100 + cci_mo, 0x004E0072);
+	mwr(CCI + 0x104 + cci_mo, 0x001C001C);
+	mwr(CCI + 0x108 + cci_mo, 0x000A004D);
+	mwr(CCI + 0x10c + cci_mo, 0x76);
+	mwr(CCI + 0x110 + cci_mo, 0x161);
+}
+
+static int lens_run(void)
+{
+	uint8_t v[4];
+	vaf_set = 1;
+	if (vaf_write(1))
+		return 1;
+	delay_ms(8);
+	if (lens_read(0x72, 0, 0xb3, 1, v) == 0) {
+		printf("camid: lens-probe: AF 0x72 reg 0xB3: ACK, %02x\n", v[0]);
+	} else {
+		printf("camid: lens-probe: AF 0x72 reg 0xB3: NACK\n");
+		lens_recover();
+	}
+	if (lens_read(0x3e, 1, 0xf100, 4, v) == 0) {
+		printf("camid: lens-probe: OIS 0x3e reg 0xF100: ACK, %02x %02x %02x %02x\n", v[0], v[1], v[2], v[3]);
+	} else {
+		printf("camid: lens-probe: OIS 0x3e reg 0xF100: NACK\n");
+		lens_recover();
+	}
+	vaf_set = 0;
+	return vaf_write(0) ? 1 : 0;
+}
+
+/* --lens-probe works only while camd is idle or absent: 0 go on, -1 refused */
+static int lens_camd_idle(void)
+{
+	struct sunfish_camera_shm h;
+	int fd = open(SUNFISH_CAMERA_SHM, O_RDONLY);
+	if (fd < 0) {
+		if (errno == ENOENT)
+			return 0;
+		printf("camid: %s: %s: refused\n", SUNFISH_CAMERA_SHM, strerror(errno));
+		return -1;
+	}
+	ssize_t n = read(fd, &h, sizeof h);
+	close(fd);
+	if (n != (ssize_t)sizeof h || memcmp(h.magic, SUNFISH_CAMERA_SHM_MAGIC, 8))
+		return 0;	/* camd is still creating it: no session yet */
+	if (h.state != SUNFISH_CAMERA_IDLE) {
+		printf("camid: --lens-probe: camd (pid %u) state %u, not idle: refused. Close the camera client (Camera.app); "
+		       "after a FAULT kill camd (launchd restarts it)\n", h.pid, h.state);
+		return -1;
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	int addr = 0;
@@ -644,8 +762,11 @@ int main(int argc, char **argv)
 			gain_code = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--addr") && i + 1 < argc)
 			addr = strtoul(argv[++i], NULL, 0);
+		else if (!strcmp(argv[i], "--lens-probe"))
+			lens_probe = 1;
 		else {
-			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure LINES] [--gain CODE]]\n");
+			fprintf(stderr, "usage: camid [--dry-run] [--addr 0xNN] [--keep] [--front] [--mclk-asis] [--stream FILE [--hold S|--ctl] [--exposure LINES] [--gain CODE]]\n"
+					"       camid [--dry-run] [--mclk-asis] --lens-probe    (camd idle: close Camera.app; camd has no off file)\n");
 			return 2;
 		}
 	}
@@ -654,6 +775,12 @@ int main(int argc, char **argv)
 		fprintf(stderr, "camid: --hold 1-900, --exposure, --gain need --stream\n");
 		return 2;
 	}
+	if (lens_probe && (keep || front || stream_file || addr)) {
+		fprintf(stderr, "camid: --lens-probe: rear only, no --keep, --stream or --addr\n");
+		return 2;
+	}
+	if (lens_probe && lens_camd_idle())
+		return 1;
 	if (addr && addr != 0x10 && addr != 0x1a && !(front && (addr == 0x36 || addr == 0x2d)))
 		return 2;
 	if (front) {
@@ -813,6 +940,11 @@ int main(int argc, char **argv)
 	mwr(CCI + 0x10c + cci_mo, 0x76);
 	mwr(CCI + 0x110 + cci_mo, 0x161);
 	int rc = 1;
+	if (lens_probe) {
+		rc = lens_run();
+		power_down();
+		return rc;
+	}
 	if (front && !addr) {
 		static const unsigned fa[4] = { 0x1a, 0x10, 0x36, 0x2d };
 		for (int i = 0; i < 4 && rc; i++) {
