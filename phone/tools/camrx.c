@@ -12,6 +12,11 @@
  *   camrx [--dry-run] rx arm           CSID reset, RX from CSIPHY0 (4 lanes), RDI0 VC 0 DT 0x2b; left running
  *   camrx rx report                    read-only: RX/RDI0 counters + IRQ status (not cleared), CSIPHY0 status
  *   camrx [--dry-run] rx stop          RDI0 off, RX off, masks 0
+ * Stage d (one frame through IFE-lite RDI0 WM0 into RAM; spec research/notes/camera-stage-d.md):
+ *   camrx [--dry-run] capture OUTFILE [--stream-cmd "CMD"]  one process for the whole DMA: 8 MB PMEM buffer (<4 GB),
+ *       SMMU identity for SIDs 0x800/0x5e0 (saved + restored on every exit), CSID rx arm, IFE reset + WM0 frame
+ *       mode, runs CMD (default: camid mode 8 stream), WM0 off at the first buf done, readbacks, guard check,
+ *       frame -> OUTFILE, SMMU restore, PMEM_FREE. Needs clocks on + phy on (+ camid's cpas_ahb/camnoc_axi).
  * Needs (checked, read-only): gcc camera_ahb on, TITAN_TOP GDSC on (camid --keep), PLL2 locked (camclk pll2 on).
  * Never enables PLLs/GDSCs/regulators, never writes GCC/RPMh/refgen. Writes only the whitelist in allowed();
  * every write is logged with its read-back. No camcc register is read before the GDSC check passes, no CSID
@@ -19,10 +24,12 @@
  */
 #include <signal.h>
 #include <stdio.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "../wifi/pmem.h"
+#include "../wifi/smmu.h"
 
 #define GCC_CAM_AHB	0x10b008u
 #define CAMCC		0xad00000u
@@ -44,6 +51,10 @@
 #define LITE_CSID_CBCR	0xad0c038u
 #define LITE_CPHY_CBCR	0xad0c040u
 #define LITE_CBCR	0xad0c01cu
+#define CPAS_AHB_CBCR	0xad0c124u	/* stage d: read only (camid turns it on) */
+#define CAMNOC_CBCR	0xad0c148u	/* stage d: read only (camid turns it on) */
+#define CAMNOC_RCG	0xad0c12cu	/* stage d: set to 150 MHz if still at XO */
+#define CAMNOC_CFG_150	0x207u		/* ftbl F(150 MHz, PLL0 even 600, /4) (camcc-sm7150.c:421): src 2, div 7 (redfin) */
 
 /* refgen (msm-4.14 refgen.c offsets, recall): read only, never written */
 #define REFGEN_BIAS_EN	0xff1008u
@@ -101,6 +112,50 @@
 #define LINK_MBPS	304	/* IMX363 mode 8, per lane (camera.md cam6) */
 #define TIMER_MHZ	300
 
+/* IFE-lite 0 (DT vfe-lite0 reg 0xacc4000 0x4000; offsets redfin 0921 / Linux cam_vfe_lite17x, notes section 1) */
+#define IFE		0xacc4000u
+#define IFE_END		(IFE + 0x4000)
+#define IFE_HW_VERSION	0x000
+#define IFE_GLOBAL_RESET 0x018
+#define IFE_IRQ_GCLEAR	0x058
+#define IFE_IRQ_MASK0	0x05c
+#define IFE_IRQ_CLEAR0	0x064
+#define IFE_IRQ_CLEAR1	0x068
+#define IFE_IRQ_STATUS0	0x06c
+#define IFE_IRQ_STATUS1	0x070
+#define IFE_VIOLATION	0x07c
+#define IFE_REG_UPDATE	0x4ac
+#define BUS_HW_VERSION	0x2000
+#define BUS_CGC_OVD	0x200c
+#define BUS_IRQ_MASK1	0x2048
+#define BUS_IRQ_CLEAR1	0x2054
+#define BUS_IRQ_STATUS(n) (0x205c + 4 * (n))
+#define BUS_IRQ_GCLEAR	0x2068
+#define BUS_COMP_ERROR	0x206c
+#define BUS_SYNC_FRAME_HDR 0x2080
+#define BUS_SYNC_NO_SYNC 0x2084
+#define BUS_TEST_CTRL	0x211c
+#define WM0_STATUS0	0x2200
+#define WM0_STATUS1	0x2204
+#define WM0_CFG		0x2208
+#define WM0_IMAGE_ADDR	0x2214
+#define WM0_WIDTH	0x221c
+#define WM0_HEIGHT	0x2220
+#define WM0_PACKER	0x2224
+#define WM0_STRIDE	0x2228
+#define WM0_SUB_PERIOD	0x2248
+#define WM0_SUB_PATTERN	0x224c
+#define WM0_DROP_PERIOD	0x2250
+#define WM0_DROP_PATTERN 0x2254
+#define WM0_FRAME_INC	0x2258
+#define WM0_BURST_LIMIT	0x225c
+
+#define FRAME_BYTES	3810240u	/* 2016 x 1512 RAW10 packed = CSID bytes ping/pong in cam8 */
+#define CAP_BUF		0x800000u	/* frame + guard (must stay zero) */
+#define CAM_SID		0x800u		/* redfin: one SMR covers all msm_cam_smmu_ife SIDs (notes section 2) */
+#define CAM_SID_MASK	0x5e0u
+#define STREAM_CMD	"/var/local/bin/camid --addr 0x1a --keep --mclk-asis --stream /var/local/cam/imx363-mode8.txt"
+
 #define RAW10		0x2b
 #define TPG_VC		0xa
 #define TPG_W		640	/* redfin used 1600x1200; smaller frame, same pattern */
@@ -115,11 +170,14 @@ static int allowed(uint32_t pa)
 		CPHY_RX_RCG, CPHY_RX_RCG + 4, LITE_CSID_RCG, LITE_CSID_RCG + 4, LITE_RCG, LITE_RCG + 4,
 		LITE_CSID_CBCR, LITE_CPHY_CBCR, LITE_CBCR,
 		PHYTIMER0_RCG, PHYTIMER0_RCG + 4, CSIPHY0_CBCR, PHYTIMER0_CBCR,	/* stage c2 */
+		CAMNOC_RCG, CAMNOC_RCG + 4,	/* stage d */
 	};
 	for (unsigned i = 0; i < sizeof ok / sizeof ok[0]; i++)
 		if (pa == ok[i])
 			return 1;
 	if (pa >= CSIPHY && pa < CSIPHY_END && !(pa & 3))	/* stage c2 */
+		return 1;
+	if (pa >= IFE && pa < IFE_END && !(pa & 3))	/* stage d */
 		return 1;
 	return pa >= CSID && pa < CSID_END && !(pa & 3);
 }
@@ -128,7 +186,7 @@ static void wr(uint32_t pa, uint32_t v, const char *why)
 {
 	if (!allowed(pa)) {
 		printf("camrx: BLOCKED wr %#x = %#x (%s)\n", pa, v, why);
-		exit(1);
+		exit(1);	/* capture: its atexit handler stops the WM and frees */
 	}
 	if (dry) {
 		printf("[dry] wr %#x = %#010x  [%s]\n", pa, v, why);
@@ -697,6 +755,282 @@ static int rx_stop(void)
 	return 0;
 }
 
+/* ---- stage d: one frame through IFE-lite RDI0 WM0 ---- */
+
+static struct {
+	int armed, ife, smmu;	/* what cap_down must undo */
+	uint64_t pa;		/* PMEM buffer, 0 = none */
+} cap;
+
+static void iw(uint32_t off, uint32_t v, const char *why)
+{
+	wr(IFE + off, v, why);
+}
+
+static uint32_t ir(uint32_t off)
+{
+	return dry ? 0 : rd32(IFE + off);
+}
+
+static void wm_off(const char *why)
+{
+	iw(WM0_CFG, 0, why);
+	iw(IFE_REG_UPDATE, 0x2, "REG_UPDATE RDI0");
+}
+
+/* every exit path (also exit(1) from wr and SIGINT/SIGTERM via the main loop): WM off, CSID down, wait a frame,
+ * SMMU back, buffer freed. Notes section 4 restore order (the sensor is stopped by its own command). */
+static void cap_down(void)
+{
+	if (cap.ife) {
+		cap.ife = 0;
+		wm_off("WM0_CFG 0 (cleanup)");
+	}
+	if (cap.armed) {
+		cap.armed = 0;
+		paths_down();
+	}
+	msleep_(100);	/* > 1 frame at ~30 fps: a write in flight finishes */
+	if (cap.smmu) {
+		cap.smmu = 0;
+		smmu_release("cam");
+	}
+	if (cap.pa && !dry) {
+		printf("camrx: PMEM_FREE %#llx -> %d\n", (unsigned long long)cap.pa, pm_free(cap.pa));
+		cap.pa = 0;
+	}
+	fflush(stdout);
+}
+
+static int branch_req(const char *n, uint32_t cbcr)
+{
+	if (branch_on(cbcr))
+		return 0;
+	printf("camrx: %s branch %#x = %#x not on, abort\n", n, cbcr, rd32(cbcr));
+	return 1;
+}
+
+static int cap_precheck(void)
+{
+	uint32_t m = rd32(PLL0_MODE), u = rd32(PLL0_USER);
+	if (!(m & LOCK_DET) || !(m & 1) || !(u & 2)) {
+		printf("camrx: pll0 MODE %#x USER_CTL %#x not locked / even out off, abort\n", m, u);
+		return 1;
+	}
+	if (branch_req("lite_csid", LITE_CSID_CBCR) || branch_req("lite_cphy_rx", LITE_CPHY_CBCR) ||
+	    branch_req("ife_lite", LITE_CBCR) || branch_req("csiphy0", CSIPHY0_CBCR) ||
+	    branch_req("csi0phytimer", PHYTIMER0_CBCR) || branch_req("cpas_ahb (camid --keep)", CPAS_AHB_CBCR) ||
+	    branch_req("camnoc_axi (camid --keep)", CAMNOC_CBCR))
+		return 1;
+	show_rcg("camnoc_axi", CAMNOC_RCG);
+	uint32_t cfg = rd32(CAMNOC_RCG + 4);
+	if ((cfg & 0x71f) == CAMNOC_CFG_150)
+		return 0;
+	if ((cfg >> 8 & 7) != 0) {	/* someone set another rate: leave it */
+		printf("camrx: camnoc_axi not at XO and not 150 MHz (CFG %#x): left as is\n", cfg);
+		return 0;
+	}
+	/* the IFE's path to DDR: redfin ran it at 150 MHz (0921:171) = the DT's lowest non-XO level */
+	stage("camnoc_axi rcg 150 MHz (PLL0 even 600 / 4), was XO");
+	wr(CAMNOC_RCG + 4, (cfg & ~0x371fu) | CAMNOC_CFG_150, "camnoc_axi CFG src 2 div 7");
+	wr(CAMNOC_RCG, rd32(CAMNOC_RCG) | 1, "CMD UPDATE");
+	if (poll(CAMNOC_RCG, 1, 0, 500, 1000)) {
+		printf("camrx: camnoc_axi UPDATE stuck (CMD %#x), abort\n", rd32(CAMNOC_RCG));
+		return 1;
+	}
+	return 0;
+}
+
+/* redfin ife_config (0921:515-541): reset, bus init, WM0 frame mode at pa, FRAME_INC 0, REG_UPDATE */
+static int ife_config(uint32_t pa)
+{
+	stage("ife-lite reset");
+	printf("camrx: ife-lite HW_VERSION %#x BUS_HW_VERSION %#x\n", ir(IFE_HW_VERSION), ir(BUS_HW_VERSION));
+	iw(IFE_IRQ_MASK0, 1u << 31, "IRQ_MASK0 reset done");
+	cap.ife = 1;
+	iw(IFE_GLOBAL_RESET, 0x3f9f, "GLOBAL_RESET");
+	if (poll(IFE + IFE_IRQ_STATUS0, 1u << 31, 1u << 31, 100, 1000)) {
+		printf("camrx: ife-lite does not reset (irq0 %#x)\n", ir(IFE_IRQ_STATUS0));
+		return 1;
+	}
+	iw(IFE_IRQ_CLEAR0, 0xffffffff, "IRQ_CLEAR0");
+	iw(IFE_IRQ_CLEAR1, 0xffffffff, "IRQ_CLEAR1");
+	iw(IFE_IRQ_GCLEAR, 1, "IRQ_GLOBAL_CLEAR");
+	stage("ife-lite bus + wm0 (frame mode)");
+	iw(BUS_SYNC_FRAME_HDR, 0, "ADDR_SYNC_FRAME_HDR 0");
+	iw(BUS_CGC_OVD, 0xfffff, "BUS_CGC_OVD");
+	iw(BUS_TEST_CTRL, 0, "BUS_TEST_CTRL 0");
+	iw(BUS_SYNC_NO_SYNC, 0xffffff, "ADDR_SYNC_NO_SYNC");
+	iw(WM0_BURST_LIMIT, 0xf, "WM0 BURST_LIMIT");
+	/* frame based: WIDTH/STRIDE 0xff01 + HEIGHT 0 (Linux RDI defaults, redfin); PACKER 0 = MIPI bytes as they come */
+	iw(WM0_WIDTH, 0xff01, "WM0 WIDTH (frame mode)");
+	iw(WM0_HEIGHT, 0, "WM0 HEIGHT 0");
+	iw(WM0_PACKER, 0, "WM0 PACKER plain");
+	iw(WM0_STRIDE, 0xff01, "WM0 STRIDE (frame mode)");
+	iw(WM0_DROP_PERIOD, 0, "WM0 FRAMEDROP_PERIOD");
+	iw(WM0_DROP_PATTERN, 1, "WM0 FRAMEDROP_PATTERN");
+	iw(WM0_SUB_PERIOD, 0, "WM0 IRQ_SUB_PERIOD");
+	iw(WM0_SUB_PATTERN, 1, "WM0 IRQ_SUB_PATTERN");
+	iw(BUS_IRQ_CLEAR1, 0xffffffff, "BUS_IRQ_CLEAR1");
+	iw(BUS_IRQ_GCLEAR, 1, "BUS_IRQ_GLOBAL_CLEAR");
+	iw(BUS_IRQ_MASK1, 1, "BUS_IRQ_MASK1 WM0 buf done");
+	iw(WM0_IMAGE_ADDR, pa, "WM0 IMAGE_ADDR");
+	iw(WM0_FRAME_INC, 0, "WM0 FRAME_INC 0 (every frame same place)");
+	iw(WM0_CFG, 3, "WM0_CFG en | frame based");
+	iw(IFE_REG_UPDATE, 0x2, "REG_UPDATE RDI0");
+	return 0;
+}
+
+static int run_cmd(const char *cmd, pid_t *pid)
+{
+	static char buf[512];
+	char *av[32];
+	int n = 0;
+	snprintf(buf, sizeof buf, "%s", cmd);
+	for (char *t = strtok(buf, " \t"); t && n < 31; t = strtok(NULL, " \t"))	/* no shell: split on blanks */
+		av[n++] = t;
+	av[n] = NULL;
+	if (!n)
+		return 1;
+	fflush(stdout);
+	*pid = fork();
+	if (*pid < 0)
+		return 1;
+	if (*pid == 0) {
+		signal(SIGINT, SIG_IGN);	/* the sensor command finishes (stream off) even on ^C */
+		execv(av[0], av);
+		perror(av[0]);
+		_exit(127);
+	}
+	return 0;
+}
+
+static uint64_t nonzero(uint64_t pa, uint64_t len)
+{
+	static uint8_t b[65536];
+	uint64_t n = 0;
+	for (uint64_t o = 0; o < len; o += sizeof b) {
+		size_t k = len - o < sizeof b ? (size_t)(len - o) : sizeof b;
+		if (pm_rd(pa + o, b, k))
+			return ~0ull;
+		for (size_t i = 0; i < k; i++)
+			n += b[i] != 0;
+	}
+	return n;
+}
+
+static int save_frame(uint64_t pa, const char *out)
+{
+	static uint8_t b[65536];
+	FILE *f = fopen(out, "wb");
+	if (!f) {
+		perror(out);
+		return 1;
+	}
+	for (uint64_t o = 0; o < FRAME_BYTES; o += sizeof b) {
+		size_t k = FRAME_BYTES - o < sizeof b ? (size_t)(FRAME_BYTES - o) : sizeof b;
+		if (pm_rd(pa + o, b, k) || fwrite(b, 1, k, f) != k) {
+			fclose(f);
+			return 1;
+		}
+	}
+	return fclose(f) ? 1 : 0;
+}
+
+static int capture(const char *out, const char *cmd)
+{
+	if (!dry && cap_precheck())
+		return 1;
+	printf("camrx: note: SMMU SIDs 0x800/0x5e0 (redfin), WM frame mode values (redfin/Linux) and that one frame = "
+	       "%u B (cam8 CSID bytes) are taken over, not verified here\n", FRAME_BYTES);
+	stage("pmem alloc 8 MB");
+	atexit(cap_down);
+	cap.pa = dry ? 0x80000000ull : pm_alloc(CAP_BUF, 0x10000);
+	if (!cap.pa)
+		return 1;
+	printf("camrx: buffer PA %#llx + %#x\n", (unsigned long long)cap.pa, CAP_BUF);
+	if (cap.pa + CAP_BUF > 0x100000000ull) {	/* IMAGE_ADDR is 32 bit */
+		printf("camrx: buffer above 4 GB, WM can't reach it: abort\n");
+		return 1;
+	}
+	stage("smmu identity cam 0x800/0x5e0");
+	smmu_dry = dry;
+	uint32_t gfsr0 = dry ? 0 : rd32(0x15000048u);
+	if (smmu_identity("cam", CAM_SID, CAM_SID_MASK))
+		return 1;
+	cap.smmu = 1;
+	uint64_t cbp = smmu_last.cbp;
+	printf("camrx: smmu before: GFSR %#x, CB%d FSR %#x\n", gfsr0, smmu_last.cb, dry || !cbp ? 0 : rd32(cbp + 0x58));
+	signal(SIGINT, on_sig);
+	signal(SIGTERM, on_sig);
+	if (rx_arm())
+		return 1;
+	cap.armed = 1;
+	if (ife_config((uint32_t)cap.pa))
+		return 1;
+	stage("sensor stream");
+	printf("camrx: stream command: %s\n", cmd);
+	int done_at = -1, status = 0, t = 0;
+	if (!dry) {
+		pid_t pid;
+		if (run_cmd(cmd, &pid)) {
+			printf("camrx: could not start the stream command\n");
+			return 1;
+		}
+		for (;; t++) {	/* 10 ms polls; WM0 off at the first buf done (or on a signal) */
+			if (done_at < 0 && (ir(BUS_IRQ_STATUS(1)) & 1)) {
+				done_at = t;
+				wm_off("WM0_CFG 0 (first buf done)");
+			}
+			if (stop && done_at < 0) {
+				done_at = -2;
+				wm_off("WM0_CFG 0 (signal)");
+			}
+			pid_t r = waitpid(pid, &status, WNOHANG);
+			if (r == pid || r < 0)
+				break;
+			if (t == 1500) {	/* 15 s: the command should take ~1 s */
+				printf("camrx: stream command still running after 15 s, SIGTERM\n");
+				kill(pid, SIGTERM);
+			}
+			usleep(10000);
+		}
+		printf("camrx: stream command exit status %d after ~%d ms; first buf done at ~%d ms%s\n",
+		       WEXITSTATUS(status), t * 10, done_at * 10, done_at < 0 ? " (none)" : "");
+	}
+	stage("stop: wm0 off, rx stop");
+	wm_off("WM0_CFG 0 (after stream)");
+	cap.ife = 0;
+	msleep_(100);
+	paths_down();
+	cap.armed = 0;
+	printf("camrx: readback: CSID bytes ping/pong %u/%u, RDI0_STATUS %#x\n", cr(RDI0_BYTES_PING), cr(RDI0_BYTES_PONG),
+	       cr(RDI0_STATUS));
+	printf("camrx: readback: IFE irq0 %#x irq1 %#x VIOLATION %#x; BUS irq %#x %#x %#x COMP_ERROR %#x; WM0 status "
+	       "%#x %#x\n", ir(IFE_IRQ_STATUS0), ir(IFE_IRQ_STATUS1), ir(IFE_VIOLATION), ir(BUS_IRQ_STATUS(0)),
+	       ir(BUS_IRQ_STATUS(1)), ir(BUS_IRQ_STATUS(2)), ir(BUS_COMP_ERROR), ir(WM0_STATUS0), ir(WM0_STATUS1));
+	int bad = 0;
+	if (!dry) {
+		uint32_t fsr = cbp ? rd32(cbp + 0x58) : 0;
+		/* FSR 0x400 is the FORMAT field, not a fault (redfin 0934:42) */
+		printf("camrx: smmu after: GFSR %#x GFSYNR1 %#x; CB%d FSR %#x (fault bits %#x) FAR %#x%08x FSYNR0 %#x\n",
+		       rd32(0x15000048u), rd32(0x15000054u), smmu_last.cb, fsr, fsr & 0x800001feu,
+		       cbp ? rd32(cbp + 0x64) : 0, cbp ? rd32(cbp + 0x60) : 0, cbp ? rd32(cbp + 0x68) : 0);
+		uint64_t nf = nonzero(cap.pa, FRAME_BYTES), ng = nonzero(cap.pa + FRAME_BYTES, CAP_BUF - FRAME_BYTES);
+		printf("camrx: nonzero bytes: frame %llu of %u, guard %llu of %u%s\n", (unsigned long long)nf, FRAME_BYTES,
+		       (unsigned long long)ng, CAP_BUF - FRAME_BYTES, ng ? "  GUARD WRITTEN: frame bigger than expected" : "");
+		bad = (fsr & 0x800001feu) || ng;
+		if (save_frame(cap.pa, out)) {
+			printf("camrx: writing %s failed\n", out);
+			bad = 1;
+		} else {
+			printf("camrx: frame (%u B) -> %s\n", FRAME_BYTES, out);
+		}
+	}
+	cap_down();
+	return bad || done_at < 0;
+}
+
 int main(int argc, char **argv)
 {
 	int a = 1;
@@ -735,6 +1069,8 @@ int main(int argc, char **argv)
 		if (!strcmp(argv[a + 1], "stop"))
 			return rx_stop();
 	}
+	if (!strcmp(argv[a], "capture") && (a + 2 == argc || (a + 4 == argc && !strcmp(argv[a + 2], "--stream-cmd"))))
+		return capture(argv[a + 1], a + 4 == argc ? argv[a + 3] : STREAM_CMD);
 	if (!strcmp(argv[a], "tpg") && a + 2 >= argc) {
 		int s = a + 1 < argc ? atoi(argv[a + 1]) : 1;
 		if (s < 1 || s > 60)
@@ -743,6 +1079,6 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop\n");
+			"phy off | rx arm|report|stop | capture OUTFILE [--stream-cmd \"CMD\"]\n");
 	return 2;
 }

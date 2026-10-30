@@ -38,6 +38,6 @@ build memwarn memwarn.c
 build pmem pmem.c
 build pinsample pinsample.c	# sp15: fast read-only register sampler
 build camclk camclk.c ../wifi/pmem.c	# camera a2: camcc PLL2 + 24 MHz MCLK
-build camrx camrx.c ../wifi/pmem.c	# camera c1: CSID-lite TPG (camcc RCG/CBCR + CSID only)
+build camrx camrx.c ../wifi/pmem.c ../wifi/smmu.c	# camera c1/c2/d: CSID-lite TPG, CSIPHY0 + RX, IFE-lite WM0 capture
 build a2s a2s.c
 ls -l out

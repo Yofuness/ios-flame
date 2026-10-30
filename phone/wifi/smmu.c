@@ -23,6 +23,8 @@ static int sid_match(uint32_t smr, uint32_t sid, uint32_t mask)
 	return ((id ^ sid) & ~(m | mask) & 0x7fff) == 0;
 }
 
+struct smmu_saved smmu_last = { .slot = -1, .cb = -1 };
+
 int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 {
 	uint64_t s = SMMU_PA;
@@ -48,6 +50,9 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 			uint64_t cbp = s + (uint64_t)npage * psize + (uint64_t)c * psize;
 			printf("smmu: SMR%u %08x already matches %#x: S2CR %08x, CB%u SCTLR %08x CBAR %08x\n", i, smr,
 			       sid, s2cr, c, rd32(cbp), rd32(s + psize + 4 * c));
+			smmu_last.slot = -1;	/* camera d: not ours, smmu_release leaves it */
+			smmu_last.cb = (int)c;
+			smmu_last.cbp = cbp;
 			return ((s2cr >> 16) & 3) == 0 && !(rd32(cbp) & 1) ? 0 : -1;
 		}
 	}
@@ -68,6 +73,10 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 		return 0;
 	}
 	uint64_t gr1 = s + psize, cbp = s + (uint64_t)npage * psize + (uint64_t)cb * psize;
+	/* camera d: what smmu_release puts back */
+	smmu_last = (struct smmu_saved){ .slot = slot, .cb = cb, .cbp = cbp, .gr1 = gr1,
+		.smr = rd32(s + 0x800 + 4 * slot), .s2cr = rd32(s + 0xc00 + 4 * slot), .cbar = rd32(gr1 + 4 * cb),
+		.cba2r = rd32(gr1 + 0x800 + 4 * cb), .sctlr = rd32(cbp) };
 	wr32(cbp + 0x58, 0xffffffff);			/* FSR: clear */
 	wr32(cbp + 0x20, 0);				/* TTBR0 */
 	wr32(cbp + 0x24, 0);
@@ -88,6 +97,31 @@ int smmu_identity(const char *name, uint32_t sid, uint32_t mask)
 		    (s2cr & 0xff) == (uint32_t)cb;
 	printf("smmu: %s %#x/%#x -> CB%d via SMR%d: SMR %08x S2CR %08x SCTLR %08x CBAR %08x -> %s\n", name, sid,
 	       mask, cb, slot, smr, s2cr, rd32(cbp), rd32(gr1 + 4 * cb), ok ? "ok" : "NOT as written");
+	return ok ? 0 : -1;
+}
+
+/* camera d: undo the last smmu_identity that wrote anything: SMR first (stream stops matching), then S2CR and the
+ * bank (SCTLR, CBAR, CBA2R; redfin r17d: CBAR does not go back by itself), TLB sync. 0 = ok or nothing to do. */
+int smmu_release(const char *name)
+{
+	struct smmu_saved *v = &smmu_last;
+	if (v->slot < 0 || smmu_dry)
+		return 0;
+	uint64_t s = SMMU_PA;
+	wr32(s + 0x800 + 4 * v->slot, v->smr);
+	wr32(s + 0xc00 + 4 * v->slot, v->s2cr);
+	wr32(v->cbp, v->sctlr);
+	wr32(v->gr1 + 4 * v->cb, v->cbar);
+	wr32(v->gr1 + 0x800 + 4 * v->cb, v->cba2r);
+	wr32(s + 0x70, 0);
+	for (int i = 0; i < 1000 && (rd32(s + 0x74) & 1); i++)
+		delay_ms(1);
+	int ok = rd32(s + 0x800 + 4 * v->slot) == v->smr && rd32(s + 0xc00 + 4 * v->slot) == v->s2cr &&
+		 rd32(v->gr1 + 4 * v->cb) == v->cbar;
+	printf("smmu: %s released SMR%d (%08x) S2CR %08x CB%d SCTLR %08x CBAR %08x CBA2R %08x -> %s\n", name, v->slot,
+	       rd32(s + 0x800 + 4 * v->slot), rd32(s + 0xc00 + 4 * v->slot), v->cb, rd32(v->cbp), rd32(v->gr1 + 4 * v->cb),
+	       rd32(v->gr1 + 0x800 + 4 * v->cb), ok ? "restored" : "NOT as saved");
+	v->slot = -1;
 	return ok ? 0 : -1;
 }
 
