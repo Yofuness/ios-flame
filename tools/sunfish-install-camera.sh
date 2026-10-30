@@ -106,7 +106,20 @@ fi
 S "mkdir -p /var/local/bin /var/local/cam"
 for t in $TOOLS; do F put $O/$t /var/local/bin/$t 755 >/dev/null; done
 F put $TAB /var/local/cam/imx363-mode8.txt 644 >/dev/null
-echo "installed: $TOOLS, /var/local/cam/imx363-mode8.txt"
+# 2026-10-30: the front table (camtab picks mode 2 for imx355) and the ISP colour tuning (CCM + lens shading,
+# made by ios-redfin's redfin-camtune.py from Google's tuned bins in vendor.img: research/notes/camera-tuning.md)
+FTAB=work/cam/imx355-mode2.txt VIMG=../restore/factory/vendor.img
+[ -s $FTAB ] || python3 -I tools/sunfish-camtab.py research/notes/camx/com.qti.sensormodule.primax_imx355.bin --out $FTAB
+F put $FTAB /var/local/cam/imx355-mode2.txt 644 >/dev/null
+S "mkdir -p /private/var/local/fw"
+for s in imx363 imx355; do
+	if [ ! -s work/cam/camera-$s.isp ]; then
+		debugfs -R "dump /lib64/camera/com.google.tuned.s5_$s.bin work/cam/tuned_$s.bin" $VIMG
+		python3 -I research/re/redfin/redfin-int/tools/redfin-camtune.py work/cam/tuned_$s.bin -o work/cam/camera-$s.isp
+	fi
+	F put work/cam/camera-$s.isp /private/var/local/fw/camera-$s.isp 644 >/dev/null
+done
+echo "installed: $TOOLS, /var/local/cam/{imx363-mode8,imx355-mode2}.txt, /private/var/local/fw/camera-{imx363,imx355}.isp"
 
 # 2. launchd job
 if ! F get $LP.pre-camera $U/camera/launchd.plist.pre-camera >/dev/null 2>&1; then

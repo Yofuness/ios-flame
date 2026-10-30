@@ -35,6 +35,10 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:00 Colour tuning files installed (research/notes/camera-tuning.md)
+- ios-redfin's tools/redfin-camtune.py works as-is on our com.google.tuned.s5_imx363.bin / s5_imx355.bin (vendor.img /lib64/camera): imx363 10 colour matrices + 83 lens-shading grids (~1.0 centre, 3.1-3.8 corners) -> work/cam/camera-imx363.isp / camera-imx355.isp (21572 B each, RWCISP02, 1 light x 6 entries: no CCT triggers found, so the ISP uses file order; no AWB reference lights; imx355's first matrix equals imx363's: check). Installed to /private/var/local/fw/ (camera_isp.c isp_load_tuning); tools/sunfish-install-camera.sh now makes + puts them and the front table.
+- Untested: whether the "no colour tuning" log line goes away and colours improve: with U12 (remove the .isp files if colours look worse).
+
 ### 2026-10-31 08:30 cam33: Camera.app preview support installed (Metal bridge 615c313); UI unchanged
 - `tools/sunfish-metal2-install.sh work/metal2-linux/out/phone/metal2/out` (now keeps the old bundle as SweetMetal2.bundle.prev; `--undo` swaps it back, b480234): backboardd restarted (pid 61 -> 366), lock screen and home screen render as before (B29 noise only), backboardd crash reports 5 before / 5 after, 2 min stable. "planar iosurface refused": 0 (no planar surface yet; Camera.app not opened).
 - Ready for U12 (Camera.app, both cameras): kernel111 CAMERA=1, camera setup installed, camd idle, preview textures in.
