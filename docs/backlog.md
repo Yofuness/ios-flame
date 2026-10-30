@@ -5,7 +5,7 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
-- Camera black (no camera stack, B17).
+- Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
 - B26 [DONE 2026-10-30] Tap survey: Notes keyboard, Control Center, cover sheet, Settings panes (tap2-tap4).
 - B34 [DONE 2026-10-30] `openapp`: 10/10 rc 0 with the right app in front (b33 run); the tap4 misses were while locked or busy.
 - B36 Calculator froze the UI on kernel107 (sweetmotion=0x77, fake orientation events running) while plugged in, 2026-10-30; read the RAM-log rescue of that boot.
@@ -15,14 +15,14 @@ history in the feature Logs.
 - B8 PhotosFileProvider crashes: 0 in the kernel95 idle soak; confirm in a long app soak. (~2-4 per 2 h, uncaught ObjC exception in PlugInKit); low impact.
 - B10 Reduce Transparency slow in app opens: RT on/off benches + one GPU trace. [phone]
 - B11 UI watchdog misses a kernel hang with swaps still running.
-- B12 Sensors: all behind the ADSP's SSC; wait for audio. Fallback: a sysctl that injects rotation events.
+- B12 Sensors: [MOSTLY DONE 2026-10-30] auto-rotate works via the ADSP SNS client (sensors.md); open: proximity/light into iOS.
 - B13 Battery % while discharging unchecked (U3).
 - B14 Charging drain under load = the USB source's budget; optional read-only TYPEC/APSD check (U4).
-- B15 Bluetooth: WCN3990 over a QUP UART + QCA firmware + a Broadcom shim for bluetoothd; 1-3 weeks.
+- B15 Bluetooth: [MOSTLY DONE 2026-10-30] pairing + AirPods connect, 3 Mbaud (bluetooth.md); open: first bring-up sometimes fails at boot, AirPods audio (U11).
 - B16 Audio: see priority 1; then APR + CS35L41 for a beep (U5).
-- B17 Camera frames (M2): camcc PLL for 24 MHz MCLK, CSIPHY/CSID/IFE, camera SMMU; weeks.
+- B17 Camera frames: [DONE 2026-10-31] both cameras stream into RAM (rear 60 fps, front 30 fps), camd + camera_device in SunfishAudio.driver; iOS lists both (camera.md).
 - B19 Respawn loops: lskdd, fairplayd.H2, wifip2pd dropped 2026-10-29; bluetoothd (10 s) kept until B15.
-- B20 Screen rotation: see priority 2.
+- B20 Screen rotation: [DONE 2026-10-30] auto-rotate from the accelerometer.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
 - B31 oslog segfaults (rc 139) mostly in the first minutes after boot (b31: old 6/8, new 4/8 back to back right after boot, then 0/6 a few minutes later); _exit fix didn't cure it, no crash report written. Workaround: rerun. Next: a 20-run loop right after boot with the kernel fault line.
