@@ -1465,6 +1465,9 @@ static int cap_zero(uint64_t pa, uint32_t len)
 	return bad != 0;
 }
 
+/* cam16: the IFE-lite WM writes through SID 0x8c0 and 0xcc0: --sid-mask 0x400 makes the bypass SMR cover both */
+static uint16_t sid_mask;
+
 static int capture(const char *out, const char *cmd, int alloc32, int trap, int sid)
 {
 	/* cam13: no IFE DMA without a dedicated SMMU mapping; --trap first, --bypass only for the SID it found */
@@ -1478,9 +1481,9 @@ static int capture(const char *out, const char *cmd, int alloc32, int trap, int 
 	int tk[CS_MAXSMR], nm = 0, nreq = 0;
 	if (sid >= 0) {
 		int in = 0;
-		m[nm][0] = (uint16_t)(sid & 0x7fff), m[nm][1] = 0, tk[nm++] = 0;
+		m[nm][0] = (uint16_t)(sid & 0x7fff), m[nm][1] = sid_mask, tk[nm++] = 0;
 		for (int k = 0; k < 3; k++)
-			if (smr_overlap(ife_smr[k][0], ife_smr[k][1], m[0][0], 0))
+			if (smr_overlap(ife_smr[k][0], ife_smr[k][1], m[0][0], 0))	/* the base SID must be a DT one */
 				in = 1;
 			else
 				m[nm][0] = ife_smr[k][0], m[nm][1] = ife_smr[k][1], tk[nm++] = 1;
@@ -1677,6 +1680,8 @@ int main(int argc, char **argv)
 				byp = 1;
 			else if (!strcmp(argv[i], "--sid") && i + 1 < argc)
 				sid = (int)(strtoul(argv[++i], NULL, 0) & 0x7fff);
+			else if (!strcmp(argv[i], "--sid-mask") && i + 1 < argc)
+				sid_mask = (uint16_t)(strtoul(argv[++i], NULL, 0) & 0x7fff);
 			else if (!strcmp(argv[i], "--stream-cmd") && i + 1 < argc)
 				cmd = argv[++i];
 			else
@@ -1694,7 +1699,7 @@ int main(int argc, char **argv)
 	}
 usage:
 	fprintf(stderr, "usage: camrx [--dry-run] status | clocks on|off | tpg [SECONDS 1-60] | phy on [SETTLE 0-255] | "
-			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN "
+			"phy off | rx arm|report|stop | smmu [SID...] | capture OUTFILE --trap|--bypass --sid 0xNNN [--sid-mask 0xM] "
 			"[--stream-cmd \"CMD\"] [--alloc32]\n");
 	return 2;
 }

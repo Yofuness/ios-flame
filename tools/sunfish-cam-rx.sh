@@ -7,7 +7,8 @@
 # --capture (stage d): instead of rx arm + camid --stream + rx report, `camrx capture` (arms the CSID, sets up the
 # IFE-lite WM0 + SMMU, runs the stream itself) writes /var/local/cam/frame.raw; it is fetched to
 # work/cam/frame-<time>.raw and turned into PNGs (tools/sunfish-raw2png.py). CAPMODE picks the SMMU mode
-# (default "--trap": the IFE streams go to a faulting bank, nothing lands; "--bypass --sid 0xNNN" once known).
+# (default "--trap": the IFE streams go to a faulting bank, nothing lands; the working capture (cam17):
+# CAPMODE="--bypass --sid 0x8c0 --sid-mask 0x400", SIDs 0x8c0 + 0xcc0).
 # Everything is powered down at the end, also after a failed step.
 set -uo pipefail
 cd "$(dirname "$0")/.."
