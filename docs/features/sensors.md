@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 19:45 cw1: corrected seed reads 263-265° W (true heading ~270° W)
+- kernel126 (the script adds sweetmotion=0x4bf), work/magcal-west.txt pushed right before the reboot: the first try lost the race to adspboot's 30 s save (old bias), the second took: status "bias -65.5,-43.2,-67.7 span 90,90,90".
+- Compass (phone untouched, top pointing west per the user): screenshot 263° W (one digit glitched), webcam 265° W (work/shots/cw1.png, scratchpad cw1-cam.jpg). 5-7° short of 270, similar to dm4's 351 vs ~0 for the old seed, so a small constant offset remains (raw value from an older boot, field-strength guess, or tilt; not separated).
+- Next: dm5 = SEE mag_cal/gyro_cal biases (port bd5669f) in place of the box.
+
 ### 2026-10-30 19:25 the user: the phone lies flat with its top pointing WEST (dm4 showed 351 deg)
 - dm4's 351 deg is the seeded guess (bias assumed the top pointed north), so the heading math and axes look right; only the hard-iron bias was wrong. With the top west and face up, device x = north, y = west, z = up, so the expected field is (Bh, 0, -Bz) ~ (21, 0, -48) uT (assumed east-US field; horizontal magnitude only scales the error when the phone is turned).
 - New seed: bias = raw (-44.5, -43.2, -115.7) - (21, 0, -48) = (-65.5, -43.2, -67.7) uT (old -44.5, -64.2, -69.6): box min -110.5 -88.2 -112.7 max -20.5 1.8 -22.7 (work/magcal-west.txt). Expected after a reboot: ~270 deg W (cw1).
