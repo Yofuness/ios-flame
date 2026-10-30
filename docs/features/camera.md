@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 03:55 Stage f design (read-only, research/notes/camera-stage-f.md)
+- Chosen: a root daemon `camd` (camrx's proven code) -> /var/run/sunfish-camera.shm (3 slots, redwood_camera.h structs) + /var/run/sunfish-camera.sock (commands); camera_device.c in SunfishAudio.driver reads it through a ~150-line shim (camera_client.c) replacing its 8 device calls. Reasons: no sandbox enforced here (xnu 0050 stand-in allows all; 0219 already covers redfin 0924's tccd camera token); mediaserverd opening /dev/pmem rejected (root 0600, and a camera fault would kill audio).
+- Same iOS build as redfin (16.7.16 20H392 iPhone X), so their FigCaptureDevice vtables/selectors should match; a read-only symbol check comes before the first load. Kernel 0923 port stays the fallback (~2-3 days).
+- f1 (camd + camclient, no mediaserverd) being written.
+
 ### 2026-10-31 03:40 e3: phone-side ISP runs (camisp, 7b4bc20; ios-redfin camera_isp.c, MIT)
 - phone/camera: camera_isp.c/.h + redwood_camera.h verbatim from redfin, camisp.c wraps a bare 2016x1512 RAW10 file in a redwood_camera_frame header (stride 2520, format 1, Bayer --bayer, default RGGB unverified, black 64 assumed). Needs only libc + libm.
 - Phone (/var/local/cam/frame.raw from cam22, night scene): binned 1008x756 **83.4 ms/frame** (~12 fps); full 2016x1512 NV12 **371.9 ms/frame**. Host (PC) 13.9 / 73.6 ms. Guess for the gap: CPU clocks low (no CPU governor yet, backlog). Stats: mean R/G/B 87.0/89.0/88.1 above black, AWB gains 1.022/1.000/1.010; AE numbers meaningless (no real exposure metadata yet).
