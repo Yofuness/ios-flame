@@ -20,6 +20,8 @@ int uart_loop(void);			/* SE internal loopback test */
 int power(void);			/* ldoa10, clocks, pins, UART, QCA power pulses; RX on, flow control on */
 int hci_reset(void);
 int version(void);			/* EDL patch version request */
+int uart_speed(uint32_t baud);		/* bt11: QCA 0xfc48 + SE3 clock to baud, version check; 0 = ok */
+extern unsigned nvm_baud_code;		/* bt11: baud code firmware() puts in the NVM (set by uart_speed) */
 int firmware(const char *dir);		/* patch + NVM, HCI reset, drain, Read_BD_ADDR, Read_Local_Version */
 int off(void);
 

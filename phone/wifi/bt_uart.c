@@ -86,7 +86,13 @@
 #define CMD_CANCEL	4u
 #define START_TX	(1u << 27)
 #define START_READ	(1u << 27)
-#define SE_CLK_HZ	7372800u	/* RCG: GPLL0 even 300 MHz x 384/15625 (Linux freq table) */
+/* SE3 RCG rates (gcc-sm7150.c ftbl_gcc_qupv3_wrap0_s0_clk_src, GPLL0 even 300 MHz x M/N, div 1) */
+static const struct { uint32_t hz, m, n; } se_rates[] = {
+	{ 7372800, 384, 15625 }, { 14745600, 768, 15625 }, { 29491200, 1536, 15625 }, { 32000000, 8, 75 },
+	{ 48000000, 4, 25 }, { 64000000, 16, 75 }, { 80000000, 4, 15 }, { 96000000, 8, 25 },
+};
+static uint32_t se_clk_hz = 7372800u;	/* bt11: was SE_CLK_HZ; changed by uart_speed */
+unsigned nvm_baud_code;			/* bt11: QCA baud code written into the NVM HCI tag (0 = 115200) */
 
 /* TLMM (pinctrl-sm7150.c): gpio N config at 0x3d00000 + 0x1000*N (south tile), in/out +4 */
 #define TLMM_PA		0x03d00000u
@@ -168,10 +174,11 @@ void status(void)
 
 /* ---- clocks, pins, rails ---- */
 
-static int clocks_on(void)
+/* clk-rcg2 MND: M, N as ~(n-m), D as ~n; cfg src 6 = GPLL0 even, div 1, mode dual edge */
+static int rcg_set(uint32_t hz, uint32_t m, uint32_t n)
 {
-	/* RCG to 7.3728 MHz (clk-rcg2 MND: M, N as ~(n-m), D as ~n; cfg src 6 = GPLL0 even, div 1, mode dual edge) */
-	const uint32_t m = 384, n = 15625, cfg = (2u << 12) | (6u << 8) | 1u;
+	const uint32_t cfg = (2u << 12) | (6u << 8) | 1u;
+	se_clk_hz = hz;
 	if ((rd32(S3_RCG + 4) & 0x37ffu) != cfg || rd32(S3_RCG + 8) != m) {
 		printf("gcc: s3 rcg %#x -> %#x m %u n %u\n", rd32(S3_RCG + 4), cfg, m, n);
 		wr32(S3_RCG + 8, m);
@@ -182,6 +189,13 @@ static int clocks_on(void)
 		if (wait_bit(S3_RCG, 1u, 0, 100))
 			return fail("s3 rcg update not taken");
 	}
+	return 0;
+}
+
+static int clocks_on(void)
+{
+	if (rcg_set(se_rates[0].hz, se_rates[0].m, se_rates[0].n))	/* 7.3728 MHz */
+		return -1;
 	uint32_t v = V_S3 | V_M_AHB | V_S_AHB | V_CORE | V_CORE2X;
 	printf("gcc: vote %#x |= %#x\n", rd32(GCC_VOTE), v);
 	wr32(GCC_VOTE, rd32(GCC_VOTE) | v);
@@ -232,7 +246,7 @@ static void seq_stop(uint32_t ctrl, uint32_t active)
 
 static void baud(uint32_t b)
 {
-	uint32_t div = (SE_CLK_HZ + b * sampling - 1) / (b * sampling), cfg = (div << 4) | 1u;
+	uint32_t div = (se_clk_hz + b * sampling - 1) / (b * sampling), cfg = (div << 4) | 1u;
 	int reading = !!(sr(GENI_STATUS) & (1u << 12));
 	/* the rx sequencer keeps the clock its command started with: stop, set, restart (set_termios) */
 	if (reading) {
@@ -415,6 +429,7 @@ static int pulse(uint8_t p, uint32_t b)
 int power(void)
 {
 	uint8_t in[256];
+	nvm_baud_code = 0;			/* bt11: 115200 until uart_speed works */
 	if (rail(1))
 		return -1;
 	delay_ms(10);
@@ -692,7 +707,7 @@ int firmware(const char *dir)
 	       p[18] | p[19] << 8, p[20] | p[21] << 8);
 	if (download("patch", p, psz, p[14] == 3))
 		goto out;
-	/* NVM: tag 17 (EDL_TAG_ID_HCI): in-band sleep off (we don't speak IBS), baud index 0 = 115200 */
+	/* NVM: tag 17 (EDL_TAG_ID_HCI): in-band sleep off (we don't speak IBS), baud index = nvm_baud_code */
 	unsigned off = nv[0] == 4 ? 4 : 0, len = nv[off + 1] | nv[off + 2] << 8 | nv[off + 3] << 16;
 	if (nv[off] != 2 || off + 4 + len > nsz) {
 		fail("NVM layout unexpected");
@@ -701,9 +716,10 @@ int firmware(const char *dir)
 	for (unsigned at = off + 4; at + 12 <= off + 4 + len;) {
 		unsigned tag = nv[at] | nv[at + 1] << 8, tl = nv[at + 2] | nv[at + 3] << 8;
 		if (tag == 17 && tl >= 3) {
-			printf("nvm: hci tag %02x %02x %02x -> ibs off, baud 115200\n", nv[at + 12], nv[at + 13], nv[at + 14]);
+			printf("nvm: hci tag %02x %02x %02x -> ibs off, baud code %#x\n", nv[at + 12], nv[at + 13],
+			       nv[at + 14], nvm_baud_code);
 			nv[at + 12] &= 0x7f;
-			nv[at + 14] = 0;
+			nv[at + 14] = (uint8_t)nvm_baud_code;	/* bt11: the rate after HCI_Reset, as btqca user_baud_rate */
 		}
 		at += 12 + tl;
 	}
@@ -727,6 +743,48 @@ out:
 	free(p);
 	free(nv);
 	return rc;
+}
+
+/* bt11: QCA vendor baud command 0xfc48 (hci_qca qca_set_speed for WCN3990, codes from btqca.h), then our SE3 clock
+ * and divider; confirmed with an EDL version request at the new rate. Called after power() + version(), before
+ * firmware() (Linux qca_setup also downloads at the operating speed). 0 = ok; on failure the caller re-runs bring-up
+ * at 115200. */
+int uart_speed(uint32_t b)
+{
+	static const struct { uint32_t baud; uint8_t code; } codes[] = {
+		{ 230400, 0x05 }, { 460800, 0x07 }, { 921600, 0x0a }, { 1000000, 0x0b }, { 2000000, 0x0d },
+		{ 3000000, 0x0e }, { 3200000, 0x11 },
+	};
+	int c = -1, r = -1;
+	for (unsigned i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
+		if (codes[i].baud == b)
+			c = (int)i;
+	/* the lowest RCG rate that is an exact multiple of baud x samples per bit */
+	for (unsigned i = 0; i < sizeof(se_rates) / sizeof(se_rates[0]) && r < 0; i++)
+		if (se_rates[i].hz % (b * sampling) == 0 && se_rates[i].hz / (b * sampling) <= 0xfff)
+			r = (int)i;
+	if (c < 0 || r < 0) {
+		printf("uart: baud %u: no QCA code or exact SE clock (%u samples per bit)\n", b, sampling);
+		return -1;
+	}
+	const uint8_t out[] = { 0x01, 0x48, 0xfc, 0x01, codes[c].code };
+	sw(MANUAL_RFR, (1u << 31) | (1u << 1));	/* RFR not ready while switching (UART_RFR_NOT_READY) */
+	if (tx(out, sizeof(out)))
+		return -1;
+	delay_ms(10);
+	if (rcg_set(se_rates[r].hz, se_rates[r].m, se_rates[r].n))
+		return -1;
+	baud(b);
+	sw(MANUAL_RFR, rx_auto_rfr ? 0 : (1u << 31) | 1u);
+	drain(100);				/* the chip's vendor event at the new rate (hci_qca drops it) */
+	failed = 0;
+	if (version()) {
+		printf("uart: baud %u: no version reply\n", b);
+		return -1;
+	}
+	nvm_baud_code = codes[c].code;
+	printf("uart: baud %u: version ok (code %#x, se clock %u Hz)\n", b, codes[c].code, se_rates[r].hz);
+	return 0;
 }
 
 int off(void)

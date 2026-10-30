@@ -6,10 +6,11 @@
  * between it and the polled SE3 UART (as ios-redfin's btd --bridge does). bluetoothd job:
  * BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,115200 (the line stays at 115200; termios is ignored).
  *
- *   btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
+ *   btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-B BAUD] [-d DIR]   -n: no H4 shim (packets pass unchanged, still logged); -L: no legacy ->
  *                                 extended LE translation (bt7, bt_lext.c); -W: no chip watchdog (bt8); -R: no rx
  *                                 sequencer restart after an overrun (bt8, bt_uart.c); -F: manual RTS held ready
- *                                 instead of automatic RX flow control (bt10); -v: per-packet log lines; DIR: firmware
+ *                                 instead of automatic RX flow control (bt10); -B: UART rate after
+ *                                 power-on, before the download (bt11; default 3000000, 0 = 115200); -v: per-packet log lines; DIR: firmware
  *                                 (/var/local/fw/bt); -p: the old pty instead of /dev/btbridge (/dev/cu.bluetooth ->
  *                                 pty slave; bluetoothd 20H392 has no tty H4 driver, bt4: kept for comparison)
  * Log: /var/local/btbridge.log (the previous run's: .prev). Off: /var/local/btbridge.off. Runs in the foreground
@@ -73,6 +74,7 @@ static const char *fw_dir = "/var/local/fw/bt";
 static volatile sig_atomic_t stop_sig;
 /* bt8 watchdog: the oldest host command still waiting for a chip event */
 static int watchdog = 1;
+static uint32_t op_baud = 3000000;	/* bt11: -B N, the rate after power-on (0 = stay at 115200) */
 static uint16_t wd_op;
 static double wd_since;
 static unsigned wd_misses, n_recover;
@@ -314,7 +316,15 @@ static int bring_up_chip(void)
 {
 	for (int k = 1; k <= 3 && !stop_sig; k++) {
 		failed = 0;
-		int rc = power() || version() || firmware(fw_dir);
+		int rc = power() || version();
+		/* bt11: switch to op_baud before the download (as hci_qca); no answer at the new rate -> 115200 */
+		if (!rc && op_baud && uart_speed(op_baud)) {
+			printf("uart: baud %u: fell back to 115200\n", op_baud);
+			off();
+			failed = 0;
+			rc = power() || version();
+		}
+		rc = rc || firmware(fw_dir);
 		fflush(stdout);
 		if (!rc)
 			return 0;
@@ -439,10 +449,12 @@ int main(int argc, char **argv)
 			verbose = 1;
 		else if (!strcmp(argv[i], "-p"))
 			use_pty = 1;
+		else if (!strcmp(argv[i], "-B") && i + 1 < argc)
+			op_baud = (uint32_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "-d") && i + 1 < argc)
 			fw_dir = argv[++i];
 		else {
-			fprintf(stderr, "usage: btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-d DIR]\n");
+			fprintf(stderr, "usage: btbridge [-n] [-L] [-W] [-R] [-F] [-v] [-p] [-B BAUD] [-d DIR]\n");
 			return 2;
 		}
 	}
@@ -460,10 +472,10 @@ int main(int argc, char **argv)
 	/* bt10: the pump at a higher priority (-10); a failure is only logged */
 	if (setpriority(PRIO_PROCESS, 0, -10))
 		printf("btbridge: setpriority: %s\n", strerror(errno));
-	printf("btbridge: start, shim %s, lext %s, watchdog %s, rx restart %s, rx flow %s, log %s, firmware %s, host side %s\n",
+	printf("btbridge: start, shim %s, lext %s, watchdog %s, rx restart %s, rx flow %s, log %s, firmware %s, host side %s, baud %u\n",
 	       shim ? "on" : "off (-n)", shim && lext ? "on" : "off (-L)", watchdog ? "on" : "off (-W)",
 	       rx_restart ? "on" : "off (-R)", rx_auto_rfr ? "auto rfr" : "manual ready (-F)",
-	       verbose ? "per packet (-v)" : "quiet", fw_dir, use_pty ? "pty (-p)" : KDEV);
+	       verbose ? "per packet (-v)" : "quiet", fw_dir, use_pty ? "pty (-p)" : KDEV, op_baud ? op_baud : 115200);
 	/* bt8: SIGTERM/SIGINT stop cleanly (chip off, pid file removed); no SA_RESTART so sleeps end early */
 	struct sigaction sa = { .sa_handler = on_signal };
 	sigaction(SIGTERM, &sa, NULL);
