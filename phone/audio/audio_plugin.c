@@ -208,7 +208,8 @@ enum {
 	OBJECT_CODEC, OBJECT_CODEC_INPUT,
 	OBJECT_SPEAKER_VOLUME,          /* the speaker output's volume control */
 	OBJECT_CODEC_SOURCE,            /* the codec input's data source control: its microphones */
-	OBJECT_LAST = OBJECT_CODEC_SOURCE
+	OBJECT_CODEC_OUTPUT,            /* sunfish S4: the codec's output, only with JACK_OUT (last: the others keep their numbers) */
+	OBJECT_LAST = OBJECT_CODEC_OUTPUT
 };
 
 #define VOLUME_RANGE_DB         48.0    /* from the loudest the kernel allows down to the quietest step above 0 */
@@ -262,6 +263,12 @@ static Float32 volume = 1.0f;           /* the speaker's volume control, 0 to 1 
 #define JACK_ENABLE             "/var/local/sunfish-jack-enable"
 #define JACK_NOTIFY             "org.iosonpixel.jack"
 static bool jack_enabled;
+/*
+ * sunfish S4: with /var/local/sunfish-jack-out as well (read once at Initialize), "Codec" has an output
+ * stream (the speaker's format, a null sink: what is played on it is dropped), for a Wired Headphones
+ * port to be bound to.
+ */
+#define JACK_OUT                "/var/local/sunfish-jack-out"
 static UInt32 jack_state;               /* under lock */
 
 static void
@@ -417,6 +424,7 @@ static OSStatus
 initialize(__unused AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef the_host)
 {
 	mach_timebase_info_data_t timebase;
+	struct stat st;
 
 	host = the_host;
 	mach_timebase_info(&timebase);
@@ -424,6 +432,16 @@ initialize(__unused AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef 
 	sink = open(SUNFISH_AUDIO_DEVICE, O_WRONLY);
 	say("sunfish: audio: the speaker is with the HAL (%s: %s)\n", SUNFISH_AUDIO_DEVICE, sink < 0 ? strerror(errno) : "open");
 	jack_start();
+	if (stat(JACK_OUT, &st) == 0) {
+		/* sunfish S4: devices[] is ours until the HAL first asks */
+		for (unsigned i = 0; i < DEVICES; i++) {
+			if (devices[i].object == OBJECT_CODEC) {
+				devices[i].output = OBJECT_CODEC_OUTPUT;
+				devices[i].output_channels = SUNFISH_AUDIO_CHANNELS;
+			}
+		}
+		say("sunfish: audio: the codec has an output (%s): dropped\n", JACK_OUT);
+	}
 	return 0;
 }
 
@@ -749,9 +767,36 @@ unknown(AudioObjectID object, const AudioObjectPropertyAddress *address)
 	    (int)(c >> 24 & 0xff), (int)(c >> 16 & 0xff), (int)(c >> 8 & 0xff), (int)(c & 0xff), (unsigned)address->mElement);
 }
 
+/*
+ * sunfish S4: with the jack on, every call that ends in "no such property" (the HAL's 'unkn' after a
+ * jack change is one of them), the first JACK_ASKED lines of the process.
+ */
+#define JACK_ASKED              200
+static unsigned jack_asked;
+
+static void
+unknown_call(AudioObjectID object, const AudioObjectPropertyAddress *address, const char *call)
+{
+	UInt32 s, c;
+	unsigned n;
+
+	if (!jack_enabled || address == NULL) {
+		return;
+	}
+	n = __atomic_fetch_add(&jack_asked, 1, __ATOMIC_RELAXED);
+	if (n >= JACK_ASKED) {
+		return;
+	}
+	s = address->mSelector;
+	c = address->mScope;
+	say("sunfish: audio: unknown property obj %u '%c%c%c%c' '%c%c%c%c' %u (%s)\n", (unsigned)object,
+	    (int)(s >> 24 & 0xff), (int)(s >> 16 & 0xff), (int)(s >> 8 & 0xff), (int)(s & 0xff),
+	    (int)(c >> 24 & 0xff), (int)(c >> 16 & 0xff), (int)(c >> 8 & 0xff), (int)(c & 0xff), (unsigned)address->mElement, call);
+}
+
+/* Whether the object has the property, without telling (has_property() tells). */
 static Boolean
-has_property(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
-    const AudioObjectPropertyAddress *address)
+known(AudioObjectID object, const AudioObjectPropertyAddress *address)
 {
 	struct value v;
 
@@ -765,13 +810,26 @@ has_property(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, _
 	return v.size != 0 || v.empty;
 }
 
+static Boolean
+has_property(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
+    const AudioObjectPropertyAddress *address)
+{
+	Boolean has = known(object, address);
+
+	if (!has) {
+		unknown_call(object, address, "Has");
+	}
+	return has;
+}
+
 static OSStatus
-is_property_settable(AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
+is_property_settable(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
     const AudioObjectPropertyAddress *address, Boolean *settable)
 {
 	const struct device *d = device_of(object);
 
-	if (address == NULL || settable == NULL || !has_property(driver, object, client, address)) {
+	if (address == NULL || settable == NULL || !known(object, address)) {
+		unknown_call(object, address, "Settable");
 		return kAudioHardwareUnknownPropertyError;
 	}
 	/* the rate and the formats can be "set", to the ones there are; the volume can be set */
@@ -792,10 +850,13 @@ is_property_settable(AudioServerPlugInDriverRef driver, AudioObjectID object, pi
 }
 
 static OSStatus
-get_property_data_size(AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
+get_property_data_size(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
     const AudioObjectPropertyAddress *address, UInt32 qualifier_size, const void *qualifier, UInt32 *size)
 {
-	if (address == NULL || size == NULL || !has_property(driver, object, client, address)) {
+	if (address == NULL || size == NULL || !known(object, address)) {
+		if (object >= OBJECT_PLUGIN && object <= OBJECT_LAST) {
+			unknown_call(object, address, "Size");
+		}
 		return object < OBJECT_PLUGIN || object > OBJECT_LAST ? kAudioHardwareBadObjectError : kAudioHardwareUnknownPropertyError;
 	}
 	*size = property(object, address, qualifier_size, qualifier).size;
@@ -803,13 +864,16 @@ get_property_data_size(AudioServerPlugInDriverRef driver, AudioObjectID object, 
 }
 
 static OSStatus
-get_property_data(AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t client,
+get_property_data(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unused pid_t client,
     const AudioObjectPropertyAddress *address, UInt32 qualifier_size, const void *qualifier, UInt32 room, UInt32 *size,
     void *data)
 {
 	struct value v;
 
-	if (address == NULL || size == NULL || data == NULL || !has_property(driver, object, client, address)) {
+	if (address == NULL || size == NULL || data == NULL || !known(object, address)) {
+		if (object >= OBJECT_PLUGIN && object <= OBJECT_LAST) {
+			unknown_call(object, address, "Get");
+		}
 		return object < OBJECT_PLUGIN || object > OBJECT_LAST ? kAudioHardwareBadObjectError : kAudioHardwareUnknownPropertyError;
 	}
 	if (object == OBJECT_SPEAKER_VOLUME && (address->mSelector == kAudioLevelControlPropertyConvertScalarToDecibels ||
@@ -971,7 +1035,7 @@ start_io(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unu
 	if (d->running++ == 0) {
 		d->anchor = mach_absolute_time();
 		d->periods = 0;
-		if (d->output != 0) {
+		if (d->output != 0 && d->object != OBJECT_CODEC) {
 			written = refused = 0;
 			say("sunfish: audio: playing\n");
 		}
@@ -1093,6 +1157,8 @@ do_io_operation(__unused AudioServerPlugInDriverRef driver, __unused AudioObject
 	} else if (operation == kAudioServerPlugInIOOperationReadInput) {
 		/* the speaker's and Hawking's inputs: silence */
 		memset(buffer, 0, (size_t)frames * 2 * d->input_channels);
+	} else if (operation == kAudioServerPlugInIOOperationWriteMix && stream == OBJECT_CODEC_OUTPUT) {
+		/* sunfish S4: the codec's output (JACK_OUT): dropped */
 	} else if (operation == kAudioServerPlugInIOOperationWriteMix && stream == OBJECT_ACTUATOR_OUTPUT) {
 		actuator_write(buffer, frames);
 	} else if (operation == kAudioServerPlugInIOOperationWriteMix && stream == d->output) {
