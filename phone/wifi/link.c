@@ -4,6 +4,7 @@
  * channel. The modem is QRTR node 0; we are node 1.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "glink.h"
@@ -223,17 +224,38 @@ static int rx_one(void)
 	return 1;
 }
 
+/* O12: the FIFOs are shared memory (no fd to poll): sleep 1 ms right after traffic (ours or what link_idle's
+ * pollers count in link_traffic), doubling to 10 ms after 50 ms without; WLAND_POLL1MS=1 = the fixed 1 ms */
+unsigned link_traffic;
+
 int link_poll(unsigned ms)
 {
+	static int fixed = -1;
+	static uint64_t last_traffic;
+	static unsigned seen, nap = 1;
 	uint64_t end = now_ms() + ms;
 	int n = 0;
+	if (fixed < 0)
+		fixed = getenv("WLAND_POLL1MS") != NULL;
 	do {
 		while (rx_one())
-			n++;
+			n++, link_traffic++;
 		if (link_idle)
 			link_idle();
-		if (ms)
-			delay_ms(1);
+		if (!ms)
+			break;
+		uint64_t now = now_ms();
+		if (fixed || link_traffic != seen) {
+			seen = link_traffic;
+			last_traffic = now;
+			nap = 1;
+		} else if (now - last_traffic >= 50 && nap < 10) {
+			nap = nap * 2 > 10 ? 10 : nap * 2;
+		}
+		unsigned d = nap;
+		if (now + d > end)
+			d = now < end ? (unsigned)(end - now) : 1;
+		delay_ms(d);
 	} while (now_ms() < end);
 	return n;
 }

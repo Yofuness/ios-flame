@@ -491,6 +491,7 @@ void ipnet_poll(void)
 			break;
 		uint32_t af;
 		memcpy(&af, in, 4);
+		link_traffic++;	/* O12 */
 		if (ntohl(af) == AF_INET)
 			ip_out(in + 4, (uint32_t)r - 4);
 	}

@@ -148,6 +148,7 @@ void bridge_poll(void)
 		ssize_t r = read(bfd, m, sizeof(m));
 		if (r < (ssize_t)sizeof(struct fw_hdr))
 			break;
+		link_traffic++;	/* O12 */
 		struct fw_hdr h;
 		memcpy(&h, m, sizeof(h));
 		const uint8_t *p = m + sizeof(h);

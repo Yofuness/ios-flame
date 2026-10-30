@@ -21,6 +21,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -166,9 +167,20 @@ int main(void)
 	}
 	printf("hapticd: reading %s (48 kHz mono s16); tap <= %u ms, vibration capped %u ms + %u ms rest\n", FIFO,
 	       TAP_US / 1000, MAX_MS, MAX_MS);
+	int poll4 = getenv("HAPTICD_POLL4") != NULL;	/* O12: 1 = the old fixed 4 ms poll also when idle */
 	for (;;) {
 		struct pollfd p = { fd, POLLIN, 0 };
-		if (poll(&p, 1, 4) > 0) {
+		int wait = 4;
+		uint64_t t0 = now_us();
+		/* O12: idle (no sound tracked, nothing to play) blocks until data or the 2 s chip-off is due */
+		if (!poll4 && state == IDLE && (heard == 0 || t0 - heard >= ACTIVE_US)) {
+			wait = -1;
+			if (up) {
+				uint64_t left = t0 - last_play > IDLE_OFF_US ? 0 : IDLE_OFF_US - (t0 - last_play);
+				wait = (int)(left / 1000) + 1;
+			}
+		}
+		if (poll(&p, 1, wait) > 0) {
 			ssize_t n = read(fd, (char *)buf + carry, sizeof(buf) - carry);
 			if (n > 0) {
 				size_t bytes = carry + (size_t)n, k = bytes / 2;
