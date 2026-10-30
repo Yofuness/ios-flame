@@ -16,6 +16,11 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 18:00 dm9: Compass heading steady at rest: complementary filter + gyro bias (port efafe97)
+- kernel127, 4458 mV, SSH 19 s. Phone still ~112 s (work/hdg-dm9b.txt, 224 lines): h 113.4..119.4, raw hmag 108.4..126.7, largest step in h 1.3 deg, mean |h-hmag| 2.4 deg, drift +0.1 deg. Status: "cal fit r 48.0 res 2.86 bias -35.1,-42.6,-62.9, mag gaps >200ms 0 >1s 0 max 20 ms, gate rej r 0 dip 0, gbias -0.0097,-0.0052,0.0052 still 0" (0.0052 rad/s = 0.3 deg/s about z; still read 0 in that sample, not understood).
+- The heading under the webcam moved to ~116 with the newer fit (r 48, res 2.86 from the walk; dm7's fit r 42, res 1.78 read 97-105), so the fit itself still varies by ~15 deg when the horizontal field is this small. The saved fit should probably not be replaced by a worse one (next idea, not done). The final screenshot showed the home screen (Compass was not in front at the end; not understood).
+- Next: the user's walk test; absolute accuracy vs the Pixel 8 Pro.
+
 ### 2026-10-30 17:40 dm8b: the user's walk test: the 4a drifts away at rest; the fusion lags the magnetometer
 - The user walked the 4a through a circle, then laid it flat beside the Pixel 8 Pro: started ~10 deg apart, then the 4a went "farther and farther out of sync" (higher degrees).
 - Trace work/hdg-dm9.txt (755 lines, T 107-487): the fit updated (r 48.0, res 2.86, bias -35.1,-42.6,-62.9), gate rej r 25, dip 446, no mag gaps. Fast turns show steps up to 81 deg per 0.5 s (real motion). After the handling the heading crawls: 113 -> 167 over ~50 s, then 144 -> 117 over ~50 s. Madgwick beta 0.04 corrects yaw too slowly, gyro bias uncorrected (gcal 0).
