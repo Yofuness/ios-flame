@@ -35,6 +35,14 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:50 cam5 (kernel108, sweetse9=2 sweetcampmic=2, same boot as cam4): stage a2 DONE, IMX363 ID at MCLK 24 MHz
+- `camid --addr 0x1a --keep` (MCLK on XO 19.2 MHz): bytes 35 03 63 63, IMX363 ID OK.
+- `camclk pll2 on` (lock, MODE 0xc0000007), `camclk mclk 0 24`: CBCR 0x1, CFG 0x2501 M 1 N 0xec D 0xeb.
+- `camid --addr 0x1a --keep --mclk-asis`: "mclk0 rcg left as is: cfg 0x2501 m 0x1 n 0xec"; **bytes 35 03 63 63 at 24 MHz**.
+- `camclk off` (CBCR 0x80000000, PLL off), `camid --addr 0x1a`: ID OK at XO, then 11 pd lines (reset, mclk, 4 pins, cci_0, 3 branches, GDSC collapse). No reset.
+- On-device: /var/local/bin/camid + camclk (phone tools, built by tools/build-userland-linux.sh); nothing left powered.
+- Next: stage b (sunfish-camtab.py from redfin-camtab.py + `camid --stream FILE`: init + 2016x1512 mode, 0x0100 = 1, frame counter 0x0005).
+
 ### 2026-10-30 21:40 cam4 (kernel108, sweetse9=2 sweetcampmic=2): MCLK0 runs at 24 MHz from PLL2
 - Battery 4455 mV, SSH 18 s. campmic GPIOs set at ~30.6 s of boot (not 146 s as on kernel94): "after ... 40 01 ... 44 80 45 01 46 80".
 - `pll2 on`: lock, MODE 0xc0000007. `camid --keep`: SLG LDOs on (STATUS 0x02), TITAN GDSC 0x22f001 -> 0xf822f000, cpas/core/camnoc/cci_0 on, MCLK0 on XO (CBCR 0x1), reset high; CCI: 0x10 NACK (status 0x8000000), then 0x1a timeout (status 0). Same as 2026-10-28, where 0x1a only answered when probed alone (`--addr 0x1a`).

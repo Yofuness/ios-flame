@@ -15,8 +15,8 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
    held real tilt only rotates on the way back (U10). Next: raw accel during a hold (logged now) -> axes/filter. (sensors.md)
 5. **Battery %**: kernel106 counting mode built and runs (bat1); needs a discharge run (U3, boot with sweetbattery=2) and the SDAM
    offsets from a RAM-log rescue. (battery.md)
-6. **Camera** (B17): plan from ios-redfin (research/notes/camera-port.md, 6 stages, ~2-3 weeks); next: read-only camcc
-   PLL dump (24 MHz MCLK), then sensor streaming. (camera.md)
+6. ▶ **Camera** (B17): plan research/notes/camera-port.md (6 stages); a2 DONE (MCLK 24 MHz from camcc PLL2, IMX363 ID OK;
+   boot with sweetse9=2 sweetcampmic=2, probe `--addr 0x1a`). Next: stage b, sensor init + stream on (camid --stream). (camera.md)
 Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach), CPU governor (0963), camera (same
 IMX363/IMX355 sensors; 3-5 days).
 
