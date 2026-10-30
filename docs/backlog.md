@@ -36,6 +36,8 @@ history in the feature Logs.
 - B4 Silent resets in long app soaks (PON reason is sticky, no lead).
 
 ## Optimize (last)
+- O9 ios-redfin GPU line (survey 2026-10-30, research/notes/redfin-survey-2026-10-30.md), ranked: DEADFILL (plan item 0), bridge 0109+0110 COLOR_WRITES=fetch (1-2 h), 0111 scratch trim (1-2 h), TU_DEBUG=sysmem + Turnip 0108 retest (0.5 h), Turnip 0111 UBWC (1 h, A618 UBWC differs), bridge 0103-0108 rebase (4-8 h), 0130-0137 UniXNU ports (2-4 h), xnu 1041 CA threads on big cores (2-3 h), 1040 GPU IRQ fence waits (4-6 h, no fps gain), NILENC/PREWARM (2-3 h), rotfb4 landscape (2 h). Skip (no gain for them): ENCTHREAD 3, FP16, CONTRACT, COLOR_WRITES=plain, xnu 1035/1036/1037/1039/1042, triple buffering, gmem autotune.
+- O10 ios-redfin xnu 1034/1045 USB Ethernet fast path + replug recovery (not GPU; could help our USB link).
 - O8 [DONE 2026-10-30] Camera ISP speed: whole-frame renders in row bands, camisp 84.8 -> 10.6 ms binned, 372 -> 47 ms full (identical output; the live preview was already parallel).
 - O2 zero-copy scanout: works by hand (kernel103 `sctl kern.sweet_zc_scan=2`), no fps gain (zc5), auto mode (kernel104, sweetfb_zerocopy=2) garbled once in two boots; parked 2026-10-30 (smoothness.md).
 - O3 Reduce Transparency speed (with B10).

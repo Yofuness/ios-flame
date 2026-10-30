@@ -1,6 +1,6 @@
 # Upstream projects to watch (tools/sunfish-upstream-check.sh; CLAUDE.md "Upstream check").
 # NAME  DIR (clone, outside git)  URL  BRANCH (- = the remote's default)  SURVEYED (last commit surveyed; - = never)
-ios-redfin     research/re/redfin/redfin-int   https://github.com/DenialOfGravity/ios-redfin       redfin-int  c5b363e
+ios-redfin     research/re/redfin/redfin-int   https://github.com/DenialOfGravity/ios-redfin       redfin-int  05d8099
 iOSPlus10      research/upstream/iOSPlus10     https://github.com/akshaynexus/iOSPlus10            -           -
 ios-sweet      ../upstream/ios-sweet           https://github.com/dipa-studio/ios-sweet            -           067c9b3
 ios-flame      ../upstream/ios-flame           https://github.com/NWylynko/ios-flame               -           745c434

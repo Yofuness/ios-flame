@@ -5,6 +5,7 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md) and iOSPlus10 (MIT).
+0. ▶ **GPU smoothness from ios-redfin** (the user's ask; research/notes/redfin-survey-2026-10-30.md): theirs 55-64 fps / 5.4 ms GPU, ours ~21 fps / 25-30 ms. Step 1: port frontend DEADFILL (their 41 -> 56 fps), A/B with sunfish-m2env-bench.sh + screenshot check; then bridge 0109-0111, Turnip sysmem/UBWC, bridge 0103-0108 rebase, xnu 1041 big cores.
 1. **Speaker** (B16): PARKED 2026-10-30 after ~15 runs (all silent; amp, DSP, routing, memory proven); next: prove
    SD0 activity (tight pin sampler / AFE loopback). (audio.md)
 2. **Bluetooth follow-ups** (B15): Xbox controller + AirPods pair and connect (auto RFR flow control), 3 Mbaud
