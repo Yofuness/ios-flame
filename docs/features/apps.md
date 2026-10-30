@@ -48,6 +48,12 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:30 U13 by Claude (fake taps + webcam, boot sp16r): Files still has no "On My iPhone"
+- Browse > Locations lists only "Recently Deleted" (plus Tags); no On My iPhone, no iCloud Drive. `lsreg -i com.apple.FileProvider.LocalStorage`: dataContainerURL .../PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 (the link survived the reboot).
+- oslog -l across a Files relaunch: Files[558] "Wanted to use com.apple.FileProvider.LocalStorage, but it isn't available" (and the same for CloudDocs); pkd "Candidate plugin count from LaunchServices: 1".
+- So the files7 state (pkd + fileproviderd accept LocalStorage after a restart) does not hold after a reboot. Next (als1, in progress): restart pkd + fileproviderd + Files on a fresh boot and look again.
+- tools/flame-shot gives skewed/garbage images on this boot (default and explicit 0x9c400000 1080x2280 stride 4320); the webcam is readable at minimum brightness (image rotated 90 degrees). D7 added.
+
 ### 2026-10-30 04:00 Correction to files6/7
 - PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965 has mtimes 1969-12-31 (from the root image): it existed all along; the `lsreg -r` after the clean files6 boot only linked it into the LaunchServices record. So earlier rebuilds missed it (they may have run with containermanagerd busy/wedged, or before it was up), and the hand-made container was not needed. Setup step: a full `lsreg -r` on a settled boot.
 

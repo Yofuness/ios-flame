@@ -44,6 +44,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
+- D7 tools/flame-shot gives garbage frames on kernel112/CAMERA=1 boots (u13); the webcam works meanwhile.
 - D6 [PARTLY 2026-10-30] boot cmdline over 591 bytes (B38): -15 B, fast failure; a third extra arg still needs work/rtc-offset moved aside; kernel-side fix later.
 - D5 [DONE 2026-10-29] fake taps/swipes (`T`/`W` in /var/local/sweet-orient): tests no longer need a finger.
 - D2 [DONE 2026-10-29] SSH earlier at boot: dropbear Interactive, SSH up 16-18 s.

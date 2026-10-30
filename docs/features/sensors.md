@@ -16,6 +16,9 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 07:30 xnu 0237 (kernel113): SweetBacklight publishes a nits range 2..500 for CoreBrightness
+- research/notes/ambient-light.md "systemShallUpdateBacklight": with no range CoreBrightness falls back to logical 0..1 (the 20000 lux target 1.0 = _L_current 1.0, no delta, no update). 0237 (from ios-redfin 0973, MIT): MinNits 2, MaxNits/MaxNitsPanel 500, HardwareAccessibleMin/MaxNits, DisplayPanel/ProductLuminanceMin/Mid/Max 2/155/500, backlight-calibration-parameters (16.16; the current values are guesses), user-accessible-max-nits / digital-dimming-min-nits as 4-byte 16.16 OSData; setNits maps < 2 nits to DCS 32. `sweetnits=0` turns it off. Built (37 s), test als1 in progress.
+
 ### 2026-10-30 07:10 Ambient light: iOS auto-brightness runs on our lux, but "systemShallUpdateBacklight=false"
 - New phone tools: mgq (MobileGestalt answers) and autobright (CoreBrightness BrightnessSystemClient DisplayBrightnessAuto get/set), phone/tools/build.sh.
 - mgq: ambient-light-sensor = true, proximity-sensor = true, DeviceClassNumber 1, ProductType iPhone10,3. autobright: DisplayBrightnessAuto = 1. So the MobileGestalt gate passes and Auto-Brightness is on.
