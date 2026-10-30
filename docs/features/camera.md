@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:30 O8: camera_isp renders split into row bands (9e8aa03): 8x faster on the phone, identical output
+- isp_render_nv12 / _bgra / _full_nv12 / _still_nv12: a whole-frame call is cut into isp_threads bands (dispatch_apply_f on iOS, pthreads on the host); partial-row calls stay single-threaded (camera_device.c's render_into already splits frames 8 ways with dispatch_apply_f in mediaserverd, so the live preview was already parallel; camisp's 83 ms was single-threaded). isp_measure stays single-threaded (float sums). isp_threads 0/1 = old path; default ISP_THREADS env or hw.ncpu capped at 8.
+- Phone (camisp on cam21.raw, 8 threads): binned 1008x756 84.79 -> **10.61 ms/frame**; full 2016x1512 NV12 371.75 -> **47.12 ms**; md5 of 1- vs 8-thread output identical (78396d4a...). Host: 13.3 -> 2.53 ms, 35.2 -> 8.87 ms, all byte-identical.
+- SunfishAudio.driver rebuilt with it but not reinstalled (mediaserverd's path doesn't use the whole-frame split).
+
 ### 2026-10-30 04:00 Colour tuning files installed (research/notes/camera-tuning.md)
 - ios-redfin's tools/redfin-camtune.py works as-is on our com.google.tuned.s5_imx363.bin / s5_imx355.bin (vendor.img /lib64/camera): imx363 10 colour matrices + 83 lens-shading grids (~1.0 centre, 3.1-3.8 corners) -> work/cam/camera-imx363.isp / camera-imx355.isp (21572 B each, RWCISP02, 1 light x 6 entries: no CCT triggers found, so the ISP uses file order; no AWB reference lights; imx355's first matrix equals imx363's: check). Installed to /private/var/local/fw/ (camera_isp.c isp_load_tuning); tools/sunfish-install-camera.sh now makes + puts them and the front table.
 - Untested: whether the "no colour tuning" log line goes away and colours improve: with U12 (remove the .isp files if colours look worse).
