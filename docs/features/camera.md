@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:15 B48 analysis (work/af7/af7a.log): the kernel keeps killing mediaserverd (low swap); a stale START then blocks recovery
+- af7a.log: 14.991 photo made; 17.720 "low swap: killing largest compressed process with pid 571 (mediaserverd) and size 49502 MB" (jetsam low-swap, vm_compressor.c:619 -> kern_proc.c:4469/4521); Camera gets AVAudioSessionMediaServicesWereLost, 20.623 session runtime error -11819, "startRunning succeeded (took 9.006 seconds)", 31.083 "START -> 0 after 12058 ms", "opened after stop: closed at once". No stream-start timeout. Kills recur in recent boots (20261030-175437: 11, about every 53 s; 183748: 6; first in 155135, the show1 boot).
+- Second bug: a stale worker sits in camera_client_open (camera_client.c:24, :198) holding device_owner (camera_device.c:2185), so the wanted worker waits; stream_stop blocks 1.5 s per flip (:2344). Fix idea: START wait abortable (poll worker_wanted).
+- Open: what fills mediaserverd's compressed ledger (~0.9 GB/s of something highly compressible, or an accounting bug). mem1 samples it.
+
 ### 2026-10-30 23:00 af6/af7: focus on open works; first shutter after reopening can be ignored (port 4e3e807)
 - af6 (kernel128, camera_af.h: sweep after AE is stable, lock, per-session reset, 1 s photo timeout): no tap: F 400, 440, 481, 562, 643, 725, settles 714 (focus 991); sharp ~25 s after openapp (+9 s blurry, +16 s soft); locked, no F lines for 20+ s. After front -> rear: black ~10 s, soft at +20 s, sharp at +30 s, sweep ran again. Front: pale blue-lilac, bright, not clipped. 5 camclient sessions in a row rc 0. DEVLOST 0, FAULT 0.
 - Photo: af6's two shutter taps saved nothing, no "a photograph asked for". af7: A (openapp, 35 s, no tap): nothing; B (tap focus, 6 s, shutter): IMG_0005.HEIC; C (openapp again, 35 s, no tap): IMG_0006.HEIC, StillImage in 381 ms. So a tap isn't needed; AF isn't the cause. A's log has "Viewfinder still closed N seconds after ViewfinderClosed (CameraStopped, PreviewStopped, RuntimeError)", "stream: its worker is still in the kernel: left to finish on its own"; B/C don't. Cause open (restart race? guess); backlog B48. Logs: work/af7/.
