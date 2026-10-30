@@ -320,8 +320,7 @@ static void *session(void *arg)
 		{ BIN "camid", "--front", "--addr", "0x1a", "--keep", NULL }, { BIN "camclk", "mclk", "2", "24", NULL },
 	};
 	int rc = 0;
-	front = sensor_want == 2;
-	cam_select(front);
+	cam_select(front);	/* (front: set by the main loop before the thread, cam-f2) */
 	gain_base = front ? 1024 : 512;
 	sh->latest_seq = 0, sh->published = 0, sh->dropped = 0;
 	sh->data_bytes = FRAME_BYTES;
@@ -578,6 +577,9 @@ int main(int argc, char **argv)
 		}
 		if (want && !sess_running && joined) {
 			want_stop = 0;
+			/* cam-f2: the sensor picked here, not in the thread: else the check below saw the old one and
+			 * stopped every new front session at once */
+			front = sensor_want == 2;
 			sh->state = SUNFISH_CAMERA_STARTING;
 			sess_running = 1;
 			if (pthread_create(&sess_th, NULL, session, NULL)) {

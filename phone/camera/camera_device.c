@@ -486,7 +486,10 @@ static const struct camera {
 	/* redfin: the front IMX355's pictures came out upside down untouched (r18g, Camera.app's own thumbnail): turned,
 	 * as HackiOS's phone's was */
 	{ 2, "Front Camera", "com.apple.avfoundation.avcapturedevice.built-in_video:1", true, 2.59, 2.0, 1.12, 70.9,
-	  { { 3088, 2320, 30, REDWOOD_CAMERA_MODE_PHOTO }, { 3840, 2160, 30, REDWOOD_CAMERA_MODE_VIDEO } }, false },  /* "Photo", "Video-30" */
+	/* sunfish (f4): camd's front mode is one (2: 1640x924 RAW10 @30, 16:9-ish), so both ask for PHOTO as the back's
+	 * do; the plist's sizes stay, the pictures are the frame's middle in their proportions (camera_isp.c crop(): the
+	 * 4:3 photo from 1232x924 of it, the 16:9 video from all of it) */
+	  { { 3088, 2320, 30, REDWOOD_CAMERA_MODE_PHOTO }, { 3840, 2160, 30, REDWOOD_CAMERA_MODE_PHOTO } }, false },  /* "Photo", "Video-30" */
 	/* (the iPhone 11's uniqueID for its ultra-wide; the back camera's plist keys) */
 	{ 3, "Back Ultra Wide Camera", "com.apple.avfoundation.avcapturedevice.built-in_video:5", false, 2.13, 2.2, 1.0, 94.5,
 	  { { 4032, 3024, 30, REDWOOD_CAMERA_MODE_PHOTO }, { 4224, 2376, 60, REDWOOD_CAMERA_MODE_VIDEO60 } }, false },
@@ -2410,7 +2413,7 @@ worker(void *context)
 			say("reopen skipped: stream given back (%u)", again);
 			break;
 		}
-		device = camera_client_open();          /* sunfish (f2): camd, not /dev/redwood-camera */
+		device = camera_client_open(s->camera->sensor);         /* sunfish (f2): camd, not /dev/redwood-camera; f4: its sensor */
 		if (device >= 0 && (!worker_wanted(s, start.generation) || worker_unwanted_open(s))) {
 			say("opened after stop: closed at once");       /* sunfish (f3) */
 			camera_client_close(device);
@@ -2865,7 +2868,8 @@ redwood_camera_device_create(CFAllocatorRef allocator, CFDictionaryRef options, 
 		return ERR_UNSUPPORTED;
 	}
 	ports[0] = port_back;
-	ports[1] = NULL;        /* sunfish (f2): camd has only the IMX363 (sensor 1); no front camera yet */
+	/* sunfish (f4): the front IMX355 through camd (SENSOR 2). Off: /var/local/camdev.nofront exists (no front port) */
+	ports[1] = access("/var/local/camdev.nofront", F_OK) == 0 ? NULL : port_front;
 	/* redfin (B3): the ultra-wide camera, where asked for and CMCapture has its port */
 	ports[2] = access("/private/var/local/camera-ultrawide", F_OK) == 0 ? port_ultra_wide : NULL;
 	if (access("/private/var/local/camera-ultrawide", F_OK) == 0 && port_ultra_wide == NULL) {

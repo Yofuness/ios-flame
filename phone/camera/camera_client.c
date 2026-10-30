@@ -135,7 +135,7 @@ drop(void)
 }
 
 int
-camera_client_open(void)
+camera_client_open(unsigned sensor)
 {
 	if (c.sock >= 0) {
 		errno = EBUSY;
@@ -186,6 +186,13 @@ camera_client_open(void)
 	double t0 = now_ms();
 	bool got = false;
 
+	/* cam-f2: SENSOR before START, so camd brings up that camera at once (no rear bring-up first); its reply is
+	 * skipped by the loop below (not START's) */
+	struct redwood_camera_command sel = { REDWOOD_CAMERA_SENSOR, sensor, REDWOOD_CAMERA_MODE_ANY, REDWOOD_CAMERA_MODE_ANY, 0, 0 };
+
+	if (sensor != 0 && write(c.sock, &sel, sizeof(sel)) != (ssize_t)sizeof(sel)) {
+		logf_("open: SENSOR %u: %s", sensor, strerror(errno));
+	}
 	if (write(c.sock, &m, sizeof(m)) == (ssize_t)sizeof(m)) {
 		while (!got && now_ms() - t0 < START_WAIT_MS) {
 			struct pollfd p = { c.sock, POLLIN, 0 };
