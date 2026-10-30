@@ -5,11 +5,11 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. ▶ **Battery + camera CPU** (O14): -9% in 10 min of use; the preview takes ~5 cores (software ISP, not profiled). Profile it, then measure per subsystem; needs a trustworthy battery % (U3). (battery.md, camera.md)
-2. **Camera polish** (B48 + camera.md): first session after a boot can ignore the shutter ("Timed out after 1.0s waiting for the staging node"), switch ~7 s + ~10 s to the picture, front colour cast, focus on open ~25 s.
-3. **GPU device lost** (gpu.md): backboardd lost its Vulkan device once after Camera launches; the bridge now logs "DEVLOST first ..." and restarts backboardd: read the cause if it comes back. Also the kernel-wide UI hang (sleep-wake.md 20:30).
-4. **Garbled images** (B44/B29): parked after 4 rounds; next: offset % texel for shadowed RGBA8/BGRA8, one screen per run.
-5. **iOS sound path + speaker** (B16): later, feed /dev/sunfish-audio to the ADSP. (audio.md)
+1. ▶ **60 Hz / GPU speed** (the user's top ask, 2026-10-30; O7): the path can do 60 (camera preview: 300 swaps per 5 s); swipes get ~21: CA CPU 10-15 ms + GPU 25-30 ms (blur up to 66), serial, one frame in flight. Ladder, stop when good: (a) per-screen fps table + no-blur bench (Reduce Transparency, B10), 1-2 h; (b) lower render resolution, upscale in the present blit, 2-4 h; (c) blur passes cheaper (half-res/skip backdrop in the bridge), 0.5-1 day; (d) two frames in flight (QuartzCore RE), days; (e) redfin's list O9/O11. Stop rule in smoothness.md. (smoothness.md)
+2. **Speaker** (the user's ask; B16): amps, DSP, AFE run, silent; first prove samples reach the amp (SD0 pin sampler / AFE loopback; research/notes/speaker-next.md), check the Pixel 5 port's progress; then feed /dev/sunfish-audio to the ADSP. Time-boxed retries; hard item. Quiet hours apply. (audio.md)
+3. **Garbled images** (B44/B29): probably not a speed issue (geometry bug on the shadow path); next: offset % texel for shadowed RGBA8/BGRA8, one screen per run; measure shadow cost per frame while at (a).
+4. **Battery + camera CPU** (O14): -9% in 10 min; preview takes ~5 cores (not profiled); needs a trustworthy battery % (U3).
+5. **Camera polish** (B48): shutter ignored in the first session after a boot, switch ~7 s + ~10 s, front colour cast, focus on open ~25 s. GPU device lost (gpu.md): read "DEVLOST first" if it returns.
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
 proximity by hand (U17), battery discharge (U3), headphone plug test (U15), 
