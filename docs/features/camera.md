@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 Stage c done: real IMX363 frames arrive in CSID-lite over CSIPHY0 (2016x1512 RAW10, 3810240 bytes per frame, ECC/CRC 0); no frame in RAM yet (IFE-lite write master + SMMU next); front IMX355 answers. **Updated:** 2026-10-30.
+**State:** 🟡 Stage d: a raw IMX363 frame (2016x1512 RAW10) is captured into RAM and saved to a file (`CAPMODE="--bypass --sid 0x8c0" tools/sunfish-cam-rx.sh --capture`, no reset); half of it still missing (SID 0xcc0 writes trapped); no iOS camera yet. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,13 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 01:00 cam16 (kernel109, cam15r boot): FIRST FRAME CAPTURED AND SAVED, no reset (3ed415d)
+- `CAPMODE="--bypass --sid 0x8c0" sunfish-cam-rx.sh --capture`: 8 SMRs (SMR15 0x8c0 -> CB14 bypass; SMR16-22 0x900/0x460, 0x820/0x440, 0x880, 0xc80, 0x8a0, 0xca0, 0xcc0 -> CB15 trap). buf done ~200 ms; CB14 FSR 0x400 clean, sGFSR 0; IFE VIOLATION 0, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0; CSID 3810240/3810240.
+- **Trap bank during the capture: FSR 0x402 (TF), FAR 0x9cb00400, write, SID 0xcc0**: the IFE-lite WM also writes through SID 0xcc0 (= 0x8c0 | 0x400), apparently alternating bursts (first fault at +0x400). Frame region 1889395 of 3810240 nonzero (49.6% of sampled bytes): consistent with every 0xcc0 burst being dropped (guess). Next: one bypass SMR 0x8c0 mask 0x400 (covers both; no overlap with SMR5 0x800/0x440).
+- Guard: 5906 nonzero bytes at +0..+12095 past 3810240 (4 pages, 4.8 lines of 2520 B): the frame is ~5 lines taller than 1512 (embedded/extra lines, guess), contiguous, not scattered.
+- Cleanup: IFE-lite reset, SID parked on the trap bank 2 s: **late writes after stop: N**; restore OK; camnoc back to XO. "saved, fsync ok". **No reset: SSH OK 8 of 8 checks over 4 min.** So cam12/cam15's resets came with unmatched-stream faults (cam12: all SIDs; cam15: SID 0xcc0 was never matched).
+- Frame (numbers only, not viewed: the phone is in the user's bedroom at night): mean byte 15.5, max 255; 16-bin histogram [343219, 163856, 1772, 6318, 5973, 3008, 747, 2999, 1778, 798, 29, 758, 6103, 3047, 743, 3172] (dark scene); raw2png gray 0..240. Files: work/cam/frame-cam16.raw, -gray.png, -color.png (gitignored, for the user).
 
 ### 2026-10-31 00:45 cam15 (kernel109): FRAME LANDS in RAM (SID 0x8c0 bypass), then RESET ~10 s later
 - `CAPMODE="--bypass --sid 0x8c0" sunfish-cam-rx.sh --capture`: SMR15 0x800008c0 -> S2CR 0xf -> CB15 (SCTLR 0xe0); no read-back mismatch. Stream ~1040 ms, buf done ~200 ms, CSID 3810240/3810240, IFE VIOLATION 0, BUS_IRQ 0x2/0x1/0, COMP_ERROR 0, CB15 FSR 0x400 (no fault), sGFSR 0.
