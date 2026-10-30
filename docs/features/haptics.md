@@ -32,6 +32,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 09:00 Install script written (037da8f, 81d0fbb); NOT installed until SE9 has a lock
+- tools/sunfish-install-haptics.sh: launchd job org.iosonpixel.hapticd (wrapper hapticd-start.sh, log /var/local/hapticd.log), MG cache aside once, --undo/--check; /var/local/haptics.off keeps hapticd off (touch it, kill hapticd: launchd restarts it, it exits 0).
+- Hold: SE9 also carries the camera PMIC (slg51000) and the amps; with no lock a tap could interleave with a camera rail write. A cross-process flock in geni_i2c.c is being added first.
+
 ### 2026-10-30 08:45 hp3: iOS HAPTICS WORK (HAPTICS=1 CAMERA=1, kernel113 sweetse9=2 sweetcampmic=2; f84a058)
 - Setup: SunfishAudio.driver with the Actuator FIFO, hapticd + drvbuzz installed, MobileGestalt cache moved aside (backup com.apple.MobileGestalt.plist.pre-haptics), ADT with /product/haptics. hapticd: "reading /var/run/sunfish-haptic (48 kHz mono s16)", FIFO prw-rw-rw-.
 - 4 taps on a switch in Settings > Sounds & Haptics (fake taps `T`): hapticd "tap 1..4: 18 ms level 0x2e (peak 15750)"; each: "ID 0x03 (chip 0 rev 3) STATUS 0000", "chip up", later "chip in reset (2 s idle)"; 4/4 clean, no fault. mediaserverd: "the actuator's FIFO /var/run/sunfish-haptic open". Mic at 155 Hz: 4.5-6.2 at 3.5/6.5/9/12 s vs 0.5-1 elsewhere (the taps; short 18 ms pulses stay under the 8x TONE threshold).
