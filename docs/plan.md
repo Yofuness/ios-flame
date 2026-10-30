@@ -9,7 +9,7 @@ Only items Claude can move now. Items waiting on the user are in "Waiting on you
 2. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
-Compass calibration turn (U19), Camera.app (U12), proximity by hand (U17), power key wake (U18), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
+PHONE RESTART (U20, hung), Compass calibration turn (U19), Camera.app (U12), proximity by hand (U17), power key wake (U18), AirPods audio (U11), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
 Files check (U13), touch while plugged in (U14).
 Parked: smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
 Finished items: [completed.md](completed.md) (not auto-loaded).

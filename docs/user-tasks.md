@@ -15,5 +15,6 @@ reads the answers here or in chat. Moved out of docs/plan.md on 2026-10-30 (the 
 - U16 Haptics: toggle a switch in Settings (Sounds & Haptics): do you feel a tap? Is it too strong or weak? ~1 min (after Claude starts hapticd).
 - U11 AirPods music: with the AirPods connected, play Pirates.mp3 (Filza: /var/mobile/Documents, or Music after import). ~2 min.
 - U17 Proximity: Claude starts `proxon 3 60` (detection on); cover the top of the phone (earpiece area) with your hand: does the screen go off, and on again when you take it away? ~1 min.
+- U20 RESTART NOW (2026-10-30 15:20): the phone is hung (frozen screen, kernel lock; no remote reboot works). Hold the power button ~15-30 s until it restarts (it should land in fastboot). Claude boots kernel127 then. ~1 min.
 - U19 Compass calibration (new 2026-10-30; the phone's own Qualcomm calibration now listens, kernel126): open Compass, then slowly turn the phone through every direction (roll it over, stand it on each edge, a figure-8) for ~30 s. Then lay it flat: does the heading match a real compass / your phone's compass (within ~15 deg)? ~2 min.
 - U18 Power key: with the screen off (wait for auto-lock), press the power button once: does the screen wake right away? (kernel123 polls keys every 40 ms while dark.) ~30 s.
