@@ -32,6 +32,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:05 U16: the user feels the vibration (kernel127)
+- "Vibration works as well" (the user, playing with the phone).
+
 ### 2026-10-30 09:30 hp4: hapticd starts at boot (launchd job installed), taps work; SE9 lock in (0ed877c)
 - tools/sunfish-install-camera.sh (tools with the SE9 lock) + tools/sunfish-install-haptics.sh (job org.iosonpixel.hapticd) + reboot (kernel115 HAPTICS=1 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetblnew=0): hapticd pid 72 under launchd; 3 switch taps -> "tap: 18 ms level 0x2e (peak 15750)", "ID 0x03 STATUS 0000", "chip in reset (2 s idle)", no faults. A mediaserverd restart during taps: no SE9 errors (no new camera open happened in the window, so the lock wasn't exercised against camid).
 - Mic at 155 Hz heard nothing this time (18 ms taps at level 0x2e are short; hp3 saw small bumps): the feel check stays with the user (U16).

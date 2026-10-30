@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:05 U12 (part): Camera.app shows static (the user, kernel127)
+- Camera opens and shows a moving static/noise picture: frames reach the preview, the pixel data or format is wrong. Pending: front camera, a photo in Photos.
+
 ### 2026-10-30 12:30 B43: camera start 11 s -> 0.4 s, exposure starts from the real value (2e4f7cc)
 - research/notes/camera-start.md: 15 stage() sleeps of 300 ms (crash-bisect aid) = 4.5 s; AE started from cur_lines -1 -> 0 -> the 4-line floor (0.04 ms, "exposure 0.0 ms").
 - 2e4f7cc: CAMRX_FAST=1 (set by camd) skips the stage sleeps and zeroes the carveout only once per camd process; camd.log lines carry "+S.mmm s" since START; cur_lines starts at the table's 1592 lines; isp_ae makes no request while the exposure is unknown; START queues 1500 lines at 2x gain.

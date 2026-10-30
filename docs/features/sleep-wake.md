@@ -13,6 +13,8 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:05 show1: the user's power-key hold restarted the hung phone into fastboot; kernel127 booted (4440 mV, SSH 17 s); the user then unplugged USB to play (link gone at 47 s, by design). The hung boot's RAM log is in the rescue area until the next shim boot.
+
 ### 2026-10-30 20:45 hg1: the hang is kernel-wide: launchd stuck too, no software reboot works
 - backboardd (pid 60) "Us+" (TIME creeps 0:59.14 -> 0:59.25 in 10 s), launchd (pid 1) "Us"; SpringBoard "Ss". Kernel console keeps going (AKS, ARP, exec lines to 1213 s); SSH works.
 - tools/sunfish-test.sh / tools/flame-cmd.py reboot: no effect; flame-cmd `rtc` gets no reply, so the kernel command thread is stuck (the "reboot" handler calls sync() first, sweet_usb.c:1108, which blocks). `kill -9 1` refused (EPERM). So launchd, backboardd and sync wait on the same kernel lock (likely a filesystem/vnode lock; guess).

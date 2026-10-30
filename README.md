@@ -49,7 +49,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
 | [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
 | [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); both cameras stream and take raw photos from tools (rear 60 fps, front 30 fps); Camera app not tried yet |
-| [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); audio playback being tested |
+| [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); AirPods play music (2026-10-30) |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
 | [Sensors](docs/features/sensors.md) | ✅ | Compass works (heading + dial, 2026-10-30, kernel126); auto-rotate works (accelerometer -> rotation); proximity turns the screen off when near (kernel122); all 6 sensors answer on the audio DSP; auto-brightness parked |
 

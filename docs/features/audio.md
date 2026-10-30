@@ -34,6 +34,9 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 16:05 U11: AIRPODS PLAY MUSIC (the user, kernel127, phone unplugged)
+- The user connected AirPods and music played: the iOS sound path (SunfishAudio/VirtualAudio, mediaserverd) works over Bluetooth A2DP. First sound out of the port.
+
 ### 2026-10-30 07:20 jack10b: VirtualAudio accepts only "Null_Device" and "Actuator" (read-only RE); iOS side of the jack PARKED
 - research/notes/headphone-jack.md "S4 jack10": the device listener (handler va.s 0xaa124) keeps a UID only if it is in a static set built at 0x470460: mode 2 = accept-only, set {"Null_Device", "Actuator"} (mode 3 would mean exclude). The factory 0x21ebc8 (the only maker of Device_Codec_Aspen) is reached only from there, so no plug-in answer can get "Codec" created; it is the UID alone.
 - Options: (a) a patched copy of /Library/Audio/Plug-Ins/HAL/VirtualAudio.plugin (mov w9,#2 -> #3 at 0x47046c, re-signed like our driver): Speaker/Hawking/Codec would then become VirtualAudio devices and Actuator/Null_Device drop out, side effects unknown (mediaserverd crash risk; revert = restore the file + restart mediaserverd); (b) report the jack some other way (a HID headset event or our own route), later.
