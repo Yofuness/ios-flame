@@ -23,6 +23,8 @@
  *   adspboot boot --swr-probe [--swr-clk]  hj0: --afe's LPASS hw vote, then READ ONLY the TX/RX SoundWire masters,
  *                     the TX/VA macros and LPI gpio24 (codec reset); --swr-clk also votes the va/tx core + tx npl
  *                     codec clocks (0x30b-0x30d) around a second read; devote, exit. Never writes those blocks.
+ *                     hj1: --swr-only N (1 gpio24, 2 va, 3 tx-macro, 4 rx-swr, 5 tx-swr), --swr-nohw (group 1, no vote);
+ *                     every swr/vote line also goes to /var/local/swr-probe.log (fsync per line)
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
@@ -47,6 +49,8 @@
  * Never touches the modem: SMEM host 2 only, APCS bits 24/26, AOSS bit 0. Exit 0 = edge up.
  */
 #include <stdio.h>
+#include <stdarg.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -957,6 +961,8 @@ static uint32_t afe_op, afe_clk_op;	/* afe_op: the opcode whose basic response w
  * va-macro@62f20000 (:20776), LPI gpio24 = LPI_PA + 0x18000 (lpi_pinctrl@62b40000 :22897, gpio24 :22944).
  * --swr-clk: va_core 0x30b, tx_core 0x30c, tx_npl 0x30d, each 0x124f800 = 19.2 MHz (:23505, :23532, :23541). */
 static int swr_on, swr_clk, swr_i;
+static int swr_only, swr_nohw;	/* hj1: --swr-only N (0 all, 1 gpio24 .. 5 tx-swr), --swr-nohw (group 1, no vote) */
+static int swr_fd = -1;
 static unsigned swr_clk_ok;	/* bit i: swr_ids[i] voted, to un-vote */
 static const uint32_t swr_ids[3] = { 0x30b, 0x30c, 0x30d };
 
@@ -999,27 +1005,57 @@ static void afe_clock(uint32_t opcode, int enable)
 		     amp_invert_clk ? 4 /* sp8: INVERT_COUPLE_NO, ios-redfin */ : 1 /* COUPLE_NO */, enable);
 }
 
+/* hj1: stdout plus /var/local/swr-probe.log (write + fsync per line: survives a reset), ms timestamp */
+static void swr_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void swr_log(const char *fmt, ...)
+{
+	char b[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(b, sizeof(b), fmt, ap);
+	va_end(ap);
+	fputs(b, stdout);
+	fflush(stdout);
+	if (!swr_on)
+		return;
+	if (swr_fd < 0)
+		swr_fd = open("/var/local/swr-probe.log", O_WRONLY | O_APPEND | O_CREAT, 0644);
+	if (swr_fd < 0)
+		return;
+	char l[300];
+	int n = snprintf(l, sizeof(l), "[%llu ms] %s", (unsigned long long)now_ms(), b);
+	if (n > (int)sizeof(l) - 1)
+		n = sizeof(l) - 1;
+	if (write(swr_fd, l, (size_t)n) == n)
+		fsync(swr_fd);
+}
+
 /* hj0: one read with a stage line first (a bus hang or reset then shows which register) */
 static uint32_t swr_rd(const char *what, uint64_t pa)
 {
-	printf("swr: stage read %s %#llx\n", what, (unsigned long long)pa);
-	fflush(stdout);
+	swr_log("swr: stage read %s %#llx\n", what, (unsigned long long)pa);
 	uint32_t v = rd32(pa);
-	printf("swr: %s %#llx = %#010x\n", what, (unsigned long long)pa, v);
-	fflush(stdout);
+	swr_log("swr: %s %#llx = %#010x\n", what, (unsigned long long)pa, v);
 	return v;
 }
 
+/* hj1: groups safest first: 1 gpio24, 2 va-macro, 3 tx-macro, 4 rx-swr, 5 tx-swr; --swr-only N runs one */
 static void swr_read(const char *when)
 {
-	printf("swr: --- reads (%s) ---\n", when);
-	for (unsigned i = 0; i < 0x10; i++)
-		swr_rd(i ? "tx-swr" : "tx-swr version", 0x62ed0000ull + 4 * i);
-	swr_rd("rx-swr version", 0x62ef0000ull);
-	swr_rd("tx-macro (live.dts tx-macro@62ec0000)", 0x62ec0000ull);
-	swr_rd("va-macro (live.dts va-macro@62f20000)", 0x62f20000ull);
-	swr_rd("lpi gpio24 cfg", LPI_PA + 0x1000u * 24);
-	swr_rd("lpi gpio24 in/out", LPI_PA + 0x1000u * 24 + 4);
+	swr_log("swr: --- reads (%s, group %d) ---\n", when, swr_only);
+	if (!swr_only || swr_only == 1) {
+		swr_rd("lpi gpio24 cfg", LPI_PA + 0x1000u * 24);
+		swr_rd("lpi gpio24 in/out", LPI_PA + 0x1000u * 24 + 4);
+	}
+	if (!swr_only || swr_only == 2)
+		swr_rd("va-macro (live.dts va-macro@62f20000)", 0x62f20000ull);
+	if (!swr_only || swr_only == 3)
+		swr_rd("tx-macro (live.dts tx-macro@62ec0000)", 0x62ec0000ull);
+	if (!swr_only || swr_only == 4)
+		swr_rd("rx-swr version", 0x62ef0000ull);
+	if (!swr_only || swr_only == 5)
+		for (unsigned i = 0; i < 0x10; i++)
+			swr_rd(i ? "tx-swr" : "tx-swr version", 0x62ed0000ull + 4 * i);
 }
 
 static void pcm_start(void);
@@ -1073,6 +1109,8 @@ static void afe_run(void)
 	case AFE_VOTE: {	/* sp2: {u32 hw_block_id, char name[8]} as apr_tone hw_vote */
 		uint8_t b[12] = { 0, 0, 0, 0, 'a', 'd', 's', 'p', 'b', 't', 0, 0 };
 		memcpy(b, &vote_block, 4);
+		if (swr_on)
+			swr_log("swr: stage hw vote request (block %u)\n", vote_block);	/* hj1 */
 		afe_send(0, AFE_CMD_REMOTE_LPASS_CORE_HW_VOTE_REQUEST, b, sizeof(b));
 		break;
 	}
@@ -1084,6 +1122,8 @@ static void afe_run(void)
 			break;
 		}
 		uint32_t b[2] = { vote_block, (uint32_t)hw_handle };
+		if (swr_on)
+			swr_log("swr: stage hw devote request (handle %d)\n", hw_handle);	/* hj1 */
 		afe_send(0, AFE_CMD_REMOTE_LPASS_CORE_HW_DEVOTE_REQUEST, b, sizeof(b));
 		break;
 	}
@@ -1116,6 +1156,7 @@ static void afe_run(void)
 		break;
 	case AFE_CLK_OFF: afe_clock(afe_clk_op, 0); break;
 	case AFE_SWR_CLK:	/* hj0: COUPLE_NO, root 0 as Linux audio-ref-clk */
+		swr_log("swr: stage clock %#x on request\n", swr_ids[swr_i]);	/* hj1 */
 		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 1);
 		break;
 	case AFE_SWR_UNCLK:
@@ -1126,6 +1167,7 @@ static void afe_run(void)
 			afe_run();
 			break;
 		}
+		swr_log("swr: stage clock %#x off request\n", swr_ids[swr_i]);	/* hj1 */
 		afe_clock_id(AFE_SVC_CMD_SET_PARAM, swr_ids[swr_i], 0x124f800, 1, 0);
 		break;
 	default:
@@ -1145,10 +1187,11 @@ static void afe_next(int ok, uint32_t status)
 		printf("afe: LPASS core hw vote (block %u) %s, handle %d%s\n", vote_block, ok ? "ok" : "FAILED",
 		       hw_handle, ok ? "" : "; going on without it");	/* sp2b: no abort */
 		if (swr_on) {	/* hj0: no reads without the vote (unclocked bus) */
+			swr_log("swr: hw vote reply %s, handle %d (status %x)\n", ok ? "ok" : "FAILED", hw_handle, status);	/* hj1 */
 			if (ok)
 				swr_read("hw vote only");
 			else
-				printf("swr: no hw vote: reads skipped\n");
+				swr_log("swr: no hw vote: reads skipped\n");
 			swr_i = 0;
 			afe_step = ok && swr_clk ? AFE_SWR_CLK : AFE_DEVOTE;
 			afe_run();
@@ -1159,7 +1202,7 @@ static void afe_next(int ok, uint32_t status)
 		return;
 	}
 	if (s == AFE_SWR_CLK || s == AFE_SWR_UNCLK) {	/* hj0 */
-		printf("swr: clock %#x %s: %s\n", swr_ids[swr_i], s == AFE_SWR_CLK ? "on" : "off", ok ? "ok" : "FAILED");
+		swr_log("swr: clock %#x %s: %s\n", swr_ids[swr_i], s == AFE_SWR_CLK ? "on" : "off", ok ? "ok" : "FAILED");
 		if (s == AFE_SWR_CLK && ok)
 			swr_clk_ok |= 1u << swr_i;
 		if (++swr_i < 3) {
@@ -1176,7 +1219,10 @@ static void afe_next(int ok, uint32_t status)
 		return;
 	}
 	if (s == AFE_DEVOTE) {
-		printf("afe: LPASS core hw devote (handle %d) %s\n", hw_handle, ok ? "ok" : "FAILED");
+		if (swr_on)	/* hj1 */
+			swr_log("afe: LPASS core hw devote (handle %d) %s\n", hw_handle, ok ? "ok" : "FAILED");
+		else
+			printf("afe: LPASS core hw devote (handle %d) %s\n", hw_handle, ok ? "ok" : "FAILED");
 		hw_handle = -1;
 	}
 	if ((s == AFE_CLK_F3 || s == AFE_CLK_FC) && !ok)
@@ -1940,6 +1986,10 @@ static void apr_poll(void)
 		if (afe_on && afe_step == AFE_IDLE && !apr_ready && !getenv("ADSP_APR_NO_GATE")) {
 			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
 			afe_step = AFE_DONE;
+		} else if (afe_on && afe_step == AFE_IDLE && swr_on && swr_nohw) {	/* hj1: group 1 only, no vote */
+			swr_log("swr: --swr-nohw: no hw vote\n");
+			swr_read("no hw vote");
+			afe_step = AFE_DONE;
 		} else if (afe_on && afe_step == AFE_IDLE) {
 			afe_step = no_lpi && !swr_on ? AFE_CLK_F3 : AFE_VOTE;	/* hj0: the probe always votes */	/* sp2 */
 			afe_run();
@@ -2267,7 +2317,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 		rpc_poll();
 		apr_poll();
 		if (swr_on && afe_step == AFE_DONE) {	/* hj0: probe over, exit */
-			printf("swr: probe done\n");
+			swr_log("swr: probe done\n");
 			return 0;
 		}
 		amp_poll();	/* sp1 */
@@ -2395,6 +2445,10 @@ int main(int argc, char **argv)
 			apr_on = afe_on = swr_on = 1;
 		else if (!strcmp(argv[i], "--swr-clk"))	/* hj0: + codec clock votes 0x30b-0x30d around a second read */
 			swr_clk = 1;
+		else if (!strcmp(argv[i], "--swr-only") && i + 1 < argc)	/* hj1: one read group per run (1-5) */
+			swr_only = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--swr-nohw"))	/* hj1: skip the hw vote; group 1 only */
+			swr_nohw = 1;
 		else if (!strcmp(argv[i], "--no-lpi"))	/* sp2: no LPASS hw vote, no LPI pin mux */
 			no_lpi = 1;
 		else if (!strcmp(argv[i], "--vote-block") && i + 1 < argc)	/* sp2b: hw_block_id of the vote */
@@ -2510,6 +2564,10 @@ int main(int argc, char **argv)
 		pas_shutdown();
 		return 0;
 	}
+	if (swr_on && (swr_only < 0 || swr_only > 5 || (swr_nohw && (swr_only != 1 || swr_clk)))) {	/* hj1 */
+		fprintf(stderr, "adspboot: --swr-only takes 0-5; --swr-nohw needs --swr-only 1 and no --swr-clk\n");
+		return 2;
+	}
 	if (rpc_on && !unsafe && strcmp(cmd, "smmu")) {
 		/* rpc2 (buffer at 0xe0f80000, identity) and rpc3 (pm_alloc buffer at 32-bit IOVA 0x80000000) both reset
 		 * the SoC right after the attach: the DSP reaching any HLOS buffer is fatal until the memory is shared
@@ -2528,7 +2586,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk] [--swr-only N] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex]]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
