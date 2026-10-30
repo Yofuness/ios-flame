@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 03:05 Stage e plan (read-only, research/notes/camera-stage-e.md)
+- redfin's path: kernel /dev/redwood-camera (0923+: 3 slots, 1 ms SOF/WM0_DONE poll, IMAGE_ADDR swap per SOF, exposure in group hold) -> camera_device.c (FigCaptureDevice via a BWFigCaptureDeviceVendor swizzle, inject_media.c) + camera_isp.c (CPU ISP: AE/AWB/shading/CCM/gamma) linked into their audio HAL plug-in inside mediaserverd. Our SunfishAudio.driver is that plug-in's port, so the camera files can go in the same way.
+- Stages: e1 continuous streaming (2 carveout slots: 3 x 3.82 MB doesn't fit 0xB00000), e2 exposure/gain (0x0202/0x0204 in group hold), e3 phone ISP (camera_isp.c + camera_test), f Camera.app (camera_device.c in SunfishAudio.driver; high risk: mediaserverd crash takes audio down). A kernel driver is probably not needed (guess; mediaserverd sandbox may force it).
+- e1 + e2 being written (camrx stream, camid --hold/--exposure/--gain).
+
 ### 2026-10-31 02:55 cam21 (kernel109, cam20r boot): STAGE d DONE, one capture = full frame, no reset
 - `CAPMODE="--bypass --sid 0x8c0 --sid2 0xcc0"` (b5e38a9): SMR15 0x8c0 + SMR16 0xcc0 (both mask 0) -> CB14 bypass; trap CB15: SMR17-22. buf done ~220 ms; 0 faults on either bank, GFSR 0; **frame 3777917 of 3810240 nonzero, 0 of 3720 1 KB blocks zero**; guard 11997 nonzero (+0..+12095: the frame is ~4.8 lines of 2520 B longer than 2016x1512, both halves now); late writes N; restored; "saved, fsync ok". **No reset: 8 of 8 SSH checks over 4 min.** Screen fine (webcam).
 - **Cause of cam17/cam18B/cam20's resets: the single masked SMR 0x8c0/0x400**, not SID 0xcc0 itself (guess why: the hypervisor's SMMU emulation or the SMR mask width; not investigated). Rule: exact SMRs only. sunfish-cam-rx.sh's default CAPMODE is now this config.
