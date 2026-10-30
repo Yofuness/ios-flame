@@ -35,6 +35,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:00 af3/af4: THE LENS FOCUSES under software control (kernel128)
+- af3 sweep looked flat: dark frames, and most FOCUS commands were lost (a FOCUS sent while the previous session was stopping is cleared at its end; only 3 reached camid). Rerun with sunfish-sharpness2.py (8x8 block mean of high bytes) and -e 6000 448.
+- af4, board ~10 cm: centre gradient energy per code: 400: 15.2, 440: 18.4, 481: 22.0, 562: 32.1, 643: 52.5, 725: 71.0 (the sessions for 525, 608, 689 didn't move: those FOCUS were lost, energy = 400's). Higher code = nearer; the peak is at or past the 725 limit for a 10 cm subject. work/cam/af4-best.png: "CS 100 16V" on the capacitors, crystal marking, pins, "V1.024" readable.
+- Still open: Camera.app's own AF (af5); 725 may not be the true macro end (the per-unit calibration in the OIS flash isn't read).
+
 ### 2026-10-30 21:30 af2: the lens moves (read-back OK); found + fixed: every camera session leaked 2 SMMU banks
 - `camid --lens-move 560 / 725 / 400` (kernel128, port 6aeb4ee): "0xB3 = 00 after 30.1 / 26.0 / 49.6 ms", read back 0x84 after init 0, at target and after 2 s = the code written, "parked at 0", camvaf 0. No lens errors.
 - Then camd FAULT: "smmu: no dedicated mapping (conflict 0, free SMRs 8 of 4, banks 1 of 2)". Cause: cb_restore's write of CBAR back to 0 doesn't stick (reads 0x0001f000), so the free-bank scan skipped every bank we had used: sessions marched CB54+55, 56+57, 58+59, then none left. So the camera stopped after a number of opens per boot (and may explain earlier FAULTs). Fix: a bank with CBAR == CAM_CBAR, SCTLR.M off and no SMR on it is reusable. Verified: 4 sessions in a row rc 0, all on CB4 + CB14.
