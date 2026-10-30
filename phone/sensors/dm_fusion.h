@@ -68,6 +68,9 @@ struct dm_fusion {
 	float mag[3];		/* dm2: last raw mag, uT, device frame */
 	float mag_min[3], mag_max[3];	/* hard-iron box (valid when have_cal) */
 	int have_mag, have_cal, mag_seeded;
+	/* dm5: SEE's own mag_cal/gyro_cal biases (survive dm_init); the mag one replaces the box while status >= 1 */
+	float see_mag_bias[3], see_gyro_bias[3];
+	int see_mag_st, see_gyro_st;	/* -1 none yet (set by dm_init), else SEE status 0-3 */
 };
 
 void dm_init(struct dm_fusion *f, float beta);
@@ -80,6 +83,10 @@ void dm_report3(const struct dm_fusion *f, uint64_t ts, float yaw_deg, struct dm
 int dm_mag(struct dm_fusion *f, const float m[3]);
 int dm_mag_accuracy(const struct dm_fusion *f);	/* -1 uncalibrated, 0..2 */
 void dm_mag_bias(const struct dm_fusion *f, float b[3], float span[3]);
+/* dm5: SEE calibration events (bias uT or rad/s, status 0 unreliable .. 3 high) */
+void dm_mag_cal_bias(struct dm_fusion *f, const float b[3], int status);
+void dm_gyro_cal_bias(struct dm_fusion *f, const float b[3], int status);
+int dm_mag_cal_dsp(const struct dm_fusion *f);	/* 1: the SEE bias is in use, 0: the box */
 int dm_magcal_load(struct dm_fusion *f, const char *path);
 int dm_magcal_save(const struct dm_fusion *f, const char *path);
 float dm_heading_deg(const float q[4]);	/* device top in the reference frame, 0..360 clockwise from north */

@@ -394,6 +394,39 @@ static void test_routing(void)
 	sns_link_set(NULL);
 }
 
+/*
+ * sunfish B46 dm5b: the dm5 failure on the phone: the first try's six motion lookups found nothing, mag_cal and
+ * gyro_cal did, so the try "succeeded" with only them (status line "magcal 0(off) gyrocal 0(off)") and was never
+ * retried. Now: no motion service -> 0 sensors (retry); with them, cal last and only with see_cal.
+ */
+static int setup_ok_motion;	/* 0: motion lookups fail (DSP still loading), 1: they answer */
+static int fake_setup(void *ctx, struct sensor *s, const struct sensor_kind *k, int index)
+{
+	(void)ctx;
+	if (k->motion_index >= 0 && !setup_ok_motion)
+		return -1;
+	memset(s, 0, sizeof(*s));
+	s->k = k, s->fd = index;
+	return 0;
+}
+
+static void test_motion_setup(void)
+{
+	struct sensor ss[8];
+	setup_ok_motion = 0;
+	CHECK(sensor_setup_motion(ss, 8, 1, fake_setup, NULL) == 0);	/* the dm5 bug: was 2 (cal only) */
+	setup_ok_motion = 1;
+	int n = sensor_setup_motion(ss, 8, 1, fake_setup, NULL);
+	CHECK(n == sensor_nkinds && ss[0].k->motion_type == MOTION_TYPE_ACCEL && ss[0].fd == 0 &&
+	    ss[1].k->motion_type == MOTION_TYPE_GYRO && ss[n - 2].k->motion_index < 0 && ss[n - 1].k->motion_index < 0);
+	CHECK(sensor_setup_motion(ss, 8, 0, fake_setup, NULL) == sensor_nkinds - 2);	/* SNS_SEE_CAL=0 */
+	CHECK(!sensor_motion_streaming(ss, n));
+	ss[0].active = 1;
+	CHECK(!sensor_motion_streaming(ss, n));	/* started, nothing came yet */
+	ss[0].count = 5;
+	CHECK(sensor_motion_streaming(ss, n));
+}
+
 int main(void)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -402,6 +435,7 @@ int main(void)
 	test_decoders();
 	test_exchange();
 	test_routing();
+	test_motion_setup();
 	printf("%s (%d failures)\n", failures ? "FAILED" : "all sensd host tests passed", failures);
 	return failures ? 1 : 0;
 }

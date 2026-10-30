@@ -8,5 +8,5 @@ ${CC:-cc} -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefine
 	test_sensd.c pb.c sns.c sensor.c sns_link.c ../wifi/qmi.c -lm
 ./out/test_sensd
 # B46 dm2: dm_fusion type-2 heading (flat phone, top north = 0, top east = 90, clockwise)
-${CC:-cc} -O1 -g -Wall -Wextra -fsanitize=address,undefined -o out/test_dm test_dm.c dm_fusion.c -lm
+${CC:-cc} -O1 -g -Wall -Wextra -fsanitize=address,undefined -o out/test_dm test_dm.c dm_fusion.c sns.c pb.c ../wifi/qmi.c -lm
 ./out/test_dm

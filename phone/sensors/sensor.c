@@ -16,6 +16,9 @@ const struct sensor_kind sensor_kinds[] = {
 	{ "proximity",     "prox",     MOTION_TYPE_PROX,     MOTION_PROX,     1, 0 },
 	{ "mag",           "compass",  MOTION_TYPE_COMPASS,  MOTION_COMPASS,  0, 25 },
 	{ "pressure",      "pressure", MOTION_TYPE_PRESSURE, MOTION_PRESSURE, 0, 5 },
+	/* sunfish B46 dm5: SEE's background calibrations, for the devmotion fusion only (no motion service: -1) */
+	{ "mag_cal",       "magcal",   MOTION_TYPE_MAGCAL,   -1,              1, 0 },
+	{ "gyro_cal",      "gyrocal",  MOTION_TYPE_GYROCAL,  -1,              1, 0 },
 };
 const int sensor_nkinds = sizeof(sensor_kinds) / sizeof(sensor_kinds[0]);
 
@@ -123,7 +126,21 @@ static void sample(struct sensor_env *e, struct sensor *s, uint32_t msg_id, uint
 	float d[16], v[4] = { 0, 0, 0, 0 };
 	int status = 0, nd, nv = 0;
 
-	if (s->k->motion_type == MOTION_TYPE_PROX) {
+	if (s->k->motion_type == MOTION_TYPE_MAGCAL || s->k->motion_type == MOTION_TYPE_GYROCAL) {
+		/* sunfish B46 dm5: sns_cal_event; the first 3 raw, as its field numbers are from memory */
+		char tag[32];
+		if (s->raw_logged < 3) {
+			s->raw_logged++;
+			snprintf(tag, sizeof(tag), "sensd: %s raw", s->k->alias);
+			sns_print_fields(tag, msg_id, p, n);
+		}
+		if (sns_parse_cal_event(p, n, v, &status) < 3) {
+			printf("sensd: %s: msg %u not understood (%zu bytes)\n", s->k->alias, msg_id, n);
+			return;
+		}
+		v[3] = (float)status;
+		nv = 4;
+	} else if (s->k->motion_type == MOTION_TYPE_PROX) {
 		int near;
 		uint32_t raw;
 		if (sns_parse_prox_event(p, n, &near, &raw, &status) == 0) {
@@ -223,7 +240,8 @@ static void ev_cb(void *ctx, const struct sns_suid *suid, uint32_t msg_id, uint6
 			hexdump("sensd: physical config", p, n);
 		return;
 	}
-	if (msg_id >= 1024 || (msg_id == SNS_MSG_PROX_EVENT && s->k->motion_type == MOTION_TYPE_PROX))
+	if (msg_id >= 1024 || (msg_id == SNS_MSG_PROX_EVENT && s->k->motion_type == MOTION_TYPE_PROX) ||
+	    (msg_id == SNS_MSG_CAL_EVENT && s->k->motion_index < 0))	/* sunfish dm5b: cal events are 1022 */
 		sample(c->e, s, msg_id, ts, p, n);
 	else
 		printf("sensd: %s: unhandled event %u (%zu bytes)\n", s->k->alias, msg_id, n);
@@ -401,4 +419,26 @@ void sensor_print_attrs(const struct sensor *s)
 	if (a->resolution != 0)
 		printf(" resolution %g", a->resolution);
 	printf(" (%d attributes)\n", a->nattrs);
+}
+
+/* sunfish B46 dm5b: see sensor.h */
+int sensor_setup_motion(struct sensor *ss, int max, int see_cal, sensor_setup_fn setup, void *ctx)
+{
+	int n = 0;
+	for (int i = 0; i < sensor_nkinds && n < max; i++)
+		if (sensor_kinds[i].motion_index >= 0 && setup(ctx, &ss[n], &sensor_kinds[i], n) == 0)
+			n++;
+	for (int i = 0; i < sensor_nkinds && n < max && n && see_cal; i++)
+		if (sensor_kinds[i].motion_index < 0 && setup(ctx, &ss[n], &sensor_kinds[i], n) == 0)
+			n++;	/* a cal sensor without a SUID is just left out (box fallback) */
+	return n;
+}
+
+int sensor_motion_streaming(const struct sensor *ss, int n)
+{
+	for (int i = 0; i < n; i++)
+		if (ss[i].active && ss[i].count && (ss[i].k->motion_type == MOTION_TYPE_ACCEL ||
+		    ss[i].k->motion_type == MOTION_TYPE_GYRO))
+			return 1;
+	return 0;
 }
