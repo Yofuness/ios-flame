@@ -25,7 +25,7 @@ cd port && tools/sunfish-boot.sh NAME work/kernel37/kernel.development.sweet swe
 - Screen capture: `flame-shot` (framebuffer read) is broken on CAMERA boots; `tools/sunfish-shot.sh [NAME]` (phone/tools/shot, render-server picture -> work/shots/) replaces it once verified on the phone.
 
 ## SE9 tools (adspboot amp, camid, i2cprobe, sunfish-cam-rx.sh)
-SE9 is shared with haptics: touch /var/local/haptics.off and stop hapticd (`launchctl stop org.iosonpixel.hapticd`) before SE9 tools.
+SE9 is shared with haptics: touch /var/local/haptics.off and kill hapticd (launchd restarts it, it sees the flag and stays off) before SE9 tools; the phone has no launchctl.
 
 ## Building
 - Kernel: edit `work/src/xnu`, commit there, save the diff as `xnu/patches/NNNN-sunfish-*.patch`. Build it with tools/vm-build-xnu.sh (below); CI fallback: `gh workflow run xnu.yml --ref main`, `gh run watch ID`, `gh run download ID -n xnu-kernel -D work/kernelNN`.

@@ -8,7 +8,7 @@
 #    that copy exists) so iOS rebuilds it with the ADT /product/haptics node at the next boot (HAPTICS=1)
 # Needs SunfishAudio.driver with the Actuator FIFO (tools/sunfish-install-audio.sh) first.
 # Off: touch /var/local/haptics.off (hapticd exits 0 at start, launchd leaves it stopped); do that and
-# `launchctl stop org.iosonpixel.hapticd` before other SE9 tools (adspboot amp, camid, i2cprobe, sunfish-cam-rx.sh).
+# kill hapticd (launchd restarts it, it sees the flag and exits 0) before other SE9 tools (adspboot amp, camid, i2cprobe, sunfish-cam-rx.sh).
 #   tools/sunfish-install-haptics.sh [--undo | --check]
 #   --undo: job removed, MobileGestalt cache restored from .pre-haptics if present (tools left); boot without HAPTICS=1
 #   --check: prints the state of all of the above, no writes
@@ -55,7 +55,7 @@ if [ "$MODE" = --check ]; then
 	S "for t in $TOOLS hapticd-start.sh; do [ -x /var/local/bin/\$t ] && echo \"tool \$t: ok\" || echo \"tool \$t: MISSING\"; done; \
 for f in $DRV /var/run/sunfish-haptic /var/local/haptics.off /var/local/hapticd.log $LP.pre-haptics $MG $MG.pre-haptics; do \
 [ -e \$f ] && echo \"\$f: present\" || echo \"\$f: absent\"; done; \
-pgrep -l hapticd || echo 'hapticd: not running'; tail -n 3 /var/local/hapticd.log 2>/dev/null || true"
+/bin/ps ax | grep '[h]apticd' || echo 'hapticd: not running'; tail -n 3 /var/local/hapticd.log 2>/dev/null || true"
 	exit 0
 fi
 
