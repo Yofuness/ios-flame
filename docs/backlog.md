@@ -5,6 +5,9 @@ next easy item), and when adding something newly broken. Priority items live in 
 history in the feature Logs.
 
 ## Broken (cheapest first; [phone] = needs the phone)
+- B39 Haptics (new from the 2026-10-30 survey, hakios-xnu 9ae5bde/06817c6, MIT): iOS drives haptics as waveforms on the "Actuator" audio device only with an ADT /product/haptics node (closed-loop 1, supports-3rd-party-haptics 1); without it FigVibratorInitialize -16490. Our motor = TI DRV2624 on I2C (research/notes/hackios-survey.md:133). ~1-1.5 d. (research/notes/upstream-2026-10-30-ports.md)
+- B40 Before U12 (Camera.app), check iOSPlus10's camera fixes: c26ce1c StartRecorderServer (we set it), 51f6f0b /arm-io/isp + /product/camera (CAMERA=1 has them), 3b0eca8 tccd camera sandbox extensions (-11852; compare xnu 0219), 86a5df1 IOSurface plane bytesPerRow at +0x10 (colour flashes); hakios-sm7150 0021 pick the camera before the first read (front/back switch).
+- B41 Screenshot tool (D7): port iOSPlus10 13a23e5 userland/screenshot/negroni-shot.m (MIT, 73 lines: render the display into an IOSurface, write a PNG), 1-2 h.
 - B38 Boot cmdline limit: CAMERA=1 plus 3 extra boot args = 606 bytes > 592; sunfish-boot.sh refuses (sp16 dropped sweetrtcoff by hand). Shorten the defaults or raise the limit (D6 in plan.md). 2026-10-30: flamereboot=0 (kernel default) dropped and the double space gone (-15 B: 575 with sweetse9=2 sweetcampmic=2), sunfish-boot.sh now fails fast with the length. Still 1 B short for a third arg like sweetampreset=1 (592); real fix = a kernel-side second arg string (e.g. from the ADT /chosen), later.
 - B37 Files has no "On My iPhone": cause = no plug-in data container (pkd "no sandbox data container"); after a boot + `lsreg -r` it has one and pkd/fileproviderd accept it (files7); user check U13.
 - Camera black: iOS lists both cameras now (cam32); Camera.app test with the user = U12 (camera.md).
@@ -36,6 +39,8 @@ history in the feature Logs.
 - B4 Silent resets in long app soaks (PON reason is sticky, no lead).
 
 ## Optimize (last)
+- O11 UniXNU cd1b975: Turnip fence waits up to 100 ms instead of 1 ms slices (our turnip-darwin-kmd.patch line 453; check our kernel wait sleeps on the fence IRQ first; 0.5 h); redfin's ports 0131-0135 + 0137 of AdrenoMetal 0010-0016 (3-5 h, knobs default off). metal2vulkan: stay on 720ef1ce; its shadow dirty-page set (fee37100 etc.) only if traces show B29 shadow cost (research/notes/upstream-2026-10-30-gpu.md).
+- O12 iOSPlus10 e23063c: slow USB/touch/key/BT polls while the display sleeps (their ~1270 timer wakeups/s with screen off).
 - O9 ios-redfin GPU line (survey 2026-10-30, research/notes/redfin-survey-2026-10-30.md), ranked: DEADFILL (plan item 0), bridge 0109+0110 COLOR_WRITES=fetch (1-2 h), 0111 scratch trim (1-2 h), TU_DEBUG=sysmem + Turnip 0108 retest (0.5 h), Turnip 0111 UBWC (1 h, A618 UBWC differs), bridge 0103-0108 rebase (4-8 h), 0130-0137 UniXNU ports (2-4 h), xnu 1041 CA threads on big cores (2-3 h), 1040 GPU IRQ fence waits (4-6 h, no fps gain), NILENC/PREWARM (2-3 h), rotfb4 landscape (2 h). Skip (no gain for them): ENCTHREAD 3, FP16, CONTRACT, COLOR_WRITES=plain, xnu 1035/1036/1037/1039/1042, triple buffering, gmem autotune.
 - O10 ios-redfin xnu 1034/1045 USB Ethernet fast path + replug recovery (not GPU; could help our USB link).
 - O8 [DONE 2026-10-30] Camera ISP speed: whole-frame renders in row bands, camisp 84.8 -> 10.6 ms binned, 372 -> 47 ms full (identical output; the live preview was already parallel).

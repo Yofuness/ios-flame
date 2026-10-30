@@ -1,14 +1,14 @@
 # Upstream projects to watch (tools/sunfish-upstream-check.sh; CLAUDE.md "Upstream check").
 # NAME  DIR (clone, outside git)  URL  BRANCH (- = the remote's default)  SURVEYED (last commit surveyed; - = never)
 ios-redfin     research/re/redfin/redfin-int   https://github.com/DenialOfGravity/ios-redfin       redfin-int  05d8099
-iOSPlus10      research/upstream/iOSPlus10     https://github.com/akshaynexus/iOSPlus10            -           -
-ios-sweet      ../upstream/ios-sweet           https://github.com/dipa-studio/ios-sweet            -           067c9b3
+iOSPlus10      research/upstream/iOSPlus10     https://github.com/akshaynexus/iOSPlus10            -           146e889
+ios-sweet      ../upstream/ios-sweet           https://github.com/dipa-studio/ios-sweet            -           45263be
 ios-flame      ../upstream/ios-flame           https://github.com/NWylynko/ios-flame               -           745c434
-UniXNU         research/re/unixnu              https://github.com/UniXNU/UniXNU                    -           e95b37d
-metal2vulkan   research/re/m2v                 https://github.com/steelbrain/metal2vulkan          -           720ef1ce
-hakios-sm7150  research/upstream/hakios-sm7150 https://github.com/xorbidden/hakios-sm7150          -           -
-hakios-sm8150  research/upstream/hakios-sm8150 https://github.com/nomorecoolnicknames/hakios-sm8150 -          -
-hakios-metal   research/upstream/hakios-metal  https://github.com/oosexgang/hakios-metal           -           -
-hakios-xnu     research/upstream/hakios-xnu    https://github.com/oosexgang/hakios-xnu-kernel      -           -
-ios-fajita     research/upstream/ios-fajita    https://github.com/edi194/ios-fajita                -           -
-ios-sweet-build research/upstream/ios-sweet-build https://github.com/frokfrdk/ios-sweet-build      -           -
+UniXNU         research/re/unixnu              https://github.com/UniXNU/UniXNU                    -           f0721e9
+metal2vulkan   research/re/m2v                 https://github.com/steelbrain/metal2vulkan          -           219f0136
+hakios-sm7150  research/upstream/hakios-sm7150 https://github.com/xorbidden/hakios-sm7150          -           049b2df
+hakios-sm8150  research/upstream/hakios-sm8150 https://github.com/nomorecoolnicknames/hakios-sm8150 -          3e7be13
+hakios-metal   research/upstream/hakios-metal  https://github.com/oosexgang/hakios-metal           -           54a46fa
+hakios-xnu     research/upstream/hakios-xnu    https://github.com/oosexgang/hakios-xnu-kernel      -           8851317
+ios-fajita     research/upstream/ios-fajita    https://github.com/edi194/ios-fajita                -           7f373a5
+ios-sweet-build research/upstream/ios-sweet-build https://github.com/frokfrdk/ios-sweet-build      -           81a354b

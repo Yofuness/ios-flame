@@ -20,7 +20,7 @@ Source of most items: ios-redfin (MIT, Pixel 5, research/notes/redfin-survey.md)
    Back + Front (kernel112 CAMERA=1 = current boot), preview textures + colour tuning installed. Next: Camera.app (U12). (camera.md)
 7. **Files "On My iPhone"** (B37): LocalStorage linked to its data container (lsreg -r), pkd/fileproviderd accept it; check U13. (apps.md)
 8. **Headphone jack detect** (B30, the user's ask): codec answers over SoundWire (jack5); MBHC setup clean (jack6); next S3 = real plug test (U15). iOS side PARKED: VirtualAudio only creates "Null_Device"/"Actuator" (jack10b; patch option in audio.md). (audio.md)
-Later from the survey: haptics (PM6150 vibrator + their SweetHaptics approach). CPU governor: not needed for speed (clocks already max, cpu.md).
+Later from the survey: haptics (B39: Actuator audio device + ADT /product/haptics + DRV2624 on I2C; hakios-xnu, MIT). CPU governor: not needed for speed (clocks already max, cpu.md).
 
 Done 2026-10-30 (night): BOTH CAMERAS STREAM + iOS LISTS THEM (cam1-cam33), Bluetooth boot bring-up fixed (bt12), oslog survives restarts (B31), B36 = touch silent while plugged in (kernel112 status line). Done 2026-10-30: AUTO-ROTATE (accelerometer -> R; sensors via the ADSP), BLUETOOTH IN iOS (Settings on, devices listed; kernel105 + btbridge, iOSPlus10/redfin code), Bluetooth LE scan from btup (bt3, 26 devices), Bluetooth chip answers (bt1), H/K home+lock commands, B34 closed, reproducibility audit (docs/setup.md, docs/device-changes.md, tools/sunfish-setup-phone.sh), zero-copy flip mode works (kernel103 manual, no fps gain; parked, O2/O7). Done 2026-10-29: rotation incl. landscape touch (`R 3`/`R 1`; auto-rotate waits for sensors B12), Notes keyboard typing, fake taps/swipes for tests (`T`/`W`, methods.md), Location Services on (`L 1`), rotation follows app switches (rot12), rotation via the front scene's settings (Calculator landscape), r/hackios survey (research/notes/hackios-survey.md: SM7150 audio/BT/camera references), kernel95 = 0 crashes per boot (AegirPoster, App Store fixed), Photos opens (assetsd re-enabled), Music opens (kernel95, xnu 0219 sandbox extensions), Notes and Wallet open fine (survey black was session state), Maps opens (B24: listed + 3 bridge selector commits), B1 closed (mtl2.log truncates at 8 MB by design; 0.8 MB now), B19 lskdd/fairplayd.H2/wifip2pd dropped (xpcproxy 633 -> 314 per 10 min), app survey (11 of 18 apps fine; B24-B27 in backlog), D2 SSH earlier (dropbear Interactive priority: boot to SSH 16-18 s, was 24-41), VMware bridge pinned (boot to SSH 24-29 s, 0 lost sessions), SMMU streams for the DSP (U7),
 Wi-Fi auto-join accepted (U2), FastRPC listener written. Done 2026-10-28: camera IDs, brightness slider, flashlight
@@ -45,7 +45,7 @@ button, SE9 I2C + amps, boot-arg defaults.
 - U5 [DONE 2026-10-30] speaker beep: silent in bypass and boost (audio.md).
 
 ## Dev speed (on top of the priority list when found; ~1 h max each)
-- D7 tools/flame-shot gives garbage frames on kernel112/CAMERA=1 boots (u13); the webcam works meanwhile.
+- D7 tools/flame-shot gives garbage frames on kernel112/CAMERA=1 boots (u13); the webcam works meanwhile. Fix: port iOSPlus10's negroni-shot (B41).
 - D6 [PARTLY 2026-10-30] boot cmdline over 591 bytes (B38): -15 B, fast failure; a third extra arg still needs work/rtc-offset moved aside; kernel-side fix later.
 - D5 [DONE 2026-10-29] fake taps/swipes (`T`/`W` in /var/local/sweet-orient): tests no longer need a finger.
 - D2 [DONE 2026-10-29] SSH earlier at boot: dropbear Interactive, SSH up 16-18 s.
