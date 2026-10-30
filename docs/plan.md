@@ -1,17 +1,20 @@
-# Plan (2026-10-29)
+# Plan (2026-10-30)
 
 Rules: CLAUDE.md ("How to work"). Old plan: `docs/plans/2026-10-28-priorities-broken-list.md`. One line per item;
 details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. ▶ **Camera** (B17): Camera.app rear preview + saved photos work (cam35, cam36); both cameras, auto-exposure, autofocus and sharp photos work (cam37, cam40, af5-af7); Live Photo off by default (it filled mediaserverd); next: switch time, front colour, preview CPU. (camera.md)
-2. **iOS sound path**: later, feed /dev/sunfish-audio to the ADSP (needs the speaker). (audio.md)
+1. ▶ **Battery + camera CPU** (O14): -9% in 10 min of use; the preview takes ~5 cores (software ISP, not profiled). Profile it, then measure per subsystem; needs a trustworthy battery % (U3). (battery.md, camera.md)
+2. **Camera polish** (B48 + camera.md): first session after a boot can ignore the shutter ("Timed out after 1.0s waiting for the staging node"), switch ~7 s + ~10 s to the picture, front colour cast, focus on open ~25 s.
+3. **GPU device lost** (gpu.md): backboardd lost its Vulkan device once after Camera launches; the bridge now logs "DEVLOST first ..." and restarts backboardd: read the cause if it comes back. Also the kernel-wide UI hang (sleep-wake.md 20:30).
+4. **Garbled images** (B44/B29): parked after 4 rounds; next: offset % texel for shadowed RGBA8/BGRA8, one screen per run.
+5. **iOS sound path + speaker** (B16): later, feed /dev/sunfish-audio to the ADSP. (audio.md)
 
 ## Waiting on you (details in user-tasks.md; Claude moves on meanwhile)
-Compass comparison (U21), Camera.app (U12), proximity by hand (U17), battery discharge (U3), headphone plug test (U15), haptics feel (U16),
+proximity by hand (U17), battery discharge (U3), headphone plug test (U15), 
 Files check (U13), touch while plugged in (U14).
-Parked: Compass accuracy (rough compass; dm12 installed, recorder on, re-check U21 when convenient), smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
+Parked for later (the user, 2026-10-30): Compass accuracy (20-30 deg off, jumps; dm12, recorder on), camera far focus (lens range; backlog Later), smoothness (O7: ~23 swaps/s, serial CPU+GPU frame; redfin's fixes gave ~+0.5), speaker (B16), auto-brightness (B42), headphone jack iOS side (audio.md jack10b).
 Finished items: [completed.md](completed.md) (not auto-loaded).
 
 ## Questions for you (Claude took the recommended path meanwhile)
