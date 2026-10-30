@@ -35,6 +35,9 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:30 Autofocus plan (static decode, research/notes/camera-af.md; nothing run yet)
+- AF chip LC898219XI at 7-bit 0x72 on CCI0 m0; position = 12-bit big-endian write to register 0x84; init E0=01, poll B3==00, 8A=A5, 89=3F, 87=1D, 84=0000; range codes 400..725 (inferred). OIS/EEPROM chip LC898123F40 at 0x3e stays off. VAF rail = PM6150L GPIO12 (0xcb00, inferred): needs a kernel sysctl (0247). Steps: read-only probe -> init -> one small move -> camid F + camd FOCUS -> AF tuning. Hard limits: 400..725, max 20 codes per write, >= 2 ms apart; no writes to 0x3e.
+
 ### 2026-10-30 20:15 cam38-cam40: AUTO-EXPOSURE WORKS; camera switch 16 s -> 6-8 s (kernel127)
 - cam38 (port ace0d24): headers change 3 frames after the write (read-back pairing ran AE away), AE meters the shaded picture, frame length extends down to 15 fps (0x0340 in camid's group hold), one E in flight and no repeats, SIGTERM 2 s after the loop. Host test test_ae settles rear/front dark/bright within 13-23 frames. The 3-frame latency and front line time are not measured.
 - cam39: target read 767 (should be 144): Camera.app sends ExposureBias as integer 256; camera_device read it as +256 stops, clamped to +8. Pictures overexposed. START: rear 3897 ms, to front 6265 ms, back to rear 8490 ms.
