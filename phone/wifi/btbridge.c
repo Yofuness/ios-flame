@@ -50,6 +50,8 @@
 #include <util.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
 #include "pmem.h"
 #include "bt_uart.h"
 #include "bt_lext.h"
@@ -412,11 +414,26 @@ static int open_kdev(void)
 	return 0;
 }
 
+/*
+ * 2026-10-30 (bt-boot-failures): wland's log lives on /var/local and survives a reboot, so the last boot's
+ * "modem ready" let 2 of 18 boots start at 0 s, before this boot's wland had the chip up (UART RX low, no
+ * version reply, 3 tries in ~45 s, then stop). Only a log written since this boot counts.
+ */
+static int wlog_this_boot(void)
+{
+	struct timeval bt;
+	size_t n = sizeof(bt);
+	struct stat st;
+	if (sysctlbyname("kern.boottime", &bt, &n, NULL, 0) != 0 || stat(WLAND_LOG, &st) != 0)
+		return 0;
+	return st.st_mtime >= bt.tv_sec;
+}
+
 static void wait_wifi(void)
 {
 	char line[256];
 	for (int t = 0; t < 60; t++) {
-		FILE *f = fopen(WLAND_LOG, "r");
+		FILE *f = wlog_this_boot() ? fopen(WLAND_LOG, "r") : NULL;
 		int up = 0;
 		while (f && fgets(line, sizeof(line), f))
 			up |= !!strstr(line, "modem ready");
@@ -483,7 +500,17 @@ int main(int argc, char **argv)
 	unlink(READY);
 	pm_init();
 	wait_wifi();
-	if (stop_sig || bring_up_chip()) {
+	/* 2026-10-30: a failed round of 3 tries no longer ends Bluetooth for the boot: 5 more rounds, 30 s apart */
+	int rc = bring_up_chip();
+	for (int round = 2; rc && !stop_sig && round <= 6; round++) {
+		printf("btbridge: no controller yet: round %d in 30 s\n", round);
+		fflush(stdout);
+		for (int s30 = 0; s30 < 30 && !stop_sig; s30++)
+			sleep(1);
+		if (!stop_sig)
+			rc = bring_up_chip();
+	}
+	if (stop_sig || rc) {
 		if (stop_sig) {
 			stop_bridge();
 			return 0;
