@@ -13,6 +13,7 @@
 #   sctl     NAME[=INT]: read or set a sysctl (no sysctl binary on the phone)
 #   fcopy    [-n] SRC DST: fcopyfile(COPYFILE_DATA) data copy (-n: F_NOCACHE), xnu 0198 test
 #   jackset  0|1|3: headphone jack state for SunfishAudio.driver (bit 0 plugged, bit 1 mic)
+#   mgq      KEY...: MobileGestalt answers                    autobright [0|1]: Auto-Brightness (CoreBrightness)
 #   expt, exq, runmigrator: one-off probes of ExtensionFoundation and DataMigration (runmigrator needs
 #   com.apple.migrationpluginwrapper's entitlements, not in git)
 set -euo pipefail
@@ -44,4 +45,6 @@ build camd camd.c camrx_lib.c ../wifi/pmem.c ../wifi/smmu.c	# camera f1: camera 
 build camclient camclient.c	# camera f1: camd test client
 build a2s a2s.c
 build jackset jackset.c	# headphone jack S4: org.iosonpixel.jack state + post
+build mgq mgq.c -framework CoreFoundation	# MobileGestalt answers (ambient light)
+build autobright autobright.m -fobjc-arc -framework Foundation	# Auto-Brightness via CoreBrightness's client
 ls -l out

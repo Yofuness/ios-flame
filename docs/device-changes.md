@@ -53,6 +53,7 @@ output in /var/local.
 ## Log
 (Newest first. One line per on-device change: date, what, where, how, what reproduces it.)
 
+- 2026-10-30 /var/local/bin/mgq and /var/local/bin/autobright (phone tools, phone/tools/build.sh via tools/build-userland-linux.sh + flame-files put); read-only use so far (autobright without an argument).
 - 2026-10-30 Headphone jack S4 (feature under work): flags /var/local/sunfish-jack-enable (Codec answers 'jack' from notify "org.iosonpixel.jack") and /var/local/sunfish-jack-out (Codec gets a null-sink output stream); /var/local/bin/jackset (phone/tools/jackset.c, fake plug: `jackset 0|1|3`); SunfishAudio.driver rebuilt (95bacae, 834c2bd, 2a4c7f9) via phone/audio/build.sh + tools/sunfish-install-audio.sh. Off: rm both flags, restart mediaserverd.
 - 2026-10-30 Camera colour tuning: /private/var/local/fw/camera-imx363.isp + camera-imx355.isp (RWCISP02, CCM + lens shading from Google's com.google.tuned.s5_imx3xx.bin via ios-redfin redfin-camtune.py; not in git); also /var/local/cam/imx355-mode2.txt. Reproduced by tools/sunfish-install-camera.sh (now puts both). Remove the .isp files to go back to no tuning.
 - 2026-10-30 Files "On My iPhone": the hand-made container 718EBA02-... deleted again; containermanagerd made the real one (PluginKitPlugin/85108458-61BF-4B47-BAAA-3A5F30781965) during `lsreg -r` after the files6 boot. Reproduce: boot, `lsreg -r`, restart pkd + fileproviderd (to go into docs/setup.md once U13 confirms).
