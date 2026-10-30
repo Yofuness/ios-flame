@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 04:45 jack2 (kernel112 CAMERA=1, sensors.off; adspboot af54f5a): the va-macro read without its clock RESETS
+- Run 1 `--swr-probe --swr-only 1 --swr-nohw`: no vote; LPI gpio24 cfg 0x62b58000 = 0x00000401, in/out 0x62b58004 = 0; rc 0.
+- Run 2 `--swr-only 1` (hw vote 0x100F4 block 2 -> ok, status 0): same gpio24 values; rc 0.
+- Run 3 `--swr-only 2` (hw vote, then read va-macro 0x62f20000): **RESET** (SSH timeout, phone in fastboot). The fsync'd /var/local/swr-probe.log still held run 2's lines (run 3's rm + lines never reached flash), so the exact last step is unknown, but runs 1-2 vs 3 differ only by that read. Runs 4-6 (tx-macro, rx/tx SoundWire) not run.
+- Reading: the va/tx macros are unclocked with only the hw vote: their reads need the AFE clock votes (0x30b va_core, 0x30c tx_core, 0x30d tx_npl, 19.2 MHz) FIRST. Batteries 4436-4438 mV over 5 boots. Restored: sensors job running (adspboot pid 37), camd idle, btbridge up.
+- Next: `--swr-clk-first` (clock votes before any macro/SoundWire read), then group 2 again.
+
 ### 2026-10-30 04:15 jack1 (kernel112 CAMERA=1, sensors.off): RESET during `adspboot boot --swr-probe` (S0, e0621fd)
 - Run A: ADSP READY 120 ms, "adsp state ready"; the output (over SSH to the PC) stops at "apr: tx svc 3 op 1292c token 2" + qrtr NEW_SERVER lines (svc 43, 366, 15); no "swr:" line at all. ~45 s later SSH timed out and the phone was in fastboot. Per-boot log 20261030-033448.log ends at 83.8 s ("SWEET PMEM: smc 42000205 resumed 7 times -> 0"), no panic. Not known whether the hw vote, the clock/pin setup or the first SoundWire read caused it: the last stdout lines were probably lost with the SSH stream. Run B (--swr-clk) not run.
 - Restored: sensors.off removed, rebooted (jack1d): sensors job (adspboot pid 37) runs, camd idle, Bluetooth up. 4438 mV.
