@@ -4,7 +4,11 @@
  *   drvbuzz --gpio            read-only: gpio11 CFG + IN_OUT in the TLMM_S and TLMM_N tiles
  *   drvbuzz --probe           gpio11 low 2 ms, high, 2 ms; read ID/STATUS, dump 0x00-0x30; back to reset. No chip writes.
  *   drvbuzz --buzz MS LEVEL   as --probe, then Android's init writes (each read back), RTP LEVEL for MS ms, reset.
- * The tile: gpio11 is driven only if exactly one tile's CFG reads like the DT pinctrl (gpio function, 2 mA, output).
+ * The tile: gpio11 is in TLMM north (pinctrl-sm7150.c / sdmmagpie: CFG 0x390b000, IN_OUT +4; research/notes/haptics.md
+ * "gpio11 tile"). Under iOS nobody applied the Android pinctrl, so CFG reads the power-on 0x1 (gpio, input, pull-down,
+ * NRST held low): then it is set to the DT drv2624_rst value 0x200 (gpio, 2 mA, output, no pull) with IN_OUT low first,
+ * and put back to its old value at exit. Any other CFG value: not touched. (gpio11 is also the TE pin of a Qualcomm
+ * reference panel and the secondary display in the DT; sunfish's panel uses gpio10.)
  * Hard caps: LEVEL 1..0x40 (half scale), MS 1..500, OD_CLAMP <= 0xA1, CONTROL1 bit7 (LRA) never cleared, 0xFD-0xFF
  * never touched (enforced in dwr). Every exit path leaves gpio11 low (chip in reset).
  * SE9 is shared: don't run with cs35l41, camid, i2cprobe or kern.sweet_camprobe. Needs sweetse9=2.
@@ -35,6 +39,11 @@
 
 static uint64_t io_pa;		/* gpio11 IN_OUT word of the chosen tile, 0 = none */
 static int pin_high;
+static uint64_t cfg_pa;		/* gpio11 CFG word, set when we changed it (restored at exit) */
+static uint32_t cfg_old;
+
+#define CFG_DEFAULT	0x001	/* power-on: gpio, 2 mA, input, pull-down */
+#define CFG_DT		0x200	/* drv2624_rst: gpio, 2 mA, output, no pull */
 
 static void reset_low(void)
 {
@@ -45,15 +54,27 @@ static void reset_low(void)
 	printf("drvbuzz: wr %#llx = 0 (gpio11 low, chip in reset)\n", (unsigned long long)io_pa);
 }
 
+/* gpio11 back to the CFG it had (the pull-down keeps NRST low) */
+static void cfg_restore(void)
+{
+	if (!cfg_pa)
+		return;
+	wr32(cfg_pa, cfg_old);
+	printf("drvbuzz: wr %#llx = %#x (gpio11 cfg restored)\n", (unsigned long long)cfg_pa, cfg_old);
+	cfg_pa = 0;
+}
+
 static void on_sig(int s)
 {
 	reset_low();
+	cfg_restore();
 	_exit(128 + s);
 }
 
 static int fail(void)
 {
 	reset_low();
+	cfg_restore();
 	return 1;
 }
 
@@ -66,20 +87,38 @@ static int pick_tile(void)
 	for (int i = 0; i < 2; i++) {
 		uint64_t cfg = tiles[i] + 0x1000 * GPIO;
 		uint32_t c = rd32(cfg), io = rd32(cfg + 4);
-		/* DT drv2624_rst: FUNC [5:2] = 0 (gpio), DRV [8:6] = 0 (2 mA), OE bit9 = 1; pull bits ignored */
-		int ok = (c & 0x3fc) == 0x200;
+		/* DT drv2624_rst: FUNC [5:2] = 0 (gpio), DRV [8:6] = 0 (2 mA), OE bit9 = 1; pull bits ignored.
+		   Only the north tile holds gpio11; south is printed for reference. */
+		int dt = (c & 0x3fc) == CFG_DT, def = c == CFG_DEFAULT;
 		printf("drvbuzz: %s gpio11 cfg %#llx = %#010x io %#llx = %#010x (in %u out %u)%s\n", names[i],
 		       (unsigned long long)cfg, c, (unsigned long long)(cfg + 4), io, io & 1, (io >> 1) & 1,
-		       ok ? " <- matches DT pinctrl" : "");
-		if (ok)
-			n++, pick = i;
+		       i != 1 ? " (not gpio11's tile)" : dt ? " <- DT pinctrl" : def ? " <- power-on default" : " <- unexpected");
+		if (i == 1 && (dt || def))
+			n++, pick = i, cfg_old = c;
 	}
 	if (n != 1) {
-		printf("drvbuzz: %d tiles match the DT pinctrl (need exactly 1), not driving gpio11\n", n);
+		printf("drvbuzz: TLMM_N gpio11 cfg neither the DT pinctrl nor the power-on default, not driving gpio11\n");
 		return -1;
 	}
 	io_pa = tiles[pick] + 0x1000 * GPIO + 4;
 	printf("drvbuzz: using %s, gpio11 io %#llx\n", names[pick], (unsigned long long)io_pa);
+	return 0;
+}
+
+/* the DT pinctrl if the pin is still at its power-on CFG: IN_OUT low first, then output */
+static int pin_setup(void)
+{
+	uint64_t cfg = io_pa - 4;
+	if ((cfg_old & 0x3fc) == CFG_DT)
+		return 0;
+	wr32(io_pa, 0);
+	wr32(cfg, CFG_DT);
+	cfg_pa = cfg;
+	uint32_t r = rd32(cfg);
+	printf("drvbuzz: wr %#llx = %#x (gpio11 output low), reads %#x\n", (unsigned long long)cfg, CFG_DT, r);
+	if ((r & 0x3ff) != CFG_DT)
+		return -1;
+	usleep(2000);
 	return 0;
 }
 
@@ -236,16 +275,18 @@ int main(int argc, char **argv)
 		return 1;
 	signal(SIGINT, on_sig);
 	signal(SIGTERM, on_sig);
-	if (power_up())
+	if (pin_setup() || power_up())
 		return fail();
 	if (mode == 2) {
 		dump();
 		reset_low();
+		cfg_restore();
 		return 0;
 	}
 	if (init_chip() || buzz(ms, level))
 		return fail();
 	reset_low();
+	cfg_restore();
 	printf("drvbuzz: done\n");
 	return 0;
 }
