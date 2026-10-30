@@ -140,7 +140,10 @@ static void waitForResource(id resource);
 @property(nonatomic,strong) id<MTLTexture> parent;
 @property(nonatomic,strong) id<MTLHeap> parentHeap;
 @property(nonatomic) NSUInteger heapOffset;
+@property(nonatomic) IOSurfaceRef planarSurface;
+@property(nonatomic) uint32_t planarSeed;
 @end
+static void planarFill(NBTexture *t);
 @implementation NBBuffer
 - (void)dealloc {
  const NSUInteger length=nmb_buffer_length(_handle);nmb_buffer_release(_handle);
@@ -201,7 +204,7 @@ static bool textureDescriptor(MTLTextureDescriptor *d,NmbTextureDescriptor *out)
  return true;
 }
 @implementation NBTexture
-- (void)dealloc {nmb_texture_release(_handle);if(_surface)CFRelease(_surface);}
+- (void)dealloc {nmb_texture_release(_handle);if(_surface)CFRelease(_surface);if(_planarSurface)CFRelease(_planarSurface);}
 - (MTLTextureType)textureType {return (MTLTextureType)_descriptor.type;}
 - (MTLPixelFormat)pixelFormat {return (MTLPixelFormat)_descriptor.format;}
 - (NSUInteger)width {return _descriptor.width;}
@@ -614,6 +617,7 @@ static void waitForResource(id resource) {
  if(texture && ![(id)texture isKindOfClass:[NBTexture class]]){[_commandBuffer refuse:@"foreign texture"];return;}
  if(texture)[_commandBuffer.resourceOwners addObject:texture];
  if(texture && [(NBTexture *)texture surface])[_commandBuffer.surfaces addObject:texture];
+ if(texture && [(NBTexture *)texture planarSurface])planarFill((NBTexture *)texture); // 0112: refresh the converted copy
  [self check:nmb_encoder_set_texture(_handle,stage,texture?[(NBTexture *)texture handle]:nullptr,(uint32_t)index) what:"setTexture"];
 }
 - (void)sampler:(id<MTLSamplerState>)sampler index:(NSUInteger)index stage:(uint32_t)stage {
@@ -1757,10 +1761,73 @@ static char sweetMemoryOwnerKey;
  if(!handle){NBLOG(@"native-metal: texture refused: %@",lastError());return nil;}
  NBTexture *texture=[NBTexture new];texture.handle=handle;nmb_texture_describe(handle,&descriptor);texture.descriptor=descriptor;return (id<MTLTexture>)texture;
 }
+// 0112 (camera preview): textures over planar IOSurfaces, after ios-redfin (MIT). YCBCR8_420_2P(_sRGB) (500/501) over a 420v/420f surface
+// becomes an RGBA8(_sRGB) copy converted on the CPU (BT.601, video or full range by the fourcc); RGB10A8_2P_XR10(_sRGB) (550/551) a
+// BGRA8(_sRGB) copy (XR10 colour from plane 0, alpha from plane 1). Filled again when the surface's seed moved on (checked at every bind).
+// Every other planar kind is refused and logged once. Off: M2V_PLANAR=0 (all planar surfaces refused, as before).
+static bool planarOn() {static const bool on=[]{const char *p=getenv("M2V_PLANAR");return !p||strcmp(p,"0");}();return on;}
+static void planarRefused(OSType fourcc,NSUInteger format,NSUInteger plane) {
+ static std::mutex lock;static std::vector<uint64_t> seen;
+ const uint64_t key=((uint64_t)fourcc<<32)|((uint64_t)format<<4)|(plane&15);
+ {std::lock_guard<std::mutex> hold(lock);if(std::find(seen.begin(),seen.end(),key)!=seen.end())return;seen.push_back(key);}
+ NBLOG(@"native-metal: planar iosurface refused: %c%c%c%c fmt %lu plane %lu",(char)(fourcc>>24),(char)(fourcc>>16),(char)(fourcc>>8),(char)fourcc,(unsigned long)format,(unsigned long)plane);
+}
+static inline uint8_t clamp8(int v) {return (uint8_t)(v<0?0:v>255?255:v);}
+static void planarFill(NBTexture *t) {
+ IOSurfaceRef s=t.planarSurface;if(!s)return;
+ const uint32_t seed=IOSurfaceGetSeed(s);if(seed==t.planarSeed)return;
+ const NSUInteger w=t.width,h=t.height;
+ if(IOSurfaceLock(s,kIOSurfaceLockReadOnly,nullptr))return;
+ const uint8_t *p0=(const uint8_t *)IOSurfaceGetBaseAddressOfPlane(s,0),*p1=(const uint8_t *)IOSurfaceGetBaseAddressOfPlane(s,1);
+ const size_t r0=IOSurfaceGetBytesPerRowOfPlane(s,0),r1=IOSurfaceGetBytesPerRowOfPlane(s,1);
+ const size_t w0=IOSurfaceGetWidthOfPlane(s,0),h0=IOSurfaceGetHeightOfPlane(s,0),w1=IOSurfaceGetWidthOfPlane(s,1),h1=IOSurfaceGetHeightOfPlane(s,1);
+ if(!p0 || !p1 || w>w0 || h>h0 || !w1 || !h1){IOSurfaceUnlock(s,kIOSurfaceLockReadOnly,nullptr);t.planarSeed=seed;return;}
+ std::vector<uint8_t> out(w*h*4);
+ const NSUInteger format=t.pixelFormat;
+ if(format==MTLPixelFormatRGBA8Unorm || format==MTLPixelFormatRGBA8Unorm_sRGB){
+  // BT.601, 16.16 fixed point. 420v: Y 16-235, C 16-240; 420f: full range.
+  const bool video=IOSurfaceGetPixelFormat(s)=='420v';
+  const int ky=video?76309:65536,krv=video?104597:91881,kgu=video?25675:22554,kgv=video?53279:46802,kbu=video?132201:116130,yo=video?16:0;
+  for(NSUInteger y=0;y<h;y++){
+   const uint8_t *ly=p0+y*r0,*lc=p1+std::min((size_t)(y/2),h1-1)*r1;uint8_t *o=&out[y*w*4];
+   for(NSUInteger x=0;x<w;x++,o+=4){
+    const size_t cx=std::min((size_t)(x/2),w1-1)*2;
+    const int Y=(ly[x]-yo)*ky,U=lc[cx]-128,V=lc[cx+1]-128;
+    o[0]=clamp8((Y+krv*V+32768)>>16);o[1]=clamp8((Y-kgu*U-kgv*V+32768)>>16);o[2]=clamp8((Y+kbu*U+32768)>>16);o[3]=255;
+   }
+  }
+ } else {
+  // XR10: 10-bit channels in a 32-bit word (B low), 384 = 0.0, 894 = 1.0; alpha 8-bit from plane 1.
+  for(NSUInteger y=0;y<h;y++){
+   const uint32_t *l=(const uint32_t *)(p0+y*r0);const uint8_t *la=p1+std::min((size_t)y,h1-1)*r1;uint8_t *o=&out[y*w*4];
+   for(NSUInteger x=0;x<w;x++,o+=4){
+    const uint32_t v=l[x];
+    o[0]=clamp8(((int)(v&1023)-384)*255/510);o[1]=clamp8(((int)((v>>10)&1023)-384)*255/510);o[2]=clamp8(((int)((v>>20)&1023)-384)*255/510);
+    o[3]=la[std::min((size_t)x,w1-1)];
+   }
+  }
+ }
+ IOSurfaceUnlock(s,kIOSurfaceLockReadOnly,nullptr);
+ [t replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:out.data() bytesPerRow:w*4];
+ t.planarSeed=seed;
+}
 // The surface's pages are the texels: its mapping in this process is imported without a copy (pinned by the kernel, mapped into the GPU's
 // 4 KiB context by Turnip), so every process that imports the surface renders and samples the same memory.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)surface plane:(NSUInteger)plane {
- if(!surface || !d || plane || IOSurfaceGetPlaneCount(surface))return nil;
+ if(!surface || !d)return nil;
+ if(IOSurfaceGetPlaneCount(surface)){
+  const OSType fourcc=IOSurfaceGetPixelFormat(surface);const NSUInteger f=d.pixelFormat;
+  const bool yuv=(f==500 || f==501) && (fourcc=='420v' || fourcc=='420f'),xr=(f==550 || f==551);
+  if(!planarOn() || plane || (!yuv && !xr) || IOSurfaceGetPlaneCount(surface)<2 || d.textureType!=MTLTextureType2D){planarRefused(fourcc,f,plane);return nil;}
+  MTLTextureDescriptor *own=[d copy];
+  own.pixelFormat=yuv?(f==501?MTLPixelFormatRGBA8Unorm_sRGB:MTLPixelFormatRGBA8Unorm):(f==551?MTLPixelFormatBGRA8Unorm_sRGB:MTLPixelFormatBGRA8Unorm);
+  own.storageMode=MTLStorageModeShared;own.usage=MTLTextureUsageShaderRead;own.mipmapLevelCount=1;
+  NBTexture *texture=(NBTexture *)[(id<MTLDevice>)self newTextureWithDescriptor:own];
+  if(!texture){planarRefused(fourcc,f,plane);return nil;}
+  texture.planarSurface=(IOSurfaceRef)CFRetain(surface);texture.planarSeed=IOSurfaceGetSeed(surface)-1;planarFill(texture);
+  return (id<MTLTexture>)texture;
+ }
+ if(plane)return nil;
  void *base=IOSurfaceGetBaseAddress(surface);const size_t page=(size_t)getpagesize(),allocation=IOSurfaceGetAllocSize(surface);
  if(!page || (page&(page-1)) || !base || ((uintptr_t)base&(page-1)) || !allocation || allocation>SIZE_MAX-(page-1))return nil;
  const size_t bytes=(allocation+page-1)&~(page-1);
