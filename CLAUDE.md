@@ -107,6 +107,11 @@ This file is the one home for the project's rules (AGENTS.md and the memory note
   Remove the flag when the user is up.
 - **Quiet hours** (the user, 2026-10-30): no speaker tests (sound from the phone) between 9:30 pm and 5:00 am EST;
   the USB measurement mic (EM-01) is fine to use outside those hours.
+- **Upstream check** (the user, 2026-10-30): related ports (ios-redfin, iOSPlus10, UniXNU, metal2vulkan, hakios-*, ...)
+  are listed in `tools/upstream.list`. A daily scheduled task (06:30, "sunfish-upstream-check") runs
+  `tools/sunfish-upstream-check.sh`, surveys the new commits with investigators, writes
+  `research/notes/upstream-YYYY-MM-DD.md`, adds takeaways to `docs/backlog.md` and marks them surveyed
+  (`--mark NAME`). Add a project to the list when a new related port turns up.
 - **Other optimization:** make systems usable, not fast. Once something works and could be faster, add it to the
   "Optimize (last)" list (`docs/backlog.md`) and move on.
 
