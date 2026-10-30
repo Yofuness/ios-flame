@@ -5,6 +5,7 @@ Newest first. Details stay in the feature Logs (docs/features/<name>.md).
 
 ## From the plan (2026-10-28 .. 2026-10-30)
 
+- 2026-10-30 PHOTOS: Camera.app saves real HEIC photos from the rear camera (camera.md cam36).
 - 2026-10-30 CAMERA.APP LIVE PREVIEW (rear): lines are 16-byte padded (stride 2528, not 2520), 5af97b4 (camera.md cam34, cam35).
 - 2026-10-30 AIRPODS PLAY MUSIC (U11) and vibration felt (U16), the user.
 - 2026-10-30 B47 closed: CC blur is there without Turnip options (bl1; gm0 flat blue not reproducible); per-process TU_DEBUG knob kept (apps.md bl1).

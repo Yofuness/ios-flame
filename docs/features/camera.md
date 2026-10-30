@@ -1,5 +1,5 @@
 # Camera
-**State:** 🟡 CAMERA.APP SHOWS A LIVE COLOUR PREVIEW from the rear camera (2026-10-30 cam35, stride fix); open: front camera in camd (START -> -60), saving photos. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
+**State:** 🟡 CAMERA.APP WORKS ON THE REAR CAMERA: live colour preview and saved HEIC photos (2026-10-30 cam35, cam36); open: front preview black in Camera.app, autofocus, exposure. iOS lists the Back Camera (16 formats) and the Front Camera (18 formats) (camera ADT + camd + SunfishAudio.driver camera code, cam26/cam32); Camera.app not tried yet (U12). The FRONT camera streams too (IMX355 1640x924 @30, cam31). The rear camera streams continuously into RAM at 60.1 fps (2-slot ring, `tools/sunfish-cam-rx.sh --stream N`) and takes complete raw photos (`--capture`), no resets; exposure/gain settable (camid); no phone-side ISP / iOS camera yet; **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (recon/live.dts):
@@ -34,6 +34,11 @@ Path: raw Bayer through RDI (CSIPHY -> CSID -> IFE RDI write master -> memory), 
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 17:30 cam36: PHOTOS WORK (rear); front through camd works, Camera.app front preview black (kernel127, port 4009f97)
+- camd no longer latches a false FAULT: `camclient -s 1 -n 2` rc 0 then `camclient -s 2 -n 2 -o` rc 0 (front 1640x924 stride 2064, START after 8.39 s, 2 frames, 0 torn); camd.log "session end: ok" for both, "past the ring: 0 nonzero". Front raw is dim (gray 15..17).
+- Photo: camdev.log "a photograph asked for", "StillImage: 4032x3024 made of every pixel in 450 ms", "the photograph is given"; oslog "quality prioritization 2 taken as 1 (speed)", "a photograph of 4032x3024 encoded in 3018 ms". File /var/mobile/Media/DCIM/100APPLE/IMG_0001.HEIC (902569 B, 3024x4032 per heif-convert on the host): CLEAN picture of the red board and the gold letters, correct colours, dark, blurry (no autofocus, subject close). Tile corruption is only in the Photos.app display (B44). (Earlier cam35 "no photo" = camd in FAULT.)
+- Camera.app front: black preview, no FAULT; camdev.log ends "the graph starts the stream (format 0)"; back to rear works without killing camd. Rear preview dark/green in this run (low light, exposure not adapting yet).
 
 ### 2026-10-30 17:00 cam35: CAMERA.APP LIVE PREVIEW WORKS (rear, kernel127, port 5af97b4)
 - camd/camrx/camclient/camisp replaced in /var/local/bin (5af97b4 touched only comments/constants in camera_device.c + sunfish_camera.h, so SunfishAudio.driver kept), camd restarted by launchd. Camera.app: a live full-colour picture of the red circuit board (and the printed letters behind it), work/shots/cam35-rear.png, webcam agrees. Horizontal bands in the screenshot also cut the UI text and shutter button, so they are flame-shot reading during an update, not the camera.
