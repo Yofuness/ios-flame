@@ -62,6 +62,7 @@ static unsigned gain_base = 512;	/* Sony analog gain code base: 512 IMX363, 1024
 static struct sunfish_camera_shm *sh;
 static uint8_t *shm_base;
 static int logfd = -1;
+static int fast;	/* B43: CAMRX_FAST=1 */
 static volatile sig_atomic_t term;
 static mach_timebase_info_data_t tb;
 
@@ -85,6 +86,15 @@ static double mono(void)
 	return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+/* B43: "+1.234 s " = time since the session's START (stage_t0), for the start-time breakdown */
+static const char *since(char b[24])
+{
+	b[0] = 0;
+	if (stage_t0 > 0)
+		snprintf(b, 24, "+%.3f s ", mono() - stage_t0);
+	return b;
+}
+
 static uint64_t ns_to_mach(double ns)
 {
 	return (uint64_t)(ns * tb.denom / tb.numer);
@@ -97,7 +107,8 @@ static int run(const char *const *av)
 	int n = 0;
 	for (int i = 0; av[i] && n < (int)sizeof line - 2; i++)
 		n += snprintf(line + n, sizeof line - n, "%s%s", i ? " " : "", av[i]);
-	printf("camd: run %s\n", line);
+	char t[24];
+	printf("%scamd: run %s\n", since(t), line);
 	fflush(stdout);
 	pid_t p = fork();
 	if (p < 0)
@@ -121,7 +132,7 @@ static int run(const char *const *av)
 		usleep(10000);
 	}
 	int rc = WIFEXITED(st) ? WEXITSTATUS(st) : 128;
-	printf("camd: -> exit %d\n", rc);
+	printf("%scamd: -> exit %d\n", since(t), rc);
 	return rc;
 }
 
@@ -282,8 +293,12 @@ static void *copier(void *arg)
 		__atomic_store_n(&sh->latest_slot, s, __ATOMIC_RELEASE);
 		__atomic_store_n(&sh->latest_seq, seq, __ATOMIC_RELEASE);
 		sh->published++;
-		if (sh->state == SUNFISH_CAMERA_STARTING)
+		if (sh->state == SUNFISH_CAMERA_STARTING) {
+			char t[24];
 			sh->state = SUNFISH_CAMERA_STREAMING;
+			printf("%scamd: first frame published (seq %llu, exposure %u lines, gain code %d)\n", since(t),
+			       (unsigned long long)seq, f->exposure_lines, cur_code);
+		}
 	}
 	return NULL;
 }
@@ -324,14 +339,23 @@ static void *session(void *arg)
 	gain_base = front ? 1024 : 512;
 	sh->latest_seq = 0, sh->published = 0, sh->dropped = 0;
 	sh->data_bytes = FRAME_BYTES;
-	cur_lines = cur_code = -1;
+	/* B43: the tables' own exposure (0x0202/0x0203 = 1592 lines, gain 0) until camid's "S" read-back, not -1 -> 0
+	 * lines (isp_ae then started from 4 lines = black). Front: assumed the same 1592. */
+	cur_lines = 1592, cur_code = 0;
 	cur_fl = front ? FL_F : 1608;
-	printf("camd: == session start, sensor %d (%s)\n", cam->sensor, cam->name);
+	stage_t0 = mono();
+	char t[24];
+	printf("%scamd: == session start, sensor %d (%s)\n", since(t), cam->sensor, cam->name);
+	if (fast) {	/* B43: an indoor start exposure (~1500 lines, 2x gain), sent on the first tick */
+		exp_lines_req = 1500, exp_code_req = (int)(gain_base / 2);
+		exp_pending = 1;
+	}
 	powered = 1;
 	for (unsigned i = 0; i < sizeof steps / sizeof steps[0] && !rc && !want_stop && !term; i++)
 		rc = run(front ? steps_f[i] : steps[i]) != 0;
 	if (!rc && !want_stop && !term)
 		rc = precheck() || clocks_on() || phy_on(-1);
+	printf("%scamd: clocks + phy %s\n", since(t), rc ? "failed" : "on");
 	if (!rc && !want_stop && !term) {
 		stop = 0;
 		stream_hooks = &hooks;
@@ -525,7 +549,11 @@ int main(int argc, char **argv)
 	dup2(logfd, 1);
 	dup2(logfd, 2);
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	printf("camd: start, pid %d\n", getpid());
+	/* B43: camrx_lib's stage() without its 300 ms bisect sleeps and the carveout zeroed once per process;
+	 * CAMRX_FAST=0 in camd's environment keeps the old behaviour (also no start exposure) */
+	setenv("CAMRX_FAST", "1", 0);
+	fast = !strcmp(getenv("CAMRX_FAST"), "1");
+	printf("camd: start, pid %d, CAMRX_FAST %d\n", getpid(), fast);
 	mach_timebase_info(&tb);
 	pm_init();
 	signal(SIGPIPE, SIG_IGN);

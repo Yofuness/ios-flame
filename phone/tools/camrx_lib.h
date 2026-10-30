@@ -45,6 +45,7 @@ extern volatile sig_atomic_t stop;	/* the stream loop's end flag (SIGINT/SIGTERM
 extern uint16_t sid_mask;
 extern uint32_t addr_off;
 extern int sid2;
+extern double stage_t0;	/* B43: stage() lines get "+s" since this (CLOCK_MONOTONIC), 0 = off */
 
 /*
  * camd (camera f1): stream_run with hooks. NULL (camrx) = the e1 behaviour. With hooks: SECONDS 0 = until tick()

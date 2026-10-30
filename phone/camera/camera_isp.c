@@ -321,6 +321,8 @@ isp_ae(struct isp *isp, const struct redwood_camera_frame *f, const struct isp_s
 		gain_total = isp->manual_gain < 1 ? 1 : isp->manual_gain;
 		goto split;
 	}
+	if (f->exposure_lines == 0)	/* B43: exposure not known yet: no request (was: from 0 -> 4 lines, black) */
+		return false;
 	now = (double)f->exposure_lines * f->gain / unity * isp->sensor_digital * isp->digital;
 	target = 0.15 * WHITE * pow(2, isp->ae_bias < -8 ? -8 : isp->ae_bias > 8 ? 8 : isp->ae_bias);
 	target = target > 0.8 * WHITE ? 0.8 * WHITE : target;

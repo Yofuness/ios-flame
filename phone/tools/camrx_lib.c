@@ -244,11 +244,25 @@ static int poll(uint32_t pa, uint32_t mask, uint32_t want, int tries, unsigned u
 	return (rd32(pa) & mask) == want ? 0 : -1;
 }
 
+double stage_t0;	/* B43: camd's START time (0 = no "+s" prefix) */
+
 static void stage(const char *s)	/* redfin cstep: a reset leaves the last line on the console */
 {
-	printf("camrx: == %s\n", s);
+	static int fast = -1;
+	if (fast < 0) {
+		const char *e = getenv("CAMRX_FAST");	/* B43: camd sets it; hand runs keep the 300 ms */
+		fast = e && !strcmp(e, "1");
+	}
+	if (stage_t0 > 0) {
+		struct timespec ts;
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		printf("+%.3f s camrx: == %s\n", ts.tv_sec + ts.tv_nsec / 1e9 - stage_t0, s);
+	} else {
+		printf("camrx: == %s\n", s);
+	}
 	fflush(stdout);
-	usleep(300000);
+	if (!fast)
+		usleep(300000);
 }
 
 static int branch_on(uint32_t cbcr)
@@ -1609,6 +1623,13 @@ static double now_s(void)
 static int cap_zero(uint64_t pa, uint32_t len)
 {
 	static uint8_t z[65536], b[4];
+	static int done;
+	const char *e = getenv("CAMRX_FAST");
+	if (done && e && !strcmp(e, "1")) {	/* B43: camd zeroes once per process (CAMRX_FAST=1) */
+		printf("camrx: carveout zeroed before (CAMRX_FAST), skipped\n");
+		return 0;
+	}
+	done = 1;
 	double t0 = now_s();
 	for (uint32_t o = 0; o < len; o += sizeof z)
 		if (pm_wr(pa + o, z, len - o < sizeof z ? len - o : sizeof z))
