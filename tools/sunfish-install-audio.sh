@@ -15,7 +15,7 @@ H=/System/Library/Audio/Plug-Ins/HAL
 DRV=$H/SunfishAudio.driver
 VA=/Library/Audio/Plug-Ins/HAL VAOFF=/Library/Audio/Plug-Ins/HAL.disabled
 if [ "${1:-}" = --undo ]; then
-	S "set -e; mkdir -p $VAOFF; if [ -d $VA/VirtualAudio.plugin ]; then mv $VA/VirtualAudio.plugin $VAOFF/; echo 'VirtualAudio.plugin -> $VAOFF'; else echo 'VirtualAudio.plugin not in $VA'; fi; rm -rf $DRV; echo 'removed $DRV'; sync"
+	S "set -e; mkdir -p $VAOFF; if [ -d $VA/VirtualAudio.plugin ]; then mv $VA/VirtualAudio.plugin $VAOFF/; echo 'VirtualAudio.plugin -> $VAOFF'; else echo 'VirtualAudio.plugin not in $VA'; fi; rm -rf $DRV; echo 'removed $DRV'; sync 2>/dev/null || true"
 	echo "reboot to apply"
 	exit 0
 fi
@@ -36,5 +36,5 @@ S "found=; for d in $H /System/Library/Audio/Plug-Ins/HAL.disabled $VA $VAOFF; d
 [ -d \$d/BTAudioHALPlugin.driver ] && { echo \"BTAudioHALPlugin.driver: \$d\"; found=1; }; done; \
 [ -n \"\$found\" ] || echo 'WARNING: BTAudioHALPlugin.driver not found in any HAL dir'; \
 [ -d $H/BTAudioHALPlugin.driver ] || echo 'WARNING: BTAudioHALPlugin.driver is not in $H (not loaded)'"
-S "if [ -d /Library/Audio/Tunings/D22 ]; then echo '/Library/Audio/Tunings/D22: present'; else echo 'WARNING: /Library/Audio/Tunings/D22 missing'; fi; sync"
+S "if [ -d /Library/Audio/Tunings/D22 ]; then echo '/Library/Audio/Tunings/D22: present'; else echo 'WARNING: /Library/Audio/Tunings/D22 missing'; fi; sync 2>/dev/null || true"
 echo "reboot to apply"

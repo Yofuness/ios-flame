@@ -92,7 +92,7 @@ if [ "$MODE" = --undo ]; then
 	S "rm -f /var/local/camdev.on; echo 'removed /var/local/camdev.on'; \
 for d in D22 D221 Default; do P=$MT/\$d/SubServerConfiguration.plist; \
 [ -e \$P.before-camera ] && cp -p \$P.before-camera \$P && echo \"restored \$P\"; done; \
-if [ -e $MG.pre-camera ]; then cp -p $MG.pre-camera $MG && echo 'restored $MG'; else echo 'no $MG.pre-camera'; fi; sync"
+if [ -e $MG.pre-camera ]; then cp -p $MG.pre-camera $MG && echo 'restored $MG'; else echo 'no $MG.pre-camera'; fi; sync 2>/dev/null || true"
 	echo "boot WITHOUT CAMERA=1 next (tools left in /var/local/bin)"
 	exit 0
 fi
@@ -147,7 +147,7 @@ done
 # 5. MobileGestalt cache aside (once: rebuilt at boot with the camera ADT)
 S "if [ -e $MG.pre-camera ]; then echo 'MobileGestalt cache: already moved aside once'; \
 elif [ -e $MG ]; then cp -p $MG $MG.pre-camera && rm -f $MG && echo 'MobileGestalt cache moved aside (copy: .pre-camera)'; \
-else echo 'WARNING: no $MG'; fi; sync"
+else echo 'WARNING: no $MG'; fi; sync 2>/dev/null || true"
 
 # 6.
 echo "next boot must be: CAMERA=1 tools/sunfish-boot.sh NAME work/kernel111/kernel.development.sweet sweetse9=2 sweetcampmic=2"
