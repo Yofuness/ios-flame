@@ -16,7 +16,12 @@ Fallback without the ADSP: a sysctl that injects rotation events (1-2 days), use
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
-### 2026-10-30 20:00 dm5: SEE mag_cal/gyro_cal exist ("ASH_CAL", GOOGLE), but the first integration stopped all motion streams; reverted, fixed (dm6)
+### 2026-10-30 20:15 dm6: SEE mag_cal/gyro_cal stream next to the motion sensors (e226cad); they report bias 0 while the phone lies still
+- kernel126, adspboot e226cad, magcal.txt.cw1 restored; SSH 22 s. Startup tries 1-2 found 0 motion sensors, try 3 found 8 (6 + 2 cal). Status after opening Compass: accel 2061, gyro 2042, compass 748, als 755, magcal 1, gyrocal 1, written 4407, devmotion 881, "cal box st 0 bias -65.5,-43.2,-69.7 ... gcal st 0 0,0,0".
+- Raw cal events (msgid 1022, 16 bytes): magcal `[1/2 len 12: 0 0 0] [4/0 0]`, gyrocal the same: bias 0,0,0 and field 4 = 0 (no field 3 seen, so the status field number is still open). accel and gyro also send 1022 events of 54 bytes (their own cal/comp-matrix events; not parsed).
+- Compass 264° W (flame-shot) / 275° W (webcam, later) with the box, phone untouched. The DSP calibration needs the phone to be turned (U19) before it reports a bias; then the raw dumps will show the real field layout.
+
+: SEE mag_cal/gyro_cal exist ("ASH_CAL", GOOGLE), but the first integration stopped all motion streams; reverted, fixed (dm6)
 - Port bd5669f (kernel126): lookups found mag_cal (suid 0a9b44af...) and gyro_cal (suid 082bf075...), name "ASH_CAL", vendor GOOGLE, available 1, rates 10. But the status line showed only "magcal 0 gyrocal 0, written 0, devmotion 0": accel/gyro/mag never started, Compass had no heading. Reverted (5384410); working build restored (dm5r).
 - Root cause (implementer, e226cad): in sns_run.c start() the 6 motion lookups got no answer on the first try (sensors PD still loading) while the 2 cal lookups did, so start() saw 2 sensors as success and never retried; late lookup replies then landed on the cal clients' ports ("magcal: SUID event for mag"). Also msgid 1022 (16 bytes: packed bias 3 x f32 + status) is the SEE cal event and was dropped as "unhandled".
 - Fix e226cad: motion sensors are set up first and the cal sensors only when at least one motion sensor was found (else retry as before); cal sensors are enabled only after accel/gyro deliver samples; 1022 goes to the cal parser. Host test reproduces the failure. Not yet on the phone (dm6).
