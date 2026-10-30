@@ -11,6 +11,7 @@
 #   vtdecode FILE [SEC]: AVAssetReader/VideoToolbox decode fps, hardware or not
 #   vcopy    SRC DST: tree copy keeping xattrs, ACLs, flags; -l PATH, -c SRC DST compare
 #   sctl     NAME[=INT]: read or set a sysctl (no sysctl binary on the phone)
+#   sysq     NAME [INT]: print an int/string sysctl, or set an int one (0238 v2 kern.sweet_ui_*)
 #   fcopy    [-n] SRC DST: fcopyfile(COPYFILE_DATA) data copy (-n: F_NOCACHE), xnu 0198 test
 #   jackset  0|1|3: headphone jack state for SunfishAudio.driver (bit 0 plugged, bit 1 mic)
 #   mgq      KEY...: MobileGestalt answers                    autobright [0|1]: Auto-Brightness (CoreBrightness)
@@ -31,7 +32,7 @@ build() {	# NAME SOURCE [FLAGS...]
 		../../tools/linux-ios-sign "out/$name"
 	fi
 }
-for c in membw pstack psx vcopy sctl fcopy oslog; do build $c $c.c; done
+for c in membw pstack psx vcopy sctl sysq fcopy oslog; do build $c $c.c; done
 for m in expt exq nettest openapp oslogls prefs runmigrator; do build $m $m.m -fobjc-arc -framework Foundation; done
 build imgtest imgtest.m -fobjc-arc -framework Foundation -framework ImageIO -framework CoreGraphics
 build lsreg lsreg.m -fobjc-arc -framework Foundation -framework MobileCoreServices

@@ -1,20 +1,23 @@
-From 0d04fcd74f2f7396a5955875e113dceed004b6f4 Mon Sep 17 00:00:00 2001
-From: Yofuness <compiledchickennuggets@gmail.com>
-Date: Fri, 30 Oct 2026 07:48:11 -0400
-Subject: [PATCH] 0238 sunfish: CA display/render-server threads on the A76
- cores, kern.sweet_ui_bigcore (default 1), sweetuibig=0 off (ios-redfin 1041,
- MIT)
+0238 sunfish: CA display/render-server threads on the A76 cores, kern.sweet_ui_bigcore (default 1),
+sweetuibig=0 off (ios-redfin 1041, MIT)
+
+v2 (2026-10-30, after the kernel114 reset "ub1"): xnu commits 0d04fcd + the v2 commit on top, as one diff.
+- choose_processor no longer printf()s (sweet_ui_first_use removed): lock-free counters, read via
+  sysctl kern.sweet_ui_idle, kern.sweet_ui_preempt, kern.sweet_ui_first ("tid T cpu C idle|preempt" or "none").
+- sweetuibig is parsed only in thread context (sysctl, bsd_setthreadname); choose_processor reads the int
+  (-1/unset = off).
+- RT threads (sched_pri >= BASEPRI_RTQUEUES) only take an idle big core; preempt path is non-RT only.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- bsd/dev/sweet_cpufreq.c | 27 ++++++++++++
+ bsd/dev/sweet_cpufreq.c | 52 ++++++++++++++++++++++++++
  bsd/kern/proc_info.c    |  6 +++
- osfmk/kern/sched_prim.c | 91 +++++++++++++++++++++++++++++++++++++++++
+ osfmk/kern/sched_prim.c | 99 +++++++++++++++++++++++++++++++++++++++++++++++++
  osfmk/kern/thread.h     |  3 ++
- 4 files changed, 127 insertions(+)
+ 4 files changed, 160 insertions(+)
 
 diff --git a/bsd/dev/sweet_cpufreq.c b/bsd/dev/sweet_cpufreq.c
-index 23f7ffd..07d3dc6 100644
+index 23f7ffd..472bc2d 100644
 --- a/bsd/dev/sweet_cpufreq.c
 +++ b/bsd/dev/sweet_cpufreq.c
 @@ -11,6 +11,8 @@
@@ -26,7 +29,7 @@ index 23f7ffd..07d3dc6 100644
  #include <machine/machine_routines.h>
  #include <pexpert/pexpert.h>
  
-@@ -88,4 +90,29 @@ sweet_cpufreq_init(void)
+@@ -88,4 +90,54 @@ sweet_cpufreq_init(void)
  		    osm_clusters[c].name, cur, best, best_khz / 1000, osm_rd(base, OSM_DESIRED));
  	}
  }
@@ -55,6 +58,31 @@ index 23f7ffd..07d3dc6 100644
 +}
 +SYSCTL_PROC(_kern, OID_AUTO, sweet_ui_bigcore, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
 +    0, 0, sysctl_sweet_ui_bigcore, "I", "SWEET UI: CA threads on the big cores (1 display, 2 render-server; 0 off)");
++
++/* 0238 v2: choose_processor counts placements lock-free (no printf under the pset lock); read-only here */
++extern uint32_t sweet_ui_idle_n, sweet_ui_preempt_n;
++extern uint64_t sweet_ui_first_tid;
++extern int sweet_ui_first_cpu, sweet_ui_first_preempt;
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_idle, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_idle_n, 0,
++    "SWEET UI: tagged CA thread placements on an idle big core");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_preempt, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_preempt_n, 0,
++    "SWEET UI: tagged CA thread placements preempting a big core");
++static int
++sysctl_sweet_ui_first SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	char buf[64];
++	int how = os_atomic_load(&sweet_ui_first_preempt, acquire);
++	if (how == 0) {
++		snprintf(buf, sizeof(buf), "none");
++	} else {
++		snprintf(buf, sizeof(buf), "tid %llu cpu %d %s", sweet_ui_first_tid, sweet_ui_first_cpu,
++		    how == 2 ? "preempt" : "idle");
++	}
++	return SYSCTL_OUT(req, buf, strlen(buf) + 1);
++}
++SYSCTL_PROC(_kern, OID_AUTO, sweet_ui_first, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
++    0, 0, sysctl_sweet_ui_first, "A", "SWEET UI: first big-core placement (tid, cpu, idle|preempt)");
  #endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/kern/proc_info.c b/bsd/kern/proc_info.c
 index 82607ee..324d641 100644
@@ -81,10 +109,10 @@ index 82607ee..324d641 100644
  
  void
 diff --git a/osfmk/kern/sched_prim.c b/osfmk/kern/sched_prim.c
-index a06a80c..2fe73f0 100644
+index a06a80c..b87e4f8 100644
 --- a/osfmk/kern/sched_prim.c
 +++ b/osfmk/kern/sched_prim.c
-@@ -5021,6 +5021,68 @@ choose_next_pset(
+@@ -5021,6 +5021,75 @@ choose_next_pset(
   *	The thread must be locked.  The pset must be locked,
   *	and the resulting pset is locked on return.
   */
@@ -96,9 +124,14 @@ index a06a80c..2fe73f0 100644
 + * 0xc0), else preempts the big core running the lowest priority below the thread's, else the normal choice.
 + */
 +#define SWEET_UI_BIG_MASK       0xc0u           /* CPUs 6-7 = A76 (sunfish 6 x A55 + 2 x A76, as 0147) */
-+int sweet_ui_bigcore = -1;
-+static uint32_t sweet_ui_tagged, sweet_ui_used;
++int sweet_ui_bigcore = -1;              /* -1 = boot-arg not parsed yet; choose_processor treats it as 0 */
++static uint32_t sweet_ui_tagged;
++/* 0238 v2: lock-free stats for choose_processor (no printf under the pset lock: kernel114 reset), kern.sweet_ui_* */
++uint32_t sweet_ui_idle_n, sweet_ui_preempt_n, sweet_ui_first_set;
++uint64_t sweet_ui_first_tid;
++int sweet_ui_first_cpu, sweet_ui_first_preempt;
 +
++/* thread context only (sysctl, bsd_setthreadname): parses sweetuibig once; never called from choose_processor */
 +int sweet_ui_mode(void);
 +int
 +sweet_ui_mode(void)
@@ -120,6 +153,7 @@ index a06a80c..2fe73f0 100644
 +	if (name == NULL || th == THREAD_NULL) {
 +		return;
 +	}
++	(void)sweet_ui_mode();  /* 0238 v2: parse the boot-arg here, before any thread is tagged */
 +	if (strncmp(name, "com.apple.coreanimation.display", 31) == 0) {
 +		f = TH_SFLAG_SWEET_UI_DISPLAY;
 +	} else if (strncmp(name, "com.apple.coreanimation.render-server", 37) == 0) {
@@ -139,27 +173,29 @@ index a06a80c..2fe73f0 100644
 +	}
 +}
 +
-+/* one line at the first big-core placement (pset locked: no name lookup, the tag lines above give tid -> name) */
++/* pset locked, interrupts off: atomics and plain stores only (0238 v2) */
 +static void
-+sweet_ui_first_use(thread_t thread, processor_t bp, const char *how)
++sweet_ui_count(thread_t thread, processor_t bp, int preempt)
 +{
-+	if (__improbable(os_atomic_cmpxchg(&sweet_ui_used, 0, 1, relaxed))) {
-+		printf("SWEET UI: bigcore first use: thread %llu class %s -> CPU%d (%s), mode %d, big mask 0x%x\n",
-+		    thread_tid(thread), (thread->sched_flags & TH_SFLAG_SWEET_UI_DISPLAY) ? "display" : "render-server",
-+		    bp->cpu_id, how, sweet_ui_bigcore, SWEET_UI_BIG_MASK);
++	os_atomic_inc(preempt ? &sweet_ui_preempt_n : &sweet_ui_idle_n, relaxed);
++	if (__improbable(os_atomic_cmpxchg(&sweet_ui_first_set, 0, 1, relaxed))) {
++		sweet_ui_first_tid = thread->thread_id;
++		sweet_ui_first_cpu = bp->cpu_id;
++		os_atomic_store(&sweet_ui_first_preempt, preempt + 1, release);   /* 0 = fields not yet written */
 +	}
 +}
 +
  processor_t
  choose_processor(
  	processor_set_t         starting_pset,
-@@ -5077,6 +5139,35 @@ choose_processor(
+@@ -5077,6 +5146,36 @@ choose_processor(
  				}
  			}
  		}
 +		/* 0238 (redfin 1041): a tagged CA thread takes an idle big core, else preempts a lower-priority one */
 +		int ui = ((thread->sched_flags & TH_SFLAG_SWEET_UI_DISPLAY) ? 1 : 0) | ((thread->sched_flags & TH_SFLAG_SWEET_UI_RS) ? 2 : 0);
-+		if (__improbable(ui != 0) && (ui & sweet_ui_mode())) {
++		int uimode = os_atomic_load(&sweet_ui_bigcore, relaxed);   /* 0238 v2: no boot-arg parse here; -1 = 0 */
++		if (__improbable(ui != 0) && uimode > 0 && (ui & uimode)) {
 +			processor_t idle = PROCESSOR_NULL, low = PROCESSOR_NULL;
 +			for (int i = 7; i >= 6; i--) {          /* SWEET_UI_BIG_MASK: CPU7 first, as 0147 */
 +				processor_t bp = processor_array[i];
@@ -178,11 +214,11 @@ index a06a80c..2fe73f0 100644
 +			}
 +			if (idle != PROCESSOR_NULL) {
 +				processor = idle;       /* an idle hint is taken as is below */
-+				sweet_ui_first_use(thread, idle, "idle");
-+			} else if (low != PROCESSOR_NULL && (thread->sched_pri < BASEPRI_RTQUEUES ||
-+			    processor_is_fast_track_candidate_for_realtime_thread(pset, low))) {
-+				sweet_ui_first_use(thread, low, "preempt");
-+				return low;             /* pset locked; processor_setrun / realtime_setrun preempt it */
++				sweet_ui_count(thread, idle, 0);
++			} else if (low != PROCESSOR_NULL && thread->sched_pri < BASEPRI_RTQUEUES) {
++				/* 0238 v2: RT threads never preempt a running big core here (idle hint only) */
++				sweet_ui_count(thread, low, 1);
++				return low;             /* pset locked; processor_setrun preempts it */
 +			}
 +			/* else the normal choice: never waits for a big core */
 +		}
@@ -203,6 +239,3 @@ index 242233a..74ccec2 100644
  #define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLED | TH_SFLAG_FAILSAFE | TH_SFLAG_RT_DISALLOWED)     /* saved_mode contains previous sched_mode */
  
  	int16_t                 sched_pri;              /* scheduled (current) priority */
--- 
-2.56.0
-
