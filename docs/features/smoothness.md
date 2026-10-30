@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 08:15 ub1: kernel114 (xnu 0238, UI threads on the A76s) RESETS ~28 s after boot
+- Boot `CAMERA=1 ... kernel114 sweetse9=2 sweetcampmic=2` (4455 mV): SSH up at 17 s; "SWEET UI: tagged thread 599 com.apple.coreanimation.render-server (0238 class 2, kern.sweet_ui_bigcore 1)" [25.639], "tagged thread 616 com.apple.coreanimation.display.primary (class 1)" [25.737], "SWEET UIWDT: armed, 30 s" [25.815]; last line "[27.901] exec duetexpertd"; no panic text; the phone came back in fastboot. "bigcore first use" never printed.
+- Leading suspect: 0238 prints that first-use line with printf() from inside choose_processor() (pset locked, interrupts off): a printf there can deadlock the scheduler. Second suspect: returning a running big core for a real-time CA thread outside the normal RT path.
+- Smaller step: kernel115 = 0238 without any printf under the lock (counters + a sysctl instead), and a boot-arg A/B starting with sweetuibig=0 (tag only, no placement change).
+
 ### 2026-10-30 08:00 df1: ios-redfin's SWEET_DEADFILL (b0491b0) finds almost nothing to drop here; no fps gain
 - tools/sunfish-m2env-bench.sh, 3 rounds each, kernel113: swaps/s base 21.8 / 22.9 / 21.9 (mean 22.2), SWEET_DEADFILL=1 22.1 / 23.6 / 22.4 (22.7), =2 21.7 / 24.2 / 22.2 (22.7); GPU busy % samples overlap (noise). Settings with mode 2 drawn correctly (webcam). No crash, no reset.
 - Telemetry (needs /var/local/mtl2-telemetry, every 10 s into /var/local/mtl2.log): "DF mode2 dropped 12 cleared 16 held 720" after ~720 frames (idle + 2 swipes), i.e. CoreAnimation here rarely paints full-target fills that are later overwritten; redfin's 13.7 -> 7.9 ms win does not carry over. Idle commit-to-complete mean 6.1 ms.
