@@ -26,7 +26,6 @@ history in the feature Logs. Finished items move to [completed.md](completed.md)
 - B19 Respawn loops: lskdd, fairplayd.H2, wifip2pd dropped 2026-10-29; bluetoothd (10 s) kept until B15.
 - B23 Any HLOS buffer the DSP touches resets the SoC: see priority 1.
 - B30 Headphone jack (the user asked, 2026-10-29; not priority): WCD937x over SoundWire + MBHC; sound needs the ADSP audio path (B16/B23, audio.md M4). Jack-detect alone may work earlier (codec interrupt, no DSP).
-- B31 [MOSTLY FIXED 2026-10-30, a671ac2: reconnects, SIGSEGV handler] oslog segfaults (rc 139) mostly in the first minutes after boot (b31: old 6/8, new 4/8 back to back right after boot, then 0/6 a few minutes later); _exit fix didn't cure it, no crash report written. Workaround: rerun. Next: a 20-run loop right after boot with the kernel fault line.
 - B32 Location Services: switched on with `echo "L 1" > /var/local/sweet-orient` (2026-10-29); survives a reboot (tap1). No position source yet (no GPS driver; Wi-Fi location needs Apple servers).
 - B18 Cellular: not planned. iCloud: not expected to work.
 

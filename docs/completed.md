@@ -23,6 +23,7 @@ Done 2026-10-30: VIBRATION MOTOR BUZZES (hp2), camera opens fixed (2ed9d22), dai
 
 ## Backlog items done
 
+- B31 [DONE 2026-10-30] oslog survives unreadable messages (d581e4e: per-message sigsetjmp, skip + count): unfiltered `oslog -l -t 60` while opening 4 apps = 187556 lines, 5 messages skipped (SIGSEGV at 0x10/0x20), no exit.
 - B43 [DONE 2026-10-30] camera start 11 s -> 0.4 s and AE from the real exposure (2e4f7cc, camera.md).
 - B41/D7 [DONE 2026-10-30] screenshots: flame-shot defaults fixed (0x9c000000, 1080x2340, stride 4352), display.md.
 - B40 [DONE 2026-10-30] Camera.app pre-checks: all of iOSPlus10's camera fixes are already in our stack (camera.md, research/notes/camera-precheck.md); optional: always send SENSOR (camera_client.c:194).
