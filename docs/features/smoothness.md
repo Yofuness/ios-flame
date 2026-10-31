@@ -94,6 +94,20 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:20 b1/g6/g7: bind robustness: GPU hang after a wake (cause unknown); 650 MHz gives 38 swaps/s; 800 MHz fails bring-up
+- b1 kernel131 sweetswapbig=6 sweetcpusample=1 sweettrace=1, boot 20261030-230323.log, 4453 mV. Boot: _binds 1, _pri 54, _a55 0. Sleep/wake with `key 0 150`: 5 s after wake 3 (122.078): "present: GPU hang or fault (fence 1019, done 1013)", recover3 "gfx rail TIMEOUT, sptprac TIMEOUT", "hfi ctrl init TIMEOUT", "recover3: FAILED after 1585511 us", "recover2: FAILED after 1711527 us", backboardd killed, "DEVLOST first (turnip) VK_ERROR_DEVICE_LOST", submits 461, faults 1. No panic, no reset. UI back, then a later bench only 15-17 swaps/s (no SWEET TL or GPU lines: guess: CPU fallback for the rest of the boot).
+- Other items passed: backboardd kill -9 (new tid, _binds +1, UI back < 40 s); Calculator, Maps, Safari, Photos, Control Center, Camera open; 3 min in Camera, no bad lines. End counters a76 9629, a55 2, skip_rt 0, skip_cpu 0.
+- So the bind isn't default yet: a control is running to tell whether it caused the hang. An unrecovered wake hang would be serious in daily use either way.
+- GPU clock, kernel131 bind on, Settings long swipe:
+
+| sweetgpufreq | MHz read | swaps/s | swap-to-swap p50 / p95 ms | GPU per frame ms | GPU busy % | thread CPU ms per swap |
+|---|---|---|---|---|---|---|
+| 5 (a1 r2-r5) | 564 | 34.3-34.4 | 29.0 / 31.3-31.5 | 26.5 | 97-100 | 6.8-11.0 |
+| 6, boot 20261030-231240.log | 649-650 | 37.5, 38.2, 38.2 | 26.1-26.7 / 28.2-30.0 | 23.6-24.0 | 97-100 | 7.7-10.6 |
+| 7, boot 20261030-231536.log | "dcvs 800 MHz acked ret 0" | - | - | - | - | - |
+
+- Observed: 650 MHz: +11 % swaps/s, in proportion to the clock, so the full canvas is plainly GPU-capped; 0 hangs in ~1 min of use only. 800: "ring me_init: rptr 0 wptr 9 ... TIMEOUT", "bring-up FAILED in 1583 ms", CPU fallback at 16-17 swaps/s. Level 8 skipped. No temperature source found. 650 needs a soak before default: history: gpu.md "a real GPU hang once at 565 MHz".
+
 ### 2026-10-30 23:00 a1/a2: render thread bound to one A76 (xnu 0250, kernel131): @2x 51 swaps/s; full canvas rate unchanged but pacing even
 - `kern.sweet_ui_swapbig` live, boots 20261030-225151.log (a1), 20261030-225632.log (a2), 4439 and 4454 mV, no reset, no DeviceLost, no visible hitch. Settings list, one 15 s swipe each, window 5-15 s. `_pri` 54 throughout (non-RT), `_skip_rt` 0, `_binds` +1 per bound run, `_a55` +0 or +1. Warm-up runs left out.
 
