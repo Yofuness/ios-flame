@@ -101,7 +101,7 @@ Kernels:
 ### 2026-10-31 03:20 h1: dead fill mode 1 is the bridge's default: 53 swaps/s with a clean survey
 - Bundle with mode 1 as default (SWEET_DEADFILL unset = 1, 0 off) and the two audit fixes, kernel132 sweetswapbig=6, boot 20261031-023756.log, 4440 mV. Settings long swipe: 53.5 / 52.8 swaps/s, swap-to-swap p50 18.67 / 18.68, p95 22.90 / 23.66 ms, CPU per swap 11.0 / 16.5 ms on A76, GPU busy 77-87 %. DF mode1 dropped 92 -> 9246, 95-215 per s in scrolls; cleared and held 0. So the fixes don't hurt it. Home fpsbench with pauses: 35.2 swaps/s (not a steady load).
 - Survey, research/df3: lock, Home, Today, Settings + subpage, Calculator, Notes, Clock, Mail, Files, Reminders, Calendar fine. Control Center fine, with a red blob at the bottom on the panel (probably the Music icon blurred). Safari top half black on a GitHub page: not told apart from content. Maps no tiles, Weather no data: probably network or location, unchecked. Open and close frames saved, mostly unread.
-- 1 GPU hang in 3 min mixed use: 654.099 s "v2 fence wait: GPU hang or fault (fence 17537, done 17511, fsr 0)": recovered, no DeviceLost. 5 sleep/wake cycles fine.
+- 1 GPU hang in 3 min mixed use: 654.099 s "v2 fence wait: GPU hang or fault (fence 17537, done 17511, fsr 0)". This entry first said recovered; it did not (gpu.md 2026-10-31 04:00). 5 sleep/wake cycles fine.
 - Everyday setup: kernel132 sweetswapbig=6 + this bundle. Limits now: CPU 11-16 and GPU ~13 ms per frame, 18.7 ms between swaps.
 
 ### 2026-10-31 02:35 m0/m1/m2: SWEET_DEADFILL=1 keeps the speed: 53 swaps/s; the stale clock isn't caused by it

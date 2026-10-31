@@ -22,6 +22,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:00 Five no-fault hangs in one night; recovery fails at the TLB sync (research/notes/gpu-hangs-1031.md)
+- Hangs, all fsr 0, in a pass (sqe stat 0, CP_BUSY, SP, UCHE, VPC, VBIF busy): 20261030-222005:45752 (k130), 20261030-230323:8172 (k131), 20261031-012907:56047 (k132, Maps), 20261031-023756 at 654.099 s (k132), 20261031-032917 at 766 s (k133). Correction: h1's (654.099 s) did NOT recover: logs show a new backboardd with `device refused: OutOfMemory(Device)` and CPU drawing after it. CPU fallback reaches 60 swaps/s on some screens, so its low fps isn't a fixed sign.
+- Since Oct 29: SMMU-fault type recovered 2 of 2 in ~27 ms; no-fault type 0 of 8: `tlb sync -> timeout` x6, then `recovery aborted: TLB sync busy` x3 (the 0207 guard); recover3 fails at OOB 6, sptprac, HFI init. `gpu_ready=false` stays until reboot. Code: a6_smmu_gbif_reset polls the sync with GBIF still halted.
+- Rate: k127-129 287 k submits, 0 no-fault hangs; k130-133 253 k submits, 5. p ~2 %, small numbers. Since k120: boots with sweettrace=1 sweetcpusample=1 had 5 in 232 k, others 1 in 524 k: confounded with bridge 0114 + LTO and heavier loads. Bind 0250, dead fill, 0251, 0252 aren't necessary for it (222005 predates them or lacks them). Everyday boot has neither flag.
+- Next: recovery patch (GBIF order, diagnostics, sync-timeout counter), soak with the everyday args.
+
 ### 2026-10-30 18:15 backboardd lost its Vulkan device (kernel127, ~365 s, after Camera.app launches): the screen cycled old frames
 - The user: "display is doing all kinds of whacky things". Webcam, 4 frames in 1 s: home screen flipping between old pictures (with/without dock, sharp/blurred). Kernel: swaps 60/s -> 10.0 fps at ~370 s; "SWEET FB: backboardd notifications type 5 off/on" every 50 ms from 365.57 s; GPU submits 51 per 5 s (0 missed, no fault line). Just before: SpringBoard "orient: R front now none" (364.05), touch at 362.8.
 - /var/local/mtl2.log: "native-metal: commandBuffer refused: command buffer: DeviceLost" + "texture refused: texture: DeviceLost", 129506 lines kept after "log truncated at 37582208 bytes": the first cause scrolled away. backboardd state R, 2:04 CPU. Saved: work/mtl2-devlost.log. Also seen: "planar iosurface refused: b3a8 fmt 550 plane 0".
