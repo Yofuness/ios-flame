@@ -94,6 +94,11 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 23:50 w1-w4: 32 sleep/wake cycles with no hang, bind on or off; bind goes in the everyday boot
+- 8 cycles each, `key 0 150`, Settings open, ~5 s off, ~11 s on: w1 kernel128 (20261030-232041.log), w2 kernel131 bind off (232730), w3 and w4 kernel131 sweetswapbig=6 (233333, 233931). 0 hangs, 0 recover lines, SSH up. Frames of w2-w4 not viewed, so "lit on wake" is confirmed only for w1. Swaps/s not measured.
+- b1's hang is in its own log (20261030-230323.log:8172). Tally with the bind on: 1 hang in 19 wakes, off: 0 in 16. Too few to blame it: fsr 0, a busy-type hang like the older display-change hangs in gpu.md (kernel78 etc., before the bind existed). b1 also had a poller running (sysq/dash every ~90 ms) and Wi-Fi scans right before. Unexplained; if it recurs, read "DEVLOST first" and recover3's "gfx rail TIMEOUT".
+- Decision: kernel131 with `sweetswapbig=6` is the everyday boot; the pacing gain is large and the evidence against is one event. 650 MHz (`sweetgpufreq=6`) stays off pending a soak: backlog Later.
+
 ### 2026-10-30 23:20 b1/g6/g7: bind robustness: GPU hang after a wake (cause unknown); 650 MHz gives 38 swaps/s; 800 MHz fails bring-up
 - b1 kernel131 sweetswapbig=6 sweetcpusample=1 sweettrace=1, boot 20261030-230323.log, 4453 mV. Boot: _binds 1, _pri 54, _a55 0. Sleep/wake with `key 0 150`: 5 s after wake 3 (122.078): "present: GPU hang or fault (fence 1019, done 1013)", recover3 "gfx rail TIMEOUT, sptprac TIMEOUT", "hfi ctrl init TIMEOUT", "recover3: FAILED after 1585511 us", "recover2: FAILED after 1711527 us", backboardd killed, "DEVLOST first (turnip) VK_ERROR_DEVICE_LOST", submits 461, faults 1. No panic, no reset. UI back, then a later bench only 15-17 swaps/s (no SWEET TL or GPU lines: guess: CPU fallback for the rest of the boot).
 - Other items passed: backboardd kill -9 (new tid, _binds +1, UI back < 40 s); Calculator, Maps, Safari, Photos, Control Center, Camera open; 3 min in Camera, no bad lines. End counters a76 9629, a55 2, skip_rt 0, skip_cpu 0.

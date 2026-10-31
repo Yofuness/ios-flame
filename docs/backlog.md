@@ -28,6 +28,7 @@ history in the feature Logs. Finished items move to [completed.md](completed.md)
 - B18 Cellular: not planned. iCloud: not expected to work.
 
 ## Later (needs repeated 1 h+ tests)
+- O16 GPU at 650 MHz (`sweetgpufreq=6`, stock level): 38 swaps/s against 34 on the full canvas, clean for ~1 min only (smoothness.md 23:20); needs an app soak of an hour or more before default. 800 MHz fails bring-up (me_init timeout).
 - Camera far focus: the user (2026-10-30): can't focus on far things. Lens range 400..725 is inferred; infinity is probably below code 400 (the board at 10 cm peaked at the 725 end). Next: read the per-unit AF calibration from the OIS flash (research/notes/camera-af.md) or widen the range in small steps and sweep on a far scene.
 - Compass accuracy: parked 2026-10-30 after a long day (sensors.md rec1, dm11, dm12): usable as a rough compass; on dm12 the user finds it much more consistent, still 20-30 deg off a Pixel 8 Pro and it still jumps; live gyro-aided fit idle (status line counters in dm12 say why); next: read a recording from normal use (/var/local/motion-dump.csv), U21 comparison away from electronics.
 - B21 GPU busy-hang recovery + pool growth (no real hang seen since xnu 0207).
