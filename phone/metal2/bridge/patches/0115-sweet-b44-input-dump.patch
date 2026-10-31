@@ -1,0 +1,180 @@
+--- a/crates/metal2vulkan-runtime/src/buffer_texture.rs
++++ b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+@@ -1736,6 +1736,80 @@
+     });
+ }
+ 
++/// 0115 (B44): whether `M2V_SHADOW_DUMP=all` asks for the bytes copied into a texture
++/// (`input_dump`), read once.
++pub(super) fn input_dump_wanted() -> bool {
++    static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ALL.get_or_init(|| std::env::var_os("M2V_SHADOW_DUMP").is_some_and(|v| v == "all"))
++}
++
++/// 0115 (B44): `input_dump`'s facts of one copy: what `replaceRegion` or a blit was handed, as the
++/// caller gave them, and which texture takes it.
++pub(super) struct InputDump {
++    pub(super) route: &'static str,
++    pub(super) texture: (u64, u64),
++    pub(super) format: usize,
++    pub(super) over_buffer: bool,
++    pub(super) bytes_per_row: u64,
++    pub(super) bytes_per_image: u64,
++    pub(super) offset: u64,
++    pub(super) origin: [u32; 3],
++    pub(super) size: [u32; 3],
++    pub(super) level: u32,
++}
++
++/// 0115 (B44): under `M2V_SHADOW_DUMP=all` (`input_dump_wanted`, which the caller asks first), the
++/// bytes of a copy into a texture up to 200x200, the first of each extent on each route, at most 40
++/// a process, to /var/local/b44/b44-WxH-ROW-OFF-FMT-PID-ROUTE.bin, with one "B44 dump" line as
++/// 0113's. Copied here, on the caller's thread; only the write is left to another.
++pub(super) fn input_dump(facts: InputDump, bytes: &[u8]) {
++    use std::io::Write;
++    static SEEN: Mutex<Vec<(u64, u64, &'static str)>> = Mutex::new(Vec::new());
++    let (width, height) = facts.texture;
++    if width > 200 || height > 200 {
++        return;
++    }
++    {
++        let key = (width, height, facts.route);
++        let mut seen = lock(&SEEN);
++        if seen.len() >= 40 || seen.contains(&key) {
++            return;
++        }
++        seen.push(key);
++    }
++    let bytes = bytes.to_vec();
++    let thread = std::thread::Builder::new().name("m2v-b44-dump".into());
++    let _ = exit_guard::spawn(thread, move || {
++        let pid = std::process::id();
++        let InputDump {
++            route,
++            format,
++            over_buffer,
++            bytes_per_row,
++            bytes_per_image,
++            offset,
++            origin,
++            size,
++            level,
++            ..
++        } = facts;
++        let name = format!(
++            "/var/local/b44/b44-{width}x{height}-{bytes_per_row}-{offset}-{format}-{pid}-{route}.bin"
++        );
++        let wrote = shadow_dump_write(&name, bytes.as_ptr(), bytes.len());
++        let line = format!(
++            "MTL2[{pid} {}]: B44 dump mtlfmt {format} route {route} {width}x{height} over-buffer {over_buffer} bytesPerRow {bytes_per_row} bytesPerImage {bytes_per_image} off {offset} origin {origin:?} size {size:?} level {level} bytes {} {name}: {wrote}\n",
++            std::env::args().next().unwrap_or_default(),
++            bytes.len()
++        );
++        for path in ["/dev/console", "/var/local/mtl2.log"] {
++            if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
++                let _ = file.write_all(line.as_bytes());
++            }
++        }
++    });
++}
++
+ /// 0113 (B44): `size` bytes at `from`, which may no longer be mapped, into the file at `path`;
+ /// "ok" or what went wrong.
+ fn shadow_dump_write(path: &str, from: *const u8, size: usize) -> String {
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -5386,6 +5386,22 @@
+         if (bytes.len() as u64) < host.host_len() {
+             return Err(invalid(CALL, Problem::Copy(CopyProblem::BufferRange)));
+         }
++        // 0115 (B44): the bytes as handed in, for the PC. Off unless M2V_SHADOW_DUMP=all.
++        if super::buffer_texture::input_dump_wanted() {
++            let facts = super::buffer_texture::InputDump {
++                route: "replace",
++                texture: (self.width(), self.height()),
++                format: self.pixel_format() as usize,
++                over_buffer: self.over_buffer(),
++                bytes_per_row,
++                bytes_per_image,
++                offset: 0,
++                origin: image_region.origin,
++                size: image_region.size,
++                level: image_region.level,
++            };
++            super::buffer_texture::input_dump(facts, &bytes[..host.host_len() as usize]);
++        }
+         // A PVRTC level's blocks in Metal's CPU order, as the rows the copy packs.
+         let rows;
+         let bytes = match cpu_order {
+--- a/crates/metal2vulkan-runtime/src/blit_texture.rs
++++ b/crates/metal2vulkan-runtime/src/blit_texture.rs
+@@ -60,6 +60,7 @@
+     plan_whole_copy, texel_layout, texel_rows, BufferCopyPlan, BufferImageRegion, BufferLayout,
+     BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
+ };
++use super::buffer_texture::{input_dump, input_dump_wanted, InputDump};
+ use super::compressed_blit::{rule_of, rules_of};
+ use super::copy_plan::{
+     block_bytes, check_region, colour_unit, copy_unit, depth_bytes, level_extent, shape,
+@@ -293,6 +294,50 @@
+     .map_err(|problem| invalid(call, Problem::Copy(problem)))
+ }
+ 
++/// 0115 (B44): `input_dump` of a copy from `buffer` laid out as `layout` into `region` of
++/// `texture`: the bytes it reads, up to the buffer's length, where the CPU reaches them. A row
++/// pitch or image pitch of 0 reads as `HostLayout::host_len` counts it.
++fn input_dump_of_blit(
++    buffer: &Buffer,
++    texture: &Texture,
++    layout: &BufferLayout,
++    region: &TextureRegion,
++    unit: &CopyUnit,
++) {
++    let Some(contents) = buffer.contents().filter(|_| !buffer.detached()) else {
++        return;
++    };
++    let s = shape(region.size, unit);
++    if s.row_bytes == 0 || s.rows == 0 || s.images == 0 {
++        return;
++    }
++    let reads = (s.images - 1)
++        .saturating_mul(layout.bytes_per_image)
++        .saturating_add((s.rows - 1).saturating_mul(layout.bytes_per_row))
++        .saturating_add(s.row_bytes);
++    let size = reads.min(buffer.length().saturating_sub(layout.offset)) as usize;
++    if size == 0 {
++        return;
++    }
++    // SAFETY: not detached, and offset + size lies inside the buffer's length.
++    let bytes = unsafe {
++        std::slice::from_raw_parts(contents.as_ptr().add(layout.offset as usize), size)
++    };
++    let facts = InputDump {
++        route: "blitbuf",
++        texture: (texture.width(), texture.height()),
++        format: texture.pixel_format() as usize,
++        over_buffer: texture.over_buffer(),
++        bytes_per_row: layout.bytes_per_row,
++        bytes_per_image: layout.bytes_per_image,
++        offset: layout.offset,
++        origin: region.origin,
++        size: region.size,
++        level: region.level,
++    };
++    input_dump(facts, bytes);
++}
++
+ /// The Vulkan region of `region`.
+ fn buffer_image_region(region: &BufferImageRegion) -> vk::BufferImageCopy {
+     vk::BufferImageCopy {
+@@ -504,6 +549,10 @@
+             destination_level,
+             destination_slice,
+         )?;
++        // 0115 (B44): the source's bytes as of now, for the PC. Off unless M2V_SHADOW_DUMP=all.
++        if input_dump_wanted() {
++            input_dump_of_blit(source_buffer, texture, &layout, &region, &unit);
++        }
+         if let Some(texels) = texture.buffer_texels() {
+             let (from, to) = plan_rows_copy(
+                 texture.record(),
