@@ -94,6 +94,22 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:10 k1: Turnip knobs at full canvas: first submit stays ~26 ms; a second mode with 28 swaps/s found and avoided
+- kernel131 sweetswapbig=6 sweettrace=1 sweetcpusample=1, boot 20261030-235443.log, 4440 mV, no hang, no DeviceLost. Settings long swipe, backboardd restarted per setting. GPU busy ~99 % in all:
+
+| setting | swaps/s | swap-to-swap p50 / p95 ms | 1st submit ms | 2nd submit ms | CPU ms per swap | visual |
+|---|---|---|---|---|---|---|
+| base | 28.3, 28.3 | 35.3 / 37.8 | 25.9 | 6.75 | 9.5, 10.4 | OK |
+| TUDBG=sysmem | 30.7, 30.4 | 32.0-32.7 / 36.5-59.5 | 24.5 | 5.57 | 11.3, 12.2 | OK |
+| TU_SWEET_PRIM_ORDER=0 | 30.0, 29.9 | 33.4 / 35.6 | 25.3 | 5.45 | 9.5, 10.7 | Control Center broken: black, no blur, panels missing |
+| PRIM_ORDER=0 + sysmem | 32.6, 32.6 | 30.8 / 34.2 | 22.6 | 5.53 | 11.3, 12.2 | Control Center broken |
+| TUDBG=noubwc | 28.3, 28.3 | 35.3 / 37.8 | 25.9 | 6.75 | 10.0, 9.3 | OK |
+| TU_FETCH_GMEM_MIN_DRAWS=100000 | 34.2, 34.1 | 29.3 / 31.3 | 25.9 | 0.77 | 10.3, 9.3 | OK, blur fine |
+| base again | 28.4, 28.3 | 35.3 / 37.4 | 25.9 | 6.75 | 9.1, 7.0 | OK |
+
+- Observed: this base (2nd submit 6.75 ms, 28 swaps/s) differs from a1's bound runs (2nd 0.56 ms, 34.4). So the same settings can land in two modes. Setting 6 reproduces 0, so it isn't drift within one boot. Guess: a1 ran on a fresh boot, these after a backboardd restart, or autotune picks a different mode for the small second pass. TU_FETCH_GMEM_MIN_DRAWS=100000 gives the good mode in every run so far.
+- No knob moves the first submit by much without breaking the picture: draws are the cost. sysmem saves 1.4 ms, costs ~1.5 ms CPU. Next: per-draw trace, fixed (research/notes/fps-gpu-full.md).
+
 ### 2026-10-30 23:50 w1-w4: 32 sleep/wake cycles with no hang, bind on or off; bind goes in the everyday boot
 - 8 cycles each, `key 0 150`, Settings open, ~5 s off, ~11 s on: w1 kernel128 (20261030-232041.log), w2 kernel131 bind off (232730), w3 and w4 kernel131 sweetswapbig=6 (233333, 233931). 0 hangs, 0 recover lines, SSH up. Frames of w2-w4 not viewed, so "lit on wake" is confirmed only for w1. Swaps/s not measured.
 - b1's hang is in its own log (20261030-230323.log:8172). Tally with the bind on: 1 hang in 19 wakes, off: 0 in 16. Too few to blame it: fsr 0, a busy-type hang like the older display-change hangs in gpu.md (kernel78 etc., before the bind existed). b1 also had a poller running (sysq/dash every ~90 ms) and Wi-Fi scans right before. Unexplained; if it recurs, read "DEVLOST first" and recover3's "gfx rail TIMEOUT".
