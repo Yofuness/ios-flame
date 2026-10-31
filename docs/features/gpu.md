@@ -22,6 +22,10 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 07:25 soak1: kernel134 everyday args: 2 real no-fault hangs in ~113 k submits; the TLB sync never clears
+- App + long-swipe loop, boots 20261031-063606.log, 20261031-070415.log, research/notes/hang-soak1.txt. Hang 1 ~1423 s: fence 69595 done 69580, fsr 0, `tlb sync timeouts 174`. Hang 2 ~580 s: same, count 3. Every recovery: `tlb sync -> timeout after 100000 us, gbif released first, tlbstatus 1`; recover2, recover3, GBIF path failed; `recover failed +1s/+5s/+30s: tlbstatus 1`: the sync stays stuck. White screen in Safari; no GPU lines after. Owner lines not logged. DEVLOST at 1277 s in the first boot, 146 s before the hang.
+- So 0253's order doesn't clear it, a later retry wouldn't either, and sync timeouts come before the hang: the wedge may be the cause. Rate ~1.8 per 100 k submits: at full speed about one per 15-20 min of hard scrolling; a daily-use problem. Analysis running: research/notes/gpu-tlb-wedge.md.
+
 ### 2026-10-31 06:20 kernel134: injected hangs still recover with the new order
 - htA 20261031-055651.log (sweethangtest=0xA0000040, present submit 64, SMMU stall): injected 48.866 s, "tlb sync -> done after 0 us, gbif released first, tlbstatus 0", timeouts 0, recover2 done after 35042 us, fsr 40000002, GPU lines and swipes after. htB 20261031-055920.log (0x00000040, bad client IB): 51.947 s, sync done after 0 us, recover2 done after 35083 us, backboardd killed, GPU after. Base was ~27 ms; 8 ms slower is the new path.
 - htC2 20261031-060809.log (0xC0000040, stall IB, fsr 0): injected 206.719 s, hang 208.754 s, recover2 done 208.780 s: recovered. Correction: the run's report called htC and htC2 "no GPU" boots; their logs have 43 and 34 SWEET GPU 5 s lines. Only r1 (035915) stands as the no-GPU boot. Also rc 2 from sunfish-test twice after these, phone in fastboot, rerun worked.
