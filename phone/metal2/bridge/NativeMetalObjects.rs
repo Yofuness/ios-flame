@@ -252,6 +252,12 @@ fn observe_message(message: &DebugMessage) {
     }
 }
 
+/// ios-on-pixel bridge 0114: `supports_family` calls in this process so far, whoever asked.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_family_calls() -> u64 {
+    metal2vulkan_runtime::sweet_family_calls()
+}
+
 /// ios-on-pixel bridge 0105: command pools made, spares kept now, spares destroyed by SWEET_CMDPOOL_CAP, into three words.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_command_pool_stats(out: *mut u64) {

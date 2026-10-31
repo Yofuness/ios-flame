@@ -39,6 +39,8 @@ size_t nmb_device_name(const NmbDevice *, char *out, size_t size);
 uint64_t nmb_device_max_buffer_length(const NmbDevice *);
 // Pipeline makings (count, total us, longest us, waited us, failed), sink messages (info, warning+), shader cache hits/misses/writes.
 bool nmb_device_work_stats(const NmbDevice *, uint64_t out[10]);
+// ios-on-pixel bridge 0114: supports_family calls in this process so far, whoever asked.
+uint64_t nmb_family_calls(void);
 // ios-on-pixel bridge 0105: command pools made, spares kept now, spares destroyed by SWEET_CMDPOOL_CAP.
 void nmb_command_pool_stats(uint64_t out[3]);
 /* Artifact lookups and driver pipeline records are separate cache layers. */
