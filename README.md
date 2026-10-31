@@ -32,7 +32,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [USB network](docs/features/usb-network.md) | ✅ | Ethernet 192.168.7.2, live kernel log; boot to SSH 16-18 s |
 | [SSH](docs/features/ssh.md) | ✅ | dropbear + dash + toybox; boot to SSH 16-18 s |
 | [Display](docs/features/display.md) | ✅ | 1080x2340, GPU-composited (Metal → Turnip), vsync-paced; apps rotate to landscape and back on command (`R 3`/`R 1`), touch follows; auto-rotate waits for sensors |
-| [Smoothness](docs/features/smoothness.md) | 🟡 | ~21 screen updates/s ceiling while swiping |
+| [Smoothness](docs/features/smoothness.md) | 🟡 | ~34 swaps/s in steady scrolling; the limit is 22-24 ms of CPU per frame in backboardd's render thread, half of it in our Metal bridge (2026-10-30) |
 | [Haptics](docs/features/haptics.md) | ✅ | iOS haptics work: switch taps pulse the motor (DRV2624 via hapticd, launchd job, `HAPTICS=1` boot); feel check by the user open |
 | [Brightness](docs/features/brightness.md) | ✅ | Control Center slider drives the panel brightness (DCS 0x51, `sweetbl=2`) |
 | [GPU](docs/features/gpu.md) | ✅ | Adreno 618 at 565 MHz; recovers from GPU hangs (~26 ms) |
@@ -47,7 +47,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
 | [Apps](docs/features/apps.md) | ✅ | 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine; Files "On My iPhone" opens; app extensions work: widgets, share sheet, emoji keyboard (2026-10-30) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
-| [Audio](docs/features/audio.md) | 🟡 | speaker amps answer; the audio DSP boots and stays up; APR works and a 3 s test tone streams through the DSP to the speaker port (2026-10-29); speaker amps not on yet |
+| [Audio](docs/features/audio.md) | 🟡 | AirPods play music; on the speaker path a test tone from the audio DSP now reaches both amps and echoes back correctly (lines swapped, sp20, 2026-10-30), not heard yet: audible test next |
 | [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); Camera.app works: live colour preview on both cameras, auto-exposure, autofocus and sharp saved photos (2026-10-30); switching cameras takes ~7 s + ~10 s until the picture shows; Live Photo off; both cameras stream from tools (rear 60 fps, front 30 fps) |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); AirPods play music (2026-10-30) |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |

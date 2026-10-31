@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 parked 2026-10-30: DSP, APR, AFE stream and both CS35L41 amps run cleanly, but no sound (measurement mic + the user); next steps in the Log. **Updated:** 2026-10-30.
+**State:** 🟡 with `--swap-lanes` the DSP's tone reaches both amps and echoes back correctly (sp20, silent test); not heard yet, audible test next. **Updated:** 2026-10-30.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,18 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 21:50 sp20 SAMPLES REACH BOTH AMPS: with the lines swapped the amp echoes the tone back
+- kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, fresh boot each, 35 s wait, `adspboot boot --amp --rec --rec-echo --swap-lanes --amp-addr ADDR --amp-db -102`: silent. AFE RX on SD1 (gpio11), TX on SD0 (gpio10). Outputs copied to the session scratchpad; battery 4454, 4440 mV.
+
+| run | baseline ch0 / ch1 rms | tone ch0 / ch1 rms, ch1 peak | after ch0 / ch1 rms |
+|---|---|---|---|
+| sp20a, 0x41 | 14658 / 0 | 15393 / 2288, 3277 | 2139 / 321 |
+| sp20b, 0x40 | 14847 / 0 | 15613 / 2287, 3277 | 1999 / 296 |
+
+- Observed: a -20 dBFS sine is peak 3277, rms 2317: ch1 matches. ch1 is 0 until the amp powers up, ~2300 during the tone, 0 from t=3.3 when the amp stops; ch0 (VPMON) is a steady ~15000 once the TX runs. pcm 488 periods, 0 underflows; PUP_DONE 3 ms, PLL_LOCK; no faults, no MISMATCH; sp13 check 0 samples still A5A5.
+- So the whole loop works: DSP -> gpio11 -> amp's ASPRX1 -> amp's TX -> gpio10 -> capture, on both amps. The data lines were swapped since sp2: gpio11 is the amp's input, gpio10 its output. That settles the guess in the sp19 entry, and sp16-sp19's zeros. (sp19b's 0x40 failure didn't recur.)
+- Not yet: no sound test with the swap: -102 dB only, tonight is quiet hours. Next, after 05:00 EST: `--amp-db -20` with `tools/sunfish-tone-detect.sh`, keeping the existing ceiling, no boost. Then make the swap the default and feed /dev/sunfish-audio to the ADSP. Boost, gain and redfin's NG_CFG and DRE differences only if the output stays quiet.
 
 ### 2026-10-30 21:40 sp19 pin watch: the amp drives gpio10, nothing drives gpio11: the data lines look swapped
 - kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, `adspboot boot --amp --rec --rec-echo --amp-addr 0x41 --amp-db -102 --pin-watch`, silent, boot 20261030-213155.log, 4455 mV. In function mode all four pins read 0, as expected. As inputs:

@@ -1,5 +1,5 @@
 # Smoothness
-**State:** 🟡 ~21 screen updates/s ceiling while swiping; present blit waits behind backboardd. **Updated:** 2026-10-27.
+**State:** 🟡 ~34 swaps/s in steady scrolling; the limit is 22-24 ms of CPU per frame in backboardd's render thread, 53 % of it in SweetMetal2. **Updated:** 2026-10-30.
 
 ## How to use
 - Bench: `tools/sunfish-fpsbench.sh TAG SECONDS` (BENCH_TIGHT=1); config matrix `tools/sunfish-cfgbench.sh`; timeline `sweettrace=1` + `tools/sunfish-timeline.py`. Details in [methods.md](../methods.md).
@@ -93,6 +93,23 @@ Kernels:
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 21:50 pc1: PC profile of the render thread: over half of its CPU is in our Metal bridge
+- kernel130 (xnu 0249, `kern.sweet_pcsample`), `CAMERA=1 tools/sunfish-test.sh -k work/kernel130/kernel.development.sweet pc1 sweetse9=2 sweetcampmic=2 sweetcpusample=1`, boot 20261030-214521.log, no reset. Settings list, ~75 s of long swipes. `tid 596 n 8000 user 7535 kernel 465 missed 0 waited 9500 ms`, no line gaps; backboardd pid 60. Webcam: Settings on screen during the capture. Tool: tools/sunfish-pc-hist.py.
+
+| image | samples | % |
+|---|---|---|
+| SweetMetal2 | 4234 | 52.9 |
+| QuartzCore | 1013 | 12.7 |
+| libvulkan_freedreno | 768 | 9.6 |
+| libsystem_malloc | 652 | 8.2 |
+| libsystem_platform | 479 | 6.0 |
+| kernel | 465 | 5.8 |
+| libobjc | 159 | 2.0 |
+| libsystem_pthread | 126 | 1.6 |
+
+- Top named: __platform_memmove 3.4 %, _tiny_malloc_from_free_list 1.2 %, CA::OGL::MetalContext::draw 0.9 %, CA::Render::Updater::prepare_layer0 0.8 %. SweetMetal2 pages show no names yet; spread flat, top pages 2.4 %.
+- Correction to Facts ("Most backboardd CPU time is in QuartzCore; the bridge and Turnip are small"): no longer true. At ~23 ms per frame, by arithmetic SweetMetal2 is ~12 ms, Turnip ~2 ms, QuartzCore ~3 ms. Sampling skews toward the end of interrupt-masked kernel sections. So the lever is ours to fix without QuartzCore RE. Naming the bridge functions next (research/notes/fps-bridge-profile.md).
 
 ### 2026-10-30 21:35 cs1/cs2: the time before the first submit is CPU work, 22-24 ms per frame; the ~3 s stalls were the bench
 - Boots with sweettrace=1 sweetcpusample=1: cs1 kernel128 (20261030-211909.log, 4454 mV), cs2 kernel129 sweetfb_2x=1 (20261030-212522.log, 4455 mV). Settings list: a = old bench, b and c = one long swipe `swipe 540 2100 540 300 15000` with no finger lift.

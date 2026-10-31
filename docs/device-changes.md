@@ -89,3 +89,4 @@ output in /var/local.
 - 2026-10-30 Camera.app prefs: Live Photo off and preserved (com.apple.camera.plist, backup .bak-lp): tools/sunfish-camera-prefs.sh.
 - 2026-10-30 /var/local/motion-dump.on (Compass raw recorder; 30 MB cap; delete to stop), /var/local/magcal.txt seeded from rec1 (work/magcal-rec1.txt; sensors.md dm12).
 - 2026-10-30 adspboot with --rec-echo 0x3700 + --sd0-noise, and the Metal bundle with bridge 0113 (M2V_SHADOW_DUMP, off when unset): tools/build-userland-linux.sh + flame-files.py put; tools/build-metal2-linux.sh + tools/sunfish-metal2-install.sh.
+- 2026-10-30 adspboot with --pin-watch and --swap-lanes installed; /var/local/sp17*.log, sp20*.out are test output: tools/build-userland-linux.sh + flame-files.py put.
