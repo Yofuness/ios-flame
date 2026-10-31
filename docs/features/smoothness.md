@@ -94,6 +94,18 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 02:35 m0/m1/m2: SWEET_DEADFILL=1 keeps the speed: 53 swaps/s; the stale clock isn't caused by it
+- kernel132 sweetswapbig=6 sweettrace=1 sweetcpusample=1, env before a fresh boot, boots 20261031-015720.log (m0), 021047 (m1), 022306 (m2), 0 hangs. Settings long swipe:
+
+| config | swaps/s | swap-to-swap p50 / p95 ms | 1st submit ms | 2nd submit ms | CPU ms per swap | GPU busy % |
+|---|---|---|---|---|---|---|
+| off | 33.3, 34.4 | 29.0 / 48.7, 29.0 / 31.4 | 26.0 | 0.57 | 10.1, 10.9 | 94-100 |
+| SWEET_DEADFILL=1 | 53.8, 52.7 | 18.2 / 26.8, 18.4 / 30.0 | 13.0, 13.2 | 0.57 | 14.2, 15.6 | 78-86 |
+| SWEET_DEADFILL=2 | no usable run: the bench got 1-118 swaps, the phone locked in some | - | - | - | - | - |
+
+- Earlier p1b for mode 2: 52.3, 54.4, first submit 8.8 ms. So mode 2's clear saves ~4 ms of GPU that isn't the limit now; the CPU is. Mode 1 has no held passes or clears, so it's the simpler choice: making it the default in the bridge. GPU busy 78-86 %: both CPU and GPU sit close to the 16.7 ms mark.
+- Clock: readings every ~36 s for ~8 min: all three configs alternate between the current time and older frames, including off: off showed 1:58 at real 2:01, 1:59 at 2:08, and webcam 2:06 at 2:09:41. m2 webcam :29 at 2:32. Phone `date` is right. Correction to the f1/f2 entry: mode 2 isn't the cause; f2's 3.5 min clean was too short. Alternating values suggest several surfaces in rotation for the status bar with old contents. Not tested: an older kernel, to see if 0250 or 0251 brought this.
+
 ### 2026-10-31 02:00 f1/f2: DEADFILL survey with a control: stale clock points at mode 2; Compass tears are capture artefacts
 - kernel132 sweetswapbig=6; f1 SWEET_DEADFILL=2 (20261031-012907.log), f2 env empty (20261031-014637.log). PNGs research/df2 (a_ mode 2, b_ control).
 - Compass: both modes: shots 1-2 clean, 3-5 torn; webcam clean. So flame-shot tears on moving content: the Compass "shear" in apps.md g1 was a capture artefact. Correction to that entry. Tips: black rectangles in the banner in both modes, webcam agrees: real, not mode 2. Photos: garbled thumbnails in both, webcam agrees: real or old files.
