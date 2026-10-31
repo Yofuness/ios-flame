@@ -34,6 +34,19 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:40 sp19 pin watch: the amp drives gpio10, nothing drives gpio11: the data lines look swapped
+- kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, `adspboot boot --amp --rec --rec-echo --amp-addr 0x41 --amp-db -102 --pin-watch`, silent, boot 20261030-213155.log, 4455 mV. In function mode all four pins read 0, as expected. As inputs:
+
+| pin | input with pull-down | pull-up check, ones of 256 |
+|---|---|---|
+| gpio10 | 209600 samples, 40543 ones, 56543 transitions | 46: pulled low against the pull-up, so something drives it |
+| gpio11 | 148992 samples, 0 ones, 0 transitions | 256: the pull-up works, nothing drives it |
+
+- Observed: `rec t=3.7 ch0 peak 1 zero 5119, ch1 peak 2048 zero 5118` right after gpio11 went back to its function: the only non-zero capture in all of sp15-sp19, so the capture path does read the gpio11 pad (guess: the pad's switch glitch).
+- Reading: with the SoC's pad as an input, something else toggles gpio10 while the amp's TX runs. Guess: that's the amp's SDOUT, and gpio11 is the amp's SDIN, the reverse of what we assumed since sp2. It explains sp16, sp17 (capture on an undriven pin) and sp18 (noise driven onto the amp's output, with contention; sp18's "follows" is not evidence). It also says every earlier playback went to the wrong pin, which fits "silent with no faults". Not yet shown: that the driver is the amp and not something else on the line.
+- sp19b at 0x40: rc 1, after "pin-watch: before" straight to "amp: power down", no PUP_DONE, no error line (20261030-213320.log): cause not known; sp18c at 0x40 ran fine.
+- Next: sp20 `--swap-lanes`: AFE RX on SD1 (gpio11), TX on SD0 (gpio10). Silent proof: echo at -102 dB. Audible after 05:00.
+
 ### 2026-10-30 21:30 Stock speaker uses SEC_TDM, not MI2S; gpio10 isn't proven as the amp input (research/notes/speaker-next3.md, no phone)
 - Observed (vendor.img, live.dts): speaker interface SEC_TDM_RX_0 (audio_platform_info_bolero_snd.xml:202), RX 2 ch, TX 4 ch, S32_LE, 48 kHz (mixer_paths_bolero_snd.xml:435-440); DT TDM group 0x9110/0x9111, ports 0x9010/0x9011, 12.288 MHz, data-delay 1 (live.dts:21127-21170). live.dts:20326-20330 (rx-lines 1, tx-lines 0), our basis for "SD0 in", describes a DAI the speaker doesn't use. No DT node links the amps to pins.
 - Observed: no enable pin or supply in the amp nodes; firmware isn't needed (stock voice-handset uses PCM Source ASP, redfin plays in bypass). Stock level is 17.5 dB gain and 0 dB, so sp18 at 0.5 dB and -20 dB was ~37 dB below stock. No VMON, IMON or VP value register in re/cs35/cs35l41.h, so I2C can't prove current flow.

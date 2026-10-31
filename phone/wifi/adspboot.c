@@ -115,6 +115,7 @@ static int rpc_on;
 #define REC_READS	4		/* sp7: --rec READ_V2 buffers after the playback pages, one page each */
 #define REC_BYTES	0x1000
 static int pcm_on, rec_on, rec_hex, rec_echo, lpi_slew;	/* sp15: rec_echo, lpi_slew */
+static int swap_lanes;	/* sp20: sp19 saw the amp drive gpio10, and nothing drive gpio11: play on SD1, capture on SD0 */
 static uint32_t pcm_buf_len = PCM_BUF;	/* sp7: + REC_READS pages with --rec, same mapping */
 static uint32_t pcm_sid = 0x1b21, pcm_shift = 1;
 static uint64_t pcm_pa, pcm_dsp;
@@ -1734,7 +1735,7 @@ static void afe_run(void)
 	case AFE_CLK_FC: afe_clock(AFE_SVC_CMD_SET_PARAM_V2, 1); break;
 	case AFE_CFG: {
 		uint8_t b[AFE_I2S_PL];
-		afe_i2s_pl(b, port, 1 /* SD0 */);
+		afe_i2s_pl(b, port, swap_lanes ? 2 /* SD1, gpio11 */ : 1 /* SD0 */);
 		afe_send(port, AFE_PORT_CMD_SET_PARAM_V2, b, sizeof(b));
 		break;
 	}
@@ -2337,7 +2338,7 @@ static void pcm_run(void)
 			if (!rec_go)
 				break;
 			uint8_t b[AFE_I2S_PL];
-			afe_i2s_pl(b, AFE_PORT_SEC_MI2S_TX, 2 /* SD1 */);
+			afe_i2s_pl(b, AFE_PORT_SEC_MI2S_TX, swap_lanes ? 1 /* SD0, gpio10 */ : 2 /* SD1 */);
 			pcm_send(APR_SVC_AFE, AFE_PORT_SEC_MI2S_TX, AFE_PORT_CMD_SET_PARAM_V2, b, sizeof(b), 0);
 			return;
 		}
@@ -3199,6 +3200,8 @@ int main(int argc, char **argv)
 			rec_on = 1;
 		else if (!strcmp(argv[i], "--rec-echo"))	/* sp15: TX1 = VPMON, TX2 = ASPRX1 (amp echoes SD0 on SD1) */
 			rec_echo = 1;
+		else if (!strcmp(argv[i], "--swap-lanes"))	/* sp20: needs --rec, which also sets up gpio11 */
+			swap_lanes = 1;
 		else if (!strcmp(argv[i], "--lpi-slew"))	/* sp15: LPI slew-rate regs as stock bolero */
 			lpi_slew = 1;
 		else if (!strcmp(argv[i], "--sd0-noise") && i + 1 < argc) {	/* sp18: gpio10 from an LFSR, 3 bursts of <= 1 s; needs --amp */
@@ -3288,6 +3291,10 @@ int main(int argc, char **argv)
 	}
 	if (rec_on && (!pcm_on || !amp_on)) {	/* sp7 */
 		fprintf(stderr, "adspboot: --rec needs --pcm --amp\n");
+		return 2;
+	}
+	if (swap_lanes && (!rec_on || pw_on || sd0_ms)) {	/* sp20 */
+		fprintf(stderr, "adspboot: --swap-lanes needs --rec, not with --pin-watch or --sd0-noise\n");
 		return 2;
 	}
 	if (rec_echo && !rec_on) {	/* sp15 */

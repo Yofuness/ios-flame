@@ -48,6 +48,20 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:40 B44 all-sizes dump: the buffer-backed glyphs on the lock screen are clean; the garbled buttons never came through this path
+- kernel128, bridge 0113 M2V_SHADOW_DUMP=all, backboardd (pid 287), 20261030-213452.log. 5 dumps in research/b44/all/, reshaped at the logged row on the PC, with t0 and t+5 s non-zero counts equal:
+
+| size | row | off | mtlfmt | route | image |
+|---|---|---|---|---|---|
+| 59x41 | 64 | 64 | 1 (A8) | wider-alias | "100", clean (battery) |
+| 32x40 | 64 | 0 | 30 (RG8) | wider-alias | lightning bolt, clean |
+| 96x96 | 192 | 0 | 30 (RG8) | wider-alias | spinner, clean |
+| 23x23 | 64 | 0 | 30 (RG8) | wider-alias | not viewed |
+| 1x1 | 32 | 0 | 80 (BGRA8) | shadow | one pixel |
+
+- Observed: none is a flashlight or camera glyph, though the lock screen shows both garbled in research/b44/lock-all.png. Caveat: only the first texture of each size is dumped.
+- Reading: the row values reaching the bridge look right for these, so the bad glyphs are on another route. Guess: textures with their own image (Storage::Image, replaceRegion or a blit), which never pass the dump. tx1 logged replaceRegion 8 in backboardd, 3 in SpringBoard. Next: dump on that route.
+
 ### 2026-10-30 20:50 B44/B29 re-read (no phone): the glyphs are sheared by a wrong row distance; the offset lead is dead
 - Observed (flame-shot PNGs, work/shots/tx1-lock.png, tx1-cc.png; research/notes/garbled-b44.md): row-to-row correlation peaks at dx=15-16 px per row (0.948, 0.960), 31-32 per 2 rows; about 16 texels per row at CA scale. Control Center 15, Mail 8 and 15-16, Compass 2-4; the shift differs between images. Webcam frames are rotated 90 deg, so "vertical stripes" are horizontal on the panel: use flame-shot for this bug.
 - Observed: across the 40 most frequent "B44 fill" line shapes, off%texel = 0, off%16 = 0, path direct, rowlen = row/texel. All 33561 alias lines: off%64 = 0, row%64 = 0. So the plan's "offset % texel" check is answered: not it.
