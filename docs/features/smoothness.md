@@ -94,6 +94,18 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:50 n1: @2x + fast bridge: ~41 swaps/s, CPU 14 ms per swap, the frame fits a tick on average but misses it often
+- kernel130 sweetfb_2x=1 sweettrace=1 sweetcpusample=1, bundle 0114 + LTO, boot 20261030-223823.log, 4455 mV, no reset, no DeviceLost. Settings list, one 15 s swipe, window 5-15 s, no gaps > 100 ms:
+
+| run | swaps/s | ticks between swaps 0 / 1 / 2 / 3+ % | swap-to-swap p50 / p95 ms | swap -> first submit p50 / p95 ms | GPU per frame ms | CPU ms per swap | GPU busy % |
+|---|---|---|---|---|---|---|---|
+| f1 | 39.9 | 2 / 54 / 37 / 7 | 20.87 / 42.27 | 20.61 / 41.99 | 12.47 | 13.4 | 57, 57 |
+| f2 | 40.8 | 3 / 54 / 35 / 7 | 19.70 / 40.32 | 19.41 / 39.81 | 12.52 | 14.0 | 61, 55 |
+| f3 | 41.4 | 2 / 62 / 29 / 9 | 18.69 / 42.02 | 18.37 / 41.35 | 12.53 | 14.5 | 59, 64 |
+
+- Observed: compare cs2 (old bridge at @2x): 38 swaps/s, 22-23 ms CPU per swap. CPU + GPU p50 26.5-27.3 ms per frame. Swap -> first submit stays ~5 ms over the CPU time, p95 40+ ms. Present calls per tick 0.65-0.68. Lock screen still has the red strip, status bar missing.
+- Guess: mean CPU is under the tick, so the misses are variance: frames landing on an A55 (A55 20-30 % of the thread's CPU) run slower and miss. If so, strict A76 placement could move many 2-tick frames to 1 tick. Patch being written. Not known: whether a miss comes from CPU, or from the wait for the GPU to finish. The full canvas stays capped by its 26.5 ms GPU per frame.
+
 ### 2026-10-30 22:45 ml1: bridge 0114 + LTO: CPU per swap ~24 -> ~18 ms, swaps/s unchanged: at full canvas the GPU now caps the rate
 - kernel130 sweettrace=1 sweetcpusample=1, boot 20261030-222005.log, 4454 mV, bundle UUID 4C4C4425 confirmed on the phone. Settings list, one 15 s swipe, window 5-15 s:
 
