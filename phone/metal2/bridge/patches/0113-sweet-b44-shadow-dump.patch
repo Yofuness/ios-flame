@@ -1,0 +1,104 @@
+--- a/crates/metal2vulkan-runtime/src/buffer_texture.rs
++++ b/crates/metal2vulkan-runtime/src/buffer_texture.rs
+@@ -1262,6 +1262,8 @@
+             (Some(_), false) => "staging",
+         };
+         shadow_fill_log(self.texel_bytes, aspects, width, layout, at, path, &regions);
++        // 0113 (B44): the texels' bytes of one chosen extent, for the PC (shadow_dump).
++        shadow_dump(&self.buffer, self.texel_bytes, width, layout);
+         let (bytes, tracked) = self.buffer.tracked(layout.offset..layout.end());
+         Ok(ShadowCopies {
+             source: ShadowSource::Bytes {
+@@ -1628,6 +1630,92 @@
+     }
+ }
+ 
++/// 0113 (B44): `M2V_SHADOW_DUMP=WxH`, read once: the first shadow fill of that extent over CPU
++/// bytes writes row pitch x rows of them, as of now to /var/local/b44-WxH-ROW-t0.bin and as of 5 s
++/// later to /var/local/b44-WxH-ROW.bin (clients run as mobile: both pre-created, mode 666), and
++/// logs one line as 0109's. The later read holds the buffer only weakly: the frontend runs a
++/// no-copy deallocator as its object goes, whatever the runtime's handles, so a clone would not
++/// keep those pages; `write` returns EFAULT for pages gone, where a read here would crash.
++fn shadow_dump(buffer: &Buffer, texel_bytes: u64, width: u64, layout: &BufferLayout) {
++    use std::io::Write;
++    use std::sync::atomic::{AtomicBool, Ordering};
++    static WANTED: std::sync::OnceLock<Option<(u64, u64)>> = std::sync::OnceLock::new();
++    static DONE: AtomicBool = AtomicBool::new(false);
++    let wanted = WANTED.get_or_init(|| {
++        let value = std::env::var("M2V_SHADOW_DUMP").ok()?;
++        let (w, h) = value.split_once('x')?;
++        Some((w.parse().ok()?, h.parse().ok()?))
++    });
++    if *wanted != Some((width, layout.rows)) {
++        return;
++    }
++    let Some(contents) = buffer.contents() else {
++        return;
++    };
++    if DONE.swap(true, Ordering::Relaxed) {
++        return;
++    }
++    let (rows, row, offset) = (layout.rows, layout.row_pitch, layout.offset);
++    // The last row may end at its row bytes, short of a whole pitch, at the buffer's end.
++    let size = (row * rows).min(buffer.length().saturating_sub(offset)) as usize;
++    let mut first = vec![0u8; size];
++    // SAFETY: the texture holds the buffer, and offset + size lies inside its length.
++    unsafe {
++        let from = contents.as_ptr().add(offset as usize);
++        std::ptr::copy_nonoverlapping(from, first.as_mut_ptr(), size);
++    }
++    let weak = buffer.downgrade();
++    let thread = std::thread::Builder::new().name("m2v-b44-dump".into());
++    let _ = exit_guard::spawn(thread, move || {
++        std::thread::sleep(std::time::Duration::from_secs(5));
++        let name = format!("/var/local/b44-{width}x{rows}-{row}");
++        let early = shadow_dump_write(&format!("{name}-t0.bin"), first.as_ptr(), size);
++        let late = match weak.upgrade() {
++            Some(buffer) => match buffer.contents() {
++                // SAFETY: only forms the address; `write` checks the pages behind it.
++                Some(p) => shadow_dump_write(
++                    &format!("{name}.bin"),
++                    unsafe { p.as_ptr().add(offset as usize) },
++                    size,
++                ),
++                None => "no contents".to_string(),
++            },
++            None => "buffer gone".to_string(),
++        };
++        let line = format!(
++            "MTL2[{} {}]: B44 dump fmt {texel_bytes}B {width}x{rows} row {row} off {offset} bytes {size} {name}.bin: {late}; -t0.bin: {early}\n",
++            std::process::id(),
++            std::env::args().next().unwrap_or_default()
++        );
++        for path in ["/dev/console", "/var/local/mtl2.log"] {
++            if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
++                let _ = file.write_all(line.as_bytes());
++            }
++        }
++    });
++}
++
++/// 0113 (B44): `size` bytes at `from`, which may no longer be mapped, into the file at `path`;
++/// "ok" or what went wrong.
++fn shadow_dump_write(path: &str, from: *const u8, size: usize) -> String {
++    use std::os::fd::AsRawFd;
++    let opened = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path);
++    let file = match opened {
++        Ok(file) => file,
++        Err(error) => return format!("open: {error}"),
++    };
++    let mut done = 0;
++    while done < size {
++        // SAFETY: `write` only reads the range, and reports unmapped pages as EFAULT.
++        let wrote = unsafe { libc::write(file.as_raw_fd(), from.wrapping_add(done).cast(), size - done) };
++        if wrote <= 0 {
++            return format!("write at {done}: {}", std::io::Error::last_os_error());
++        }
++        done += wrote as usize;
++    }
++    "ok".to_string()
++}
++
+ /// 0110 (B44): one line per distinct (texel size, aspects, extent, row, offset % texel, path)
+ /// of a shadow fill, the first 64, into /dev/console and /var/local/mtl2.log as 0109's are:
+ /// the texels' offset in the `VkBuffer` and its residues, the slices' pitch and each region's

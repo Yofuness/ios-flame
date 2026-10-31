@@ -48,6 +48,13 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:50 B44/B29 re-read (no phone): the glyphs are sheared by a wrong row distance; the offset lead is dead
+- Observed (flame-shot PNGs, work/shots/tx1-lock.png, tx1-cc.png; research/notes/garbled-b44.md): row-to-row correlation peaks at dx=15-16 px per row (0.948, 0.960), 31-32 per 2 rows; about 16 texels per row at CA scale. Control Center 15, Mail 8 and 15-16, Compass 2-4; the shift differs between images. Webcam frames are rotated 90 deg, so "vertical stripes" are horizontal on the panel: use flame-shot for this bug.
+- Observed: across the 40 most frequent "B44 fill" line shapes, off%texel = 0, off%16 = 0, path direct, rowlen = row/texel. All 33561 alias lines: off%64 = 0, row%64 = 0. So the plan's "offset % texel" check is answered: not it.
+- Correction to tx1 ("every row%64==0 is an alias"): `640x358 A8 off 64 row 640` is a shadow, and so is a 4-byte `121x62 off 64 row 512`.
+- Guess (~50 %): the reader's row distance is larger than the true one, with the fault in the bytes in the no-copy buffer or the row value handed to Metal, not Turnip's copy. Undoing the shear offline at P=88-120 texels gave only fragments, so the model is incomplete. Which texture is still unknown; candidates by size only: 97x76 RGBA8 row 416, 92x64 row 368, 78x63 row 320.
+- Next: one-shot byte dump in the bridge (M2V_SHADOW_DUMP=WxH), reshaped on the PC: clean at the logged row = GPU side; clean only at another row = row value wrong; garbled at every row = CPU side before Metal.
+
 ### 2026-10-30 19:30 bl1: B47 not reproducible: the Control Center blur is there without any Turnip option
 - bl1a (kernel126, no TU_DEBUG knob, backboardd restarted, 25 s): CC shows the blurred wallpaper; Utilities folder panel translucent with blurred icons/dock. gm0's "flat blue, no blur" was probably the first CC open before the wallpaper/blur was ready (guess).
 - bl1b: per-process knob /var/local/mtl2-tu-debug.backboardd = sysmem (port fc0fef7; bridge log "MTL2[415 backboardd]: TU_DEBUG=sysmem" only for backboardd): identical look; fps (fpsbench 30 s home swipes) 20.3 -> 19.1 swaps/s, 19.4 -> 18.3 panel updates/s (-6%, one run each). Knob removed. B44 garbled CC tiles present in both.

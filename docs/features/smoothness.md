@@ -94,6 +94,25 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:55 @2x A/B (kernel129, xnu 0248, sweetfb_2x=1): GPU time more than halves, swaps/s stay: GPU is NOT the limit in Settings
+- Boot: `CAMERA=1 tools/sunfish-test.sh -k work/kernel129/kernel.development.sweet fb2x sweetse9=2 sweetcampmic=2 sweetfb_2x=1`, 4456 mV, log 20261030-203804.log, MobileGestalt cache rebuilt under @2x (8013 B), then restored (8012 B). No reset, no DeviceLost, no fallback lines. "swap 1 layer 0 surface 2 750x1624 ... frames now scaled to fit by the GPU". Upscale works, full screen, touch right (Settings icon, Notes).
+- Correction to the means in the 20:35 table: they include the partial first and last 5 s windows. Full-motion windows, swaps/s and backboardd GPU ms/submit, from the same runs:
+
+| Screen | canvas | full-motion swaps/s | GPU ms/submit |
+|---|---|---|---|
+| Settings list | 1125x2436 | 34.6 31.8 33.0; 34.2 37.0 37.2 34.4 | 13.1-15.4 |
+| Settings list, RT on | 1125x2436 | 35.8 34.8; 37.6 43.2 41.2 | 14.3-14.6 |
+| Settings list | 750x1624 | 38.6 35.6 37.4; 37.2 36.0 37.2; 36.4 31.4 34.0 33.4 | 6.3-6.5 |
+| Home | 1125x2436 | 25.8 29.8 26.6; 28.0 27.0 25.2 24.0 | 13.8-21.2 |
+| Home, RT on | 1125x2436 | 27.6 26.2 25.8 25.8; 25.8 29.6 28.0 | 14.3-20.1 |
+| Home | 750x1624 | 26.2 23.6 34.6 29.6 28.8; 30.0 28.4 28.4 | 5.1-8.1 |
+
+- Observed: GPU ms/submit 14.4 -> 6.4 in Settings, 17 -> 6 on Home; GPU busy 65-75 -> 40 %, 36 -> 18 %. Settings swaps/s unchanged (~36); Home at most +2-3, inside the noise. By the stop rule @2x is a dead end for fps.
+- Inference: the swap rate is not set by GPU cost. Left: CA CPU per frame, tick waits, or the bench itself (touch events feed the scroll; swipes have gaps while a new flame-cmd process starts, so 5 s windows hold idle time). Cheap next check: swap-to-swap histogram from sweettrace timeline and the injector's event rate.
+- Visual at @2x: Home, Settings, Control Center, Notes layouts intact; text looks a little soft on the webcam. Lock screen broken: black wallpaper, a red strip over the status bar with digits "45025538", status-bar clock and Wi-Fi missing. "Sounds & Haptics" shows as "Sounds". So @2x stays opt-in and off. It still halves GPU busy, which may matter for battery (O14), not measured.
+- Fresh GPU trace (gt2) failed: MESA_GPU_TRACES reached backboardd (mtl2.log) but the file stayed 0 bytes through ~6 restarts; only the first run wrote (9.4 MB at lock, 60 MB lock -> Camera; not Home, not kept). Guess: buffered output flushes only under load or first-run state. Not retried: copies vs passes matters less now the GPU isn't the limit.
+- Phone restored: kernel128 everyday args, 1125x2436 read back, mtl2-env empty. /var/local/turnip-backboardd.log was deleted (recreate mode 666 for a trace). k128e booted once on the @2x plist before the restore (no `cmp` on the phone), k128f after.
+
 ### 2026-10-30 20:35 Ladder (a): per-screen table + Reduce Transparency A/B: no swap gain from no-blur; GPU is 15-20 ms/submit, not 25-30
 - kernel128, no reboot, boot log 20261030-200443.log (markers h1, s1, r1, c1, H1, S3, C3...). 20 s of motion, H key before each run, 2 runs per row, swaps > 0 in all. RT toggled by taps: Settings > Accessibility > Display & Text Size > Reduce Transparency; restored off. 5-6 samples of 5 s per run, the first partial.
 

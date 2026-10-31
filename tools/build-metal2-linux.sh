@@ -27,7 +27,7 @@ ln -sf "$ROOT/tools/linux-ios-cc" "$W/bin/ios-cc"
 printf '#!/bin/sh\nIOS_CLANG=clang++ exec "%s" "$@"\n' "$ROOT/tools/linux-ios-cc" > "$W/bin/ios-c++"
 chmod +x "$W/bin/ios-c++"
 for t in ar ranlib nm strip; do ln -sf "$(command -v llvm-$t)" "$W/bin/aarch64-apple-darwin-$t"; done
-export PATH="$W/bin:$PATH"
+export PATH="$W/bin:$(dirname "$CARGO"):$PATH"	# rustup's rustc, not a system one without the iOS target
 CC=$W/bin/ios-cc
 [ -x "$W/venv/bin/meson" ] || { python3 -m venv "$W/venv" && "$W/venv/bin/pip" install -q meson mako pyyaml packaging; }
 
