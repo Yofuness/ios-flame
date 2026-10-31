@@ -32,7 +32,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [USB network](docs/features/usb-network.md) | ✅ | Ethernet 192.168.7.2, live kernel log; boot to SSH 16-18 s |
 | [SSH](docs/features/ssh.md) | ✅ | dropbear + dash + toybox; boot to SSH 16-18 s |
 | [Display](docs/features/display.md) | ✅ | 1080x2340, GPU-composited (Metal → Turnip), vsync-paced; apps rotate to landscape and back on command (`R 3`/`R 1`), touch follows; auto-rotate waits for sensors |
-| [Smoothness](docs/features/smoothness.md) | 🟡 | ~34 swaps/s in steady scrolling; the limit is 22-24 ms of CPU per frame in backboardd's render thread, half of it in our Metal bridge (2026-10-30) |
+| [Smoothness](docs/features/smoothness.md) | 🟡 | ~34 swaps/s in steady scrolling; opt-in big-core bind (kernel131) gives even pacing, and 51 swaps/s at the opt-in @2x canvas (2026-10-30) |
 | [Haptics](docs/features/haptics.md) | ✅ | iOS haptics work: switch taps pulse the motor (DRV2624 via hapticd, launchd job, `HAPTICS=1` boot); feel check by the user open |
 | [Brightness](docs/features/brightness.md) | ✅ | Control Center slider drives the panel brightness (DCS 0x51, `sweetbl=2`) |
 | [GPU](docs/features/gpu.md) | ✅ | Adreno 618 at 565 MHz; recovers from GPU hangs (~26 ms) |

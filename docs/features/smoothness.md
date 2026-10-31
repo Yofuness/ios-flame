@@ -1,5 +1,5 @@
 # Smoothness
-**State:** 🟡 ~34 swaps/s in steady scrolling; the limit is 22-24 ms of CPU per frame in backboardd's render thread, 53 % of it in SweetMetal2. **Updated:** 2026-10-30.
+**State:** 🟡 ~34 swaps/s in steady scrolling, capped by GPU 26.5 ms per frame; opt-in big-core bind (kernel131, `sweetswapbig=6`) gives even pacing, and 51 swaps/s at the opt-in @2x canvas. **Updated:** 2026-10-30.
 
 ## How to use
 - Bench: `tools/sunfish-fpsbench.sh TAG SECONDS` (BENCH_TIGHT=1); config matrix `tools/sunfish-cfgbench.sh`; timeline `sweettrace=1` + `tools/sunfish-timeline.py`. Details in [methods.md](../methods.md).
@@ -93,6 +93,28 @@ Kernels:
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-30 23:00 a1/a2: render thread bound to one A76 (xnu 0250, kernel131): @2x 51 swaps/s; full canvas rate unchanged but pacing even
+- `kern.sweet_ui_swapbig` live, boots 20261030-225151.log (a1), 20261030-225632.log (a2), 4439 and 4454 mV, no reset, no DeviceLost, no visible hitch. Settings list, one 15 s swipe each, window 5-15 s. `_pri` 54 throughout (non-RT), `_skip_rt` 0, `_binds` +1 per bound run, `_a55` +0 or +1. Warm-up runs left out.
+
+| canvas | run | mode | swaps/s | ticks 0 / 1 / 2 / 3+ % | swap-to-swap p50 / p95 ms | GPU per frame ms | thread CPU ms: A55 / A76 | GPU busy % |
+|---|---|---|---|---|---|---|---|---|
+| full | r1 | off | 34.1 | 6 / 66 / 17 / 11 | 22.8 / 64.2 | 26.6 | 4.9 / 9.7 | 97-99 |
+| full | r2 | CPU 6 | 34.4 | 0 / 100 / 0 / 0 | 29.0 / 31.5 | 26.5 | 0.0 / 11.0 | 97-99 |
+| full | r3 | off | 34.1 | 4 / 74 / 13 / 9 | 26.2 / 60.1 | 26.5 | 4.0 / 9.9 | 96-99 |
+| full | r4 | CPU 6 | 34.4 | 0 / 100 / 0 / 0 | 29.0 / 31.3 | 26.5 | 0.2 / 6.6 | 98-100 |
+| full | r5 | CPU 7 | 34.3 | 0 / 100 / 0 / 0 | 29.2 / 31.3 | 26.5 | 0.0 / 10.0 | 97-100 |
+| full | r6 | off | 34.5 | 7 / 65 / 18 / 11 | 21.3 / 58.5 | 26.5 | 5.0 / 10.5 | 97-99 |
+| @2x | r1 | off | 40.0 | 3 / 59 / 27 / 12 | 20.2 / 50.8 | 12.6 | 6.0 / 13.9 | 57-60 |
+| @2x | r2 | CPU 6 | 50.0 | 7 / 65 / 27 / 0 | 18.1 / 32.0 | 12.6 | 0.4 / 14.6 | 65-73 |
+| @2x | r3 | off | 44.6 | 5 / 63 / 24 / 8 | 18.5 / 41.5 | 12.5 | 5.0 / 12.6 | 63-65 |
+| @2x | r4 | CPU 6 | 51.8 | 9 / 65 / 25 / 0 | 17.9 / 31.7 | 12.6 | 0.5 / 14.3 | 65-75 |
+| @2x | r5 | CPU 7 | 51.5 | 7 / 70 / 23 / 0 | 17.5 / 32.2 | 12.5 | 0.0 / 11.3 | 73-74 |
+| @2x | r6 | off | 45.2 | 8 / 61 / 24 / 8 | 18.5 / 41.1 | 12.5 | 2.5 / 9.8 | 61-66 |
+
+- Observed: the guess held: A55 share goes to ~0, and 3+ tick gaps go from 8-12 % to 0 on @2x and from 9-11 % to 0 on full. @2x: 40-45 -> 50-52 swaps/s. Full: rate unchanged, but swap-to-swap p95 58-64 -> 31 ms: much even frame pacing. Binding didn't make the thread wait in these runs. Thread CPU numbers swing between windows; they're rough.
+- Reading: the full canvas is now plainly GPU-capped: GPU busy 97-100 % and a flat 29 ms per swap. Earlier "no gain from GPU clocks" was measured when the CPU capped the rate, so worth retrying. @2x still has ~25 % 2-tick gaps. The tick column for bound full-canvas runs reads 1 tick at 29 ms apart; the tool's bins look off at that spacing, so trust the ms columns.
+- Not tested: sleep/wake, backboardd restart, app opens, camera with the thread bound; if CA changes its policy to realtime after binding, an assert could panic.
 
 ### 2026-10-30 22:50 n1: @2x + fast bridge: ~41 swaps/s, CPU 14 ms per swap, the frame fits a tick on average but misses it often
 - kernel130 sweetfb_2x=1 sweettrace=1 sweetcpusample=1, bundle 0114 + LTO, boot 20261030-223823.log, 4455 mV, no reset, no DeviceLost. Settings list, one 15 s swipe, window 5-15 s, no gaps > 100 ms:
