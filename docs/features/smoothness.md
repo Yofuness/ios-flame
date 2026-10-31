@@ -94,6 +94,12 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:40 gt3: the fixed GPU trace works: five draws with one shader are about half of the draw time
+- turnip 0109, fresh boots, research/gt3-pass.log (18.8 MB: boot + 20 s Settings swipe), research/gt3-draw.log (122 MB, with TU_SWEET_DRAW_TRACE=1: boot, launch, 5 s swipe). No fopen failure, the file grows with flush. Traces include boot and app launch, and the draw trace inflates times (1125x2436 pass mean 22.46 ms against 9.98): shares only.
+- Pass log: 1125x2436 passes n=420, mean 9.98 ms across idle and motion, 44 bins, load 0.39 ms, store 0.48, binning 0.13. draw_ib_gmem 4296.7 of 4455.9 ms of render-pass time. copy_buffer_to_image 7.2 per frame, 1.77 ms per frame (p50 0.18 ms in a frame buffer). So copies are a small part, not 31 % as the gt1 trace suggested on Oct 24.
+- Draw log: draw spans 2156 ms over 325082 spans. fs f8357eea3897 + vs 227c3411bdc9: 40356 spans, 1130.7 ms (52 %), mean 28 us; in draw indices 0-4 of the pass (5 draws replayed in 44 bins). Next: fs 42c74821f542 199.4 ms, fs 666966cbf987 196.0 ms, fs 780adfdf3ada 102.0 ms. Draw spans cover ~9 of 22 ms per traced pass: the rest isn't explained. Analysis in research/notes/fps-gpu-draws.md.
+- The turnip/shim bundle with the trace fix stays installed; off without the variables. Tool takes TOP as a plain number.
+
 ### 2026-10-31 00:30 m1: the slow mode comes from restarting backboardd; a fresh boot gets the fast one
 - kernel131 sweetswapbig=6 sweettrace=1 sweetcpusample=1, boots 20261031-001444.log, 20261031-002157.log, 4455 and 4454 mV, no hang, no DeviceLost. Settings long swipe:
 
