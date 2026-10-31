@@ -94,6 +94,10 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 03:30 pc3: profile of the render thread with the everyday setup: flat
+- kernel132 sweetswapbig=6 sweetcpusample=1, bundle with dead fill mode 1, boot 20261031-031919.log, 4454 mV, no reset. `tid 582 n 8000 user 7615 kernel 385 missed 0`. research/notes/pc3-hist.txt. Images: SweetMetal2 47.7 %, Turnip 11.7, QuartzCore 10.9, malloc 10.1, libsystem_platform 6.5, kernel 4.8, libobjc 4.0. Functions: sys_dcache_flush 4.5, draw_resident 3.4, memmove 2.4, settle_draw 2.1, unfair lock 1.7 + 1.0, tiny malloc 1.6, then all under 1.2.
+- Reading: no single target left: at ~14 ms per frame the flush is ~0.6 ms, malloc ~1.4 ms. Candidates stay: flush off the thread, a Rust thread-local allocator, redfin 0130-0137, unchanged-draw fast path.
+
 ### 2026-10-31 03:20 h1: dead fill mode 1 is the bridge's default: 53 swaps/s with a clean survey
 - Bundle with mode 1 as default (SWEET_DEADFILL unset = 1, 0 off) and the two audit fixes, kernel132 sweetswapbig=6, boot 20261031-023756.log, 4440 mV. Settings long swipe: 53.5 / 52.8 swaps/s, swap-to-swap p50 18.67 / 18.68, p95 22.90 / 23.66 ms, CPU per swap 11.0 / 16.5 ms on A76, GPU busy 77-87 %. DF mode1 dropped 92 -> 9246, 95-215 per s in scrolls; cleared and held 0. So the fixes don't hurt it. Home fpsbench with pauses: 35.2 swaps/s (not a steady load).
 - Survey, research/df3: lock, Home, Today, Settings + subpage, Calculator, Notes, Clock, Mail, Files, Reminders, Calendar fine. Control Center fine, with a red blob at the bottom on the panel (probably the Music icon blurred). Safari top half black on a GitHub page: not told apart from content. Maps no tiles, Weather no data: probably network or location, unchecked. Open and close frames saved, mostly unread.
