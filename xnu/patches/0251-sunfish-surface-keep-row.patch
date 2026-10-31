@@ -1,0 +1,46 @@
+From a003f484cf6e074bc239c87c8fdb204343f6e11f Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 31 Oct 2026 00:30:51 -0400
+Subject: [PATCH] sunfish: surfaces from a recorded key set keep their explicit
+ row (B44/B29)
+
+---
+ iokit/Kernel/arm/SweetSurface.cpp | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index c1bbd16..ef98322 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -481,7 +481,27 @@ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
+ 		PE_parse_boot_argn("sweetsurfalign", &v, sizeof(v));
+ 		row_align = (v & (v - 1)) == 0 ? v : 0;
+ 	}
+-	if (row_align > 1 && (one_plane || props->getObject("IOSurfacePlaneInfo") == NULL)) {
++	/*
++	 * 0251: a surface created from a recorded key set (at most 9 keys, QuartzCore iosurface_keys_allow_list) with
++	 * an explicit row keeps that row: CA's archive decoder copies a recorded blob and never reads the row back,
++	 * so a rounded row shears the image (B44/B29). boot-arg sweetsurfkeep=0: round them too.
++	 */
++	static uint32_t row_keep = 0xffffffffu;
++	if (row_keep == 0xffffffffu) {
++		uint32_t v = 1;
++		PE_parse_boot_argn("sweetsurfkeep", &v, sizeof(v));
++		row_keep = v;
++	}
++	bool keep_row = row_keep != 0 && props->getObject("IOSurfaceBytesPerRow") != NULL && props->getCount() <= 9;
++	if (props->getCount() <= 9) {
++		static int kept_logged;
++		if (kept_logged < 64) {
++			kept_logged++;
++			IOLog("SWEET SURF: %u keys %ux%u fmt 0x%x asked row %u%s\n", props->getCount(), s->width, s->height,
++			    s->pixelFormat, s->bytesPerRow, keep_row ? " kept" : "");
++		}
++	}
++	if (!keep_row && row_align > 1 && (one_plane || props->getObject("IOSurfacePlaneInfo") == NULL)) {
+ 		s->bytesPerRow = (s->bytesPerRow + row_align - 1) & ~(row_align - 1);
+ 	}
+ 	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
+-- 
+2.56.0
+
