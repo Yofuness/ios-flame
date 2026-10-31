@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:20 sp17 prepared (not run): sp16's control was probably off, so "SD1 is dead" does not follow
+- Observed: amp_txr sets only PWR_CTRL2 mask 0x3000 (VMON, IMON), and cs_power_down zeroes the register first; sp8 read back 0x3011 against reset 0x3321. So sp16's VPMON source on TX1 likely had its monitor off. sp16's read-back was not logged.
+- Guess: PWR_CTRL2 bit 8 = VPMON_EN, 9 VBSTMON_EN, 10 TEMPMON_EN (from memory; no Linux source on disk), and an off monitor reads 0. SD1 stays suspect anyway: sp8 read exact zeros with VMON/IMON on, though on 0x40; stock tx-lines = 0.
+- Change: --rec-echo now sets mask and value 0x3700 (adspboot; built, not installed). Run with the sp16 flags, `--amp-addr 0x41 --amp-db -102`: silent. Want read-back 0x37xx. ch0 non-zero + ch1 ~2300 rms: SD0 good, fault is amp output or speaker. ch0 non-zero + ch1 zero: amp gets silence. Both zero: SD1 dead or source reads 0, go to SD0 noise injection (research/notes/speaker-next2.md).
+- Pixel 5 port: nothing new for this question (no audio commits in its last 30; QUIN TDM on other pins).
+
 ### 2026-10-30 16:05 U11: AIRPODS PLAY MUSIC (the user, kernel127, phone unplugged)
 - The user connected AirPods and music played: the iOS sound path (SunfishAudio/VirtualAudio, mediaserverd) works over Bluetooth A2DP. First sound out of the port.
 

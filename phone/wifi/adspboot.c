@@ -2983,6 +2983,8 @@ int main(int argc, char **argv)
 	if (rec_echo) {	/* sp15: amp_txr[1] / [2] are ASP_TX1_SRC / ASP_TX2_SRC */
 		amp_txr[1].val = 0x28;
 		amp_txr[2].val = 0x08;
+		/* sp17: the VPMON control needs its monitor on: PWR_CTRL2 bits 8-10 = VPMON, VBSTMON, TEMPMON */
+		amp_txr[0].mask = amp_txr[0].val = 0x3700;
 	}
 	if (rec_on)
 		rec_lead = REC_LEAD_PERIODS;
