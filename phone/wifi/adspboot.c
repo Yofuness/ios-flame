@@ -32,6 +32,7 @@
  *                     hj5: --swr-mbhc SECONDS [--swr-mbhc-unmask]: S3 WCD937x mech plug poll on top of --swr-init d
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
+ *                     sp18: --sd0-noise SECS (with --amp, no boost): DSP silent, gpio10 driven from an LFSR, 3 bursts
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
@@ -62,6 +63,7 @@
 #include <time.h>
 #include <signal.h>
 #include <math.h>
+#include <pthread.h>
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
@@ -1494,8 +1496,102 @@ static void lpi_slew_set(void)
 	}
 }
 
+/* sp18: --sd0-noise: take the DSP out of the path (research/notes/speaker-next2.md Exp 2). While the AFE runs BCLK/LRCLK,
+ * gpio10 becomes a GPIO output driven from a 16-bit LFSR by a thread, so the main loop keeps refilling the PCM and
+ * polling IRQ1. Each burst is capped by wall clock and ends low; low stays through the gaps until lpi_restore.
+ * A constant level is no DC at the amp: all 0 = 0, all 1 = -1 LSB in two's complement.
+ * Bit layout: [9] OE as hakios mic_sm7150.c:511 and headphone-jack.md, but redfin 0952 calls [9] the value and in/out
+ * bit 1 the enable: NOT proven here, so the read-back must match and the pin loopback is printed. */
+#define SD0_CFG			(LPI_PA + 0x1000u * 10)
+#define SD0_IO			(SD0_CFG + 4)	/* bit 1 out, bit 0 in */
+/* func 0 (GPIO), 8 mA as the active state, pull-down, bit 9. hakios: bit 9 OE, +4 bit 1 level; redfin 0952: the reverse.
+ * With bit 9 set and the pull-down, toggling +4 bit 1 moves the pin under either reading. */
+#define SD0_CFG_OUT		0x2c1
+#define SD0_BURSTS		3
+#define SD0_GAP_MS		1000
+#define SD0_SETTLE_MS		500		/* amp on -> first burst */
+#define SD0_AMP_MAX_MS		6500		/* replaces the 3 s amp cap: 0.5 + 3 x 1 + 2 x 1 s + I2C reads */
+#define SD0_TONE_PERIODS	800		/* stream outlasts SD0_AMP_MAX_MS; shortened when the bursts are done */
+static int sd0_ms, sd0_set, sd0_thr_on, sd0_n, sd0_done;
+static volatile int sd0_stop, sd0_busy;
+static uint32_t sd0_cfg_saved, sd0_io_saved;
+static uint64_t sd0_writes, sd0_toggles, sd0_t_ms, sd0_next;
+static uint16_t sd0_lfsr = 0xace1;
+static pthread_t sd0_thr;
+
+static void *sd0_burst(void *arg)
+{
+	uint64_t t0 = now_ms();
+	uint32_t last = 0;
+	sd0_writes = sd0_toggles = 0;
+	while (!sd0_stop) {
+		if (!(sd0_writes & 63) && now_ms() - t0 >= (uint64_t)sd0_ms)
+			break;
+		uint32_t bit = sd0_lfsr & 1;
+		sd0_lfsr = (uint16_t)((sd0_lfsr >> 1) ^ (bit ? 0xb400 : 0));	/* maximal: taps 16, 14, 13, 11 */
+		wr32(SD0_IO, bit << 1);	/* every step, also unchanged: writing only changes would be a square wave */
+		sd0_writes++;
+		sd0_toggles += bit != last;
+		last = bit;
+	}
+	wr32(SD0_IO, 0);	/* the burst ends low */
+	sd0_t_ms = now_ms() - t0;
+	sd0_busy = 0;
+	return arg;
+}
+
+/* the running burst, if any: end it, join, print its numbers */
+static void sd0_join(void)
+{
+	if (!sd0_thr_on)
+		return;
+	sd0_stop = 1;
+	pthread_join(sd0_thr, NULL);
+	sd0_thr_on = 0;
+	printf("sd0: burst %d: %llu writes, %llu toggles, %llu ms, cfg %#x in/out %#x\n", sd0_n + 1,
+	       (unsigned long long)sd0_writes, (unsigned long long)sd0_toggles, (unsigned long long)sd0_t_ms,
+	       rd32(SD0_CFG), rd32(SD0_IO));
+}
+
+/* gpio10 -> GPIO output low. A read-back mismatch restores and aborts; 0 = taken */
+static int sd0_take(void)
+{
+	sd0_cfg_saved = rd32(SD0_CFG);
+	sd0_io_saved = rd32(SD0_IO);
+	wr32(SD0_IO, 0);
+	wr32(SD0_CFG, SD0_CFG_OUT);
+	uint32_t back = rd32(SD0_CFG);
+	printf("sd0: gpio10 cfg %#x -> %#x, read back %#x%s, in/out was %#x\n", sd0_cfg_saved, SD0_CFG_OUT, back,
+	       back == SD0_CFG_OUT ? "" : " MISMATCH", sd0_io_saved);
+	sd0_set = 1;
+	if (back != SD0_CFG_OUT)
+		return -1;
+	/* the pad's input bit should follow a driven output: the only on-device check of the OE bit. Printed, no abort:
+	 * the input may be off in output mode, but "silent" is then inconclusive */
+	wr32(SD0_IO, 2);
+	uint32_t hi = rd32(SD0_IO);
+	wr32(SD0_IO, 0);
+	uint32_t lo = rd32(SD0_IO);
+	printf("sd0: loopback out 1 -> in/out %#x, out 0 -> in/out %#x: %s\n", hi, lo,
+	       (hi & 3) == 3 && (lo & 3) == 0 ? "follows, the pin is driven" : "DOES NOT FOLLOW, OE unverified");
+	return 0;
+}
+
+static void sd0_restore(void)
+{
+	sd0_join();
+	if (!sd0_set)
+		return;
+	wr32(SD0_IO, 0);
+	wr32(SD0_CFG, sd0_cfg_saved);
+	wr32(SD0_IO, sd0_io_saved & 2);
+	sd0_set = 0;
+	printf("sd0: gpio10 restored: cfg %#x (want %#x) in/out %#x\n", rd32(SD0_CFG), sd0_cfg_saved, rd32(SD0_IO));
+}
+
 static void lpi_restore(void)	/* atexit too: pins back even if the devote never runs */
 {
+	sd0_restore();	/* sp18: before lpi_pins puts the saved cfg back */
 	if (lpi_set)
 		lpi_pins(0);
 }
@@ -1795,6 +1891,7 @@ static void amp_tx(int on)
 
 static void amp_off(void)
 {
+	sd0_join();	/* sp18: no burst outlives the amp */
 	if (!amp.configured)
 		return;
 	printf("amp: power down%s\n", amp.up ? ", was on" : "");
@@ -1836,6 +1933,61 @@ static void amp_start(void)
 	}
 	amp_t0 = now_ms();
 	amp_next = amp_t0 + 50;
+	sd0_next = amp_t0 + SD0_SETTLE_MS;	/* sp18 */
+}
+
+/* sp18: IRQ1 STATUS1 (faults latch here; read only, nothing cleared), then the raw status + decode */
+static void sd0_status(const char *tag)
+{
+	uint32_t st = 0;
+	cs_read(&amp, 0x10010, &st);
+	printf("sd0: %s status1 %#x\n", tag, st);
+	cs_diag(&amp, tag);
+}
+
+/* sp18: amp on and BCLK running: burst, gap, burst... with the amp's status around each; 50 ms grain from amp_poll */
+static void sd0_poll(void)
+{
+	char tag[24];
+	if (!sd0_ms || sd0_done)
+		return;
+	if (sd0_thr_on) {
+		if (sd0_busy)
+			return;
+		sd0_join();
+		snprintf(tag, sizeof(tag), "sd0 after %d", sd0_n + 1);
+		sd0_status(tag);
+		sd0_next = now_ms() + SD0_GAP_MS;
+		if (++sd0_n >= SD0_BURSTS) {
+			printf("sd0: %d bursts done: off\n", sd0_n);
+			goto done;
+		}
+		return;
+	}
+	if (now_ms() < sd0_next)
+		return;
+	if (!sd0_set && sd0_take()) {
+		printf("sd0: gpio10 read-back mismatch: abort, no noise\n");
+		sd0_restore();
+		goto done;
+	}
+	snprintf(tag, sizeof(tag), "sd0 before %d", sd0_n + 1);
+	sd0_status(tag);
+	if (rec_on)
+		printf("sd0: burst %d starts at rec t=%.1f\n", sd0_n + 1, (now_ms() - rec_t0) / 1000.0);
+	sd0_stop = 0;
+	sd0_busy = 1;
+	if (pthread_create(&sd0_thr, NULL, sd0_burst, NULL)) {
+		sd0_busy = 0;
+		printf("sd0: no thread: abort, no noise\n");
+		goto done;
+	}
+	sd0_thr_on = 1;
+	return;
+done:
+	sd0_done = 1;
+	amp_off();
+	pcm_tone_periods = 0;	/* the stream ends soon; gpio10 goes back in lpi_restore, before DEVICE_STOP */
 }
 
 /* while on: IRQ1 errors every 50 ms, the 3 s cap, the tone tail */
@@ -1872,12 +2024,14 @@ static void amp_poll(void)
 	if (cs_check(&amp)) {
 		printf("amp: IRQ1 error: power down now\n");
 		amp_off();
-	} else if (now_ms() - amp_t0 >= AMP_MAX_MS) {
-		printf("amp: %d ms cap\n", AMP_MAX_MS);
+	} else if (now_ms() - amp_t0 >= (sd0_ms ? SD0_AMP_MAX_MS : AMP_MAX_MS)) {	/* sp18 */
+		printf("amp: %d ms cap\n", sd0_ms ? SD0_AMP_MAX_MS : AMP_MAX_MS);
 		amp_off();
 	} else if (pcm_sent + AMP_TAIL_PERIODS >= rec_lead + pcm_tone_periods) {
 		printf("amp: tone ends in <= 0.5 s: off\n");
 		amp_off();
+	} else {
+		sd0_poll();	/* sp18 */
 	}
 }
 
@@ -1909,7 +2063,7 @@ static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
-	int tone = pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec */
+	int tone = !sd0_ms && pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec; sp18: DSP silent */
 	for (unsigned f = 0; f < PCM_FRAMES; f++)
 		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
 	pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));	/* pm_wr cleans to PoC: the DSP reads DRAM */
@@ -1949,6 +2103,8 @@ static void rec_read(unsigned b)
 /* sp7: phase of what is being recorded now: 0 baseline (before the tone), 1 tone with the amp on, 2 the rest */
 static int rec_phase(void)
 {
+	if (sd0_ms)	/* sp18: 1 = a burst only, so "noise" rms is wide-band and free of the gaps */
+		return sd0_busy ? 1 : pcm_done < rec_lead ? 0 : 2;
 	if (pcm_done < rec_lead)
 		return 0;
 	return amp.up && pcm_done < rec_lead + pcm_tone_periods ? 1 : 2;
@@ -2014,7 +2170,7 @@ static void rec_summary(void)
 	printf("rec: sp13 pattern check: %lu samples still A5A5 (DSP did not write our pages), %lu zero, %lu other\n",
 	    rec_untouched, rec_zero, rec_other);
 	for (int p = 0; p < 3; p++)
-		printf("rec: %s %llu frames: ch0 (VMON) rms %d peak %u, ch1 (IMON) rms %d peak %u\n", nm[p],
+		printf("rec: %s %llu frames: ch0 (VMON) rms %d peak %u, ch1 (IMON) rms %d peak %u\n", p == 1 && sd0_ms ? "noise" : nm[p],	/* sp18 */
 		       (unsigned long long)rec_ph_n[p],
 		       rec_ph_n[p] ? (int)sqrt((double)rec_ph_ss[p][0] / rec_ph_n[p]) : 0, rec_ph_pk[p][0],
 		       rec_ph_n[p] ? (int)sqrt((double)rec_ph_ss[p][1] / rec_ph_n[p]) : 0, rec_ph_pk[p][1]);
@@ -2896,7 +3052,14 @@ int main(int argc, char **argv)
 			rec_echo = 1;
 		else if (!strcmp(argv[i], "--lpi-slew"))	/* sp15: LPI slew-rate regs as stock bolero */
 			lpi_slew = 1;
-		else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
+		else if (!strcmp(argv[i], "--sd0-noise") && i + 1 < argc) {	/* sp18: gpio10 from an LFSR, 3 bursts of <= 1 s; needs --amp */
+			double secs = atof(argv[++i]);
+			sd0_ms = secs >= 1 ? 1000 : secs > 0 ? (int)(secs * 1000) : 0;
+			if (!sd0_ms) {
+				fprintf(stderr, "adspboot: --sd0-noise takes seconds > 0\n");
+				return 2;
+			}
+		} else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
 			rec_hex = 1;
 		else if (!strcmp(argv[i], "--amp-pcm-stop-test"))	/* sp6: let the ADSP underflow with the amp on */
 			amp_pcm_stop_test = 1;
@@ -2986,6 +3149,10 @@ int main(int argc, char **argv)
 		/* sp17: the VPMON control needs its monitor on: PWR_CTRL2 bits 8-10 = VPMON, VBSTMON, TEMPMON */
 		amp_txr[0].mask = amp_txr[0].val = 0x3700;
 	}
+	if (sd0_ms && (!amp_on || amp_boost || amp.amp_gain > 0 || no_lpi || amp_pcm_stop_test)) {	/* sp18 */
+		fprintf(stderr, "adspboot: --sd0-noise needs --amp, and no --amp-boost, --amp-gain > 0, --no-lpi or --amp-pcm-stop-test\n");
+		return 2;
+	}
 	if (rec_on)
 		rec_lead = REC_LEAD_PERIODS;
 	if (amp_db > -20)
@@ -3003,7 +3170,7 @@ int main(int argc, char **argv)
 			printf("amp: not ready: stop before the ADSP boot\n");
 			return 1;
 		}
-		pcm_tone_periods = AMP_TONE_PERIODS;
+		pcm_tone_periods = sd0_ms ? SD0_TONE_PERIODS : AMP_TONE_PERIODS;	/* sp18 */
 	}
 	if (!strcmp(cmd, "status"))
 		return status();
@@ -3046,7 +3213,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew] [--sd0-noise SECS]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

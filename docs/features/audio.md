@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:05 sp18 written (not run): --sd0-noise drives gpio10 from an LFSR, no DSP in the path
+- adspboot `--sd0-noise SECS`: 3 bursts of at most 1 s with 1 s gaps, wall-clock cap, pin ends low, DSP plays zeros, gpio10 restored in lpi_restore; refused with --amp-boost, --amp-gain > 0, --no-lpi, --amp-pcm-stop-test. A cfg read-back mismatch aborts. A kill or crash skips the restore.
+- Sources conflict on the pin bits: hakios mic_sm7150.c:511 has cfg bit 9 = OE and +4 bit 1 = level; redfin 0952 has the reverse. Unverified, so cfg is 0x2c1: bit 9 + pull-down, so toggling +4 bit 1 moves the pin under either reading. Also an on-device loopback prints whether the input follows (print only; "DOES NOT FOLLOW" makes silent results inconclusive).
+- Silent: `adspboot boot --amp --rec --rec-echo --amp-addr 0x41 --amp-db -102 --sd0-noise 1`. Non-zero ch1 in the noise phase and zero at baseline: SD1 live, amp RX sees data, sp17's zeros then point at DSP -> pin. Zero with loopback following: SD1 or TX source dead.
+- Audible (05:00-21:30 EST only): `adspboot boot --amp --amp-addr 0x41 --amp-db -20 --sd0-noise 1` with `tools/sunfish-tone-detect.sh 12`, read its rms column (1 s on, 1 s off), ignore the TONE flag. Noise = amp, speaker, gpio10 cleared, fault is DSP -> pin. Silent with loopback following = amp output, speaker or wiring. Level by arithmetic: at most -20 dBFS after volume, ~1.5 dB under sp5's rms, 3 s total, wide-band. Reasoning, not a test.
+
 ### 2026-10-30 21:00 sp17 (kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, adspboot with --rec-echo 0x3700): zeros on both amps with the monitors on
 - `/var/local/bin/adspboot boot --amp --rec --rec-echo --amp-addr 0x4N --amp-db -102`, fresh boot each, 35 s after boot, silent. sp16's exact flags weren't logged, so this was rebuilt from the --amp chain.
 
