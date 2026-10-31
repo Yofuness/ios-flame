@@ -94,6 +94,16 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:15 Bridge 0114 family memo + fat LTO built (not run)
+- 0114: `supports_family` memo per device (lock-free, off with M2V_FAMILY_MEMO=0), FormatAnswers through Arc, counter `FM supports_family calls=N` in the 10 s telemetry (needs /var/local/mtl2-telemetry). A driver error on a format's first computation would stay frozen for that family.
+- tools/build-metal2-linux.sh: `lto="fat"`, `codegen-units=1`; `M2V_LTO=off` while iterating. Full script: 142 s -> 365 s clean; 64 s -> 289 s after touching one file. SweetMetal2 22.5 MB -> 16.0 MB. CI's build-m2v-bridge.sh stays non-LTO. Next: same long-swipe bench and PC capture against cs1 (33.8 swaps/s, ~24 ms CPU per swap).
+
+### 2026-10-30 22:05 pc1 named (research/notes/fps-bridge-profile.md): the bridge's cost is flat; one clear waste, the capability audit
+- dSYM and out/ binary share UUID 4C4C44E7-5555-3144-A176-C9A72330C92D; phone copy not compared. 46 of 4234 PCs unnamed. Top: draw_resident 3.40 % of all samples, sys_dcache_flush 2.39, FormatAnswers::clone 2.11, format_answers 1.12, bind::graphics::instantiate 1.11, Unsupported::clone 1.10, Recording::record 0.90, pixel_format_info 0.88. Top 10 are 27 % of the bridge, top 30 are 43 %, across 705 functions.
+- By group, ms per frame at 23 ms: encoder per-draw 2.95, capability audit 1.89, bind instantiate 1.38, resource tracking 1.09, pipeline lookup 1.06, descriptors 0.91, cache flush 0.55. Shader translation doesn't show as its own cost; logging isn't a cost.
+- Observed: `supportsFamily:` has no memo and re-walks the family tables; samples spread over the whole capture. QuartzCore's own call sites are in new_metal_context, so the per-frame caller is something else (guess: MTLPixelFormatGetInfoForFeatureSetQuery).
+- Ranked estimates: memo 2-3 ms, LTO 0.6-1.8, redfin's 0130-0137 1-2 (3-5 h), unchanged-draw fast path 1-2 (1 day), allocator 0.5-1, flush off the thread ~0.5. All together ~16-17 ms at best, not 14. Doing memo + LTO first.
+
 ### 2026-10-30 21:50 pc1: PC profile of the render thread: over half of its CPU is in our Metal bridge
 - kernel130 (xnu 0249, `kern.sweet_pcsample`), `CAMERA=1 tools/sunfish-test.sh -k work/kernel130/kernel.development.sweet pc1 sweetse9=2 sweetcampmic=2 sweetcpusample=1`, boot 20261030-214521.log, no reset. Settings list, ~75 s of long swipes. `tid 596 n 8000 user 7535 kernel 465 missed 0 waited 9500 ms`, no line gaps; backboardd pid 60. Webcam: Settings on screen during the capture. Tool: tools/sunfish-pc-hist.py.
 

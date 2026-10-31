@@ -110,6 +110,8 @@ M=$B/m2v-bridge
 mkdir -p "$M"
 llvm-as -o "$M/runtime_examples.air" "$SRC/metal2vulkan/crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll"
 llvm-as -o "$M/function_constant.air" "$SRC/metal2vulkan/crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll"
+# Whole-program optimization of the bridge. Off (quicker rebuilds): M2V_LTO=off.
+if [ "${M2V_LTO:-fat}" = off ]; then LTO=off CGU=16; else LTO=fat CGU=1; fi
 cat > "$M/Cargo.toml" <<EOF
 [package]
 name = "native-metal-bridge"
@@ -128,6 +130,8 @@ sha2 = { version = "0.10", features = ["asm"] }
 [profile.release]
 panic = "unwind"
 debug = 1
+lto = "$LTO"
+codegen-units = $CGU
 EOF
 # cc-rs (sha2 asm) and the linker: clang for iOS instead of xcrun
 NMB_FIXTURE_AIR=$M/runtime_examples.air NMB_FC_AIR=$M/function_constant.air IPHONEOS_DEPLOYMENT_TARGET=16.0 \

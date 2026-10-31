@@ -1,0 +1,128 @@
+diff --git a/crates/metal2vulkan-runtime/src/families/mod.rs b/crates/metal2vulkan-runtime/src/families/mod.rs
+--- a/crates/metal2vulkan-runtime/src/families/mod.rs
++++ b/crates/metal2vulkan-runtime/src/families/mod.rs
+@@ -93,6 +93,16 @@
+ use metal2vulkan::device::{DeviceProfile, MetalDeviceProperties};
+ use metal2vulkan::error::Unsupported;
+ use metal2vulkan::metal::PixelFormat;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::{Arc, OnceLock};
++
++/// 0114: `supports_family` calls in this process, by every caller.
++static FAMILY_CALLS: AtomicU64 = AtomicU64::new(0);
++
++/// 0114: `supports_family` calls in this process so far, for the frontend's telemetry.
++pub fn sweet_family_calls() -> u64 {
++    FAMILY_CALLS.load(Ordering::Relaxed)
++}
+ 
+ /// Metal's GPU families (`MTLGPUFamily`), as of the macOS 27 SDK.
+ #[non_exhaustive]
+@@ -351,7 +361,7 @@
+     /// The runtime's device queries.
+     pub(super) properties: &'a DeviceProperties,
+     /// The runtime's answers for a pixel format ([`formats`]).
+-    pub(super) format: &'a dyn Fn(PixelFormat) -> FormatAnswers,
++    pub(super) format: &'a dyn Fn(PixelFormat) -> Arc<FormatAnswers>,
+ }
+ 
+ /// The rows `family` lists, each with its state under `facts`.
+@@ -404,8 +414,27 @@
+     /// no family. The module docs say how each family's rows are chosen and judged;
+     /// [`family_blockers`](Device::family_blockers) names what keeps a family false.
+     pub fn supports_family(&self, family: i64) -> bool {
+-        GpuFamily::from_raw(family)
+-            .is_some_and(|family| self.family_rows(family).iter().all(|r| !r.state.blocks()))
++        FAMILY_CALLS.fetch_add(1, Ordering::Relaxed);
++        let Some(family) = GpuFamily::from_raw(family) else {
++            return false;
++        };
++        let audit = || self.family_rows(family).iter().all(|r| !r.state.blocks());
++        // 0114: each family audited once per device; every fact the rows read is fixed once the
++        // device is open, and each format's answers once first worked out. Off: M2V_FAMILY_MEMO=0.
++        static MEMO: OnceLock<bool> = OnceLock::new();
++        if !*MEMO.get_or_init(|| std::env::var_os("M2V_FAMILY_MEMO").is_none_or(|v| v != "0")) {
++            return audit();
++        }
++        let slot = &self.shared().textures.family_answers[family as usize];
++        match slot.load(Ordering::Relaxed) {
++            0 => {
++                // Threads racing here work out the same answer.
++                let answer = audit();
++                slot.store(1 + answer as u8, Ordering::Relaxed);
++                answer
++            }
++            known => known == 2,
++        }
+     }
+ 
+     /// Every row `family` lists, with its state on this device.
+diff --git a/crates/metal2vulkan-runtime/src/families/formats.rs b/crates/metal2vulkan-runtime/src/families/formats.rs
+--- a/crates/metal2vulkan-runtime/src/families/formats.rs
++++ b/crates/metal2vulkan-runtime/src/families/formats.rs
+@@ -88,6 +88,7 @@
+ use metal2vulkan::pipeline::SampledType;
+ use metal2vulkan::vk::Format;
+ use std::collections::BTreeSet;
++use std::sync::Arc;
+ 
+ /// A texture capability of Apple's tables' legend.
+ #[non_exhaustive]
+@@ -1589,11 +1590,11 @@
+ 
+ impl Device {
+     /// The answers of `pf` on this device (the module docs), worked out once per format.
+-    pub(crate) fn format_answers(&self, pf: PixelFormat) -> FormatAnswers {
++    pub(crate) fn format_answers(&self, pf: PixelFormat) -> Arc<FormatAnswers> {
+         // A format the device's Metal level describes none of answers nothing: Metal stops every
+         // texture of one (the 24-bit depth formats among them, whatever the Vulkan driver has).
+         if !self.properties().metal_level.describes(pf) {
+-            return FormatAnswers::none();
++            return Arc::new(FormatAnswers::none());
+         }
+         let textures = &self.shared().textures;
+         if let Some(answers) = lock(&textures.format_answers).get(&pf) {
+@@ -1606,7 +1607,8 @@
+             let info = plan.create_info(self.shared().sharing(), &view_formats, &mut list);
+             self.image_limits(&info, &view_formats).unwrap_or_default()
+         };
+-        let answers = answers(pf, &facts, &limits, self.sparse_answer(pf));
++        // 0114: shared, so a cache hit copies none of the answers' heap.
++        let answers = Arc::new(answers(pf, &facts, &limits, self.sparse_answer(pf)));
+         lock(&textures.format_answers).insert(pf, answers.clone());
+         answers
+     }
+diff --git a/crates/metal2vulkan-runtime/src/texture.rs b/crates/metal2vulkan-runtime/src/texture.rs
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -191,7 +191,10 @@
+     pub(super) usage_answers: Mutex<UsageAnswers>,
+     /// Each pixel format's texture capabilities, worked out at its first query
+     /// (`families/formats.rs`).
+-    pub(super) format_answers: Mutex<HashMap<PixelFormat, FormatAnswers>>,
++    pub(super) format_answers: Mutex<HashMap<PixelFormat, Arc<FormatAnswers>>>,
++    /// 0114: each `GpuFamily`'s `supports_family` answer, by declaration order: 0 not asked yet,
++    /// 1 no, 2 yes.
++    pub(super) family_answers: [std::sync::atomic::AtomicU8; crate::families::GpuFamily::ALL.len()],
+     /// Each Vulkan format's `DRM_FORMAT_MOD_LINEAR` tiling features, asked of the driver at the
+     /// first image of that tiling planned in it (`dma_buf.rs`'s `modifier_features`): one entry
+     /// per format at most.
+@@ -235,6 +238,7 @@
+             neutrals: Mutex::new(Neutrals::default()),
+             usage_answers: Mutex::new(UsageAnswers::default()),
+             format_answers: Mutex::new(HashMap::new()),
++            family_answers: [const { std::sync::atomic::AtomicU8::new(0) }; crate::families::GpuFamily::ALL.len()],
+             #[cfg(unix)]
+             modifier_features: Mutex::new(HashMap::new()),
+             #[cfg(unix)]
+diff --git a/crates/metal2vulkan-runtime/src/lib.rs b/crates/metal2vulkan-runtime/src/lib.rs
+--- a/crates/metal2vulkan-runtime/src/lib.rs
++++ b/crates/metal2vulkan-runtime/src/lib.rs
+@@ -219,6 +219,7 @@
+ pub use degradation::{MisplacedNotice, NoticePlace};
+ pub use depth_stencil::DepthStencilState;
+ pub use device::set_device_lost_hook; // 0111
++pub use families::sweet_family_calls; // 0114
+ pub use device::{
+     DebugMessage, Device, DeviceHandles, DeviceKind, DeviceOptions, LayerSetting,
+     LayerSettingValue, MessageKind, MessageSeverity, MessageSink, RawDevice,
