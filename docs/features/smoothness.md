@@ -94,6 +94,24 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 20:35 Ladder (a): per-screen table + Reduce Transparency A/B: no swap gain from no-blur; GPU is 15-20 ms/submit, not 25-30
+- kernel128, no reboot, boot log 20261030-200443.log (markers h1, s1, r1, c1, H1, S3, C3...). 20 s of motion, H key before each run, 2 runs per row, swaps > 0 in all. RT toggled by taps: Settings > Accessibility > Display & Text Size > Reduce Transparency; restored off. 5-6 samples of 5 s per run, the first partial.
+
+| Screen | RT | swaps/s | panel/s | GPU ms/submit | longest ms | GPU busy % |
+|---|---|---|---|---|---|---|
+| Home, horizontal swipes (one page, bounces) | off | 24.2 / 21.5 | 23.2 / 20.5 | 16.5 / 16.3 | 43 / 39 | 37 / 35 |
+| Settings main list, vertical | off | 24.0 / 32.0 | 22.9 / 29.8 | 14.6 / 14.5 | 26 / 72 | 65 / 75 |
+| Reminders, empty list | off | 12.4 / 13.3 | 11.7 / 12.2 | 19.8 / 20.5 | 72 / 72 | 30 / 31 |
+| Control Center open/close loop | off | 12.5 / 12.3 | 11.6 / 11.9 | 20.9 / 22.6 | 79 / 83 | 32 / 32 |
+| Home | on | 22.0 / 24.4 | 21.2 / 23.3 | 15.4 / 15.8 | 38.5 / 38.6 | 34 / 35 |
+| Settings main list | on | 27.9 / 30.0 | 24.4 / 26.1 | 14.4 / 14.5 | 72 / 72 | 68 / 76 |
+| Control Center loop | on | 12.9 / 13.3 | 12.4 / 12.3 | 20.1 / 22.0 | 52 / 52 | 32 / 35 |
+
+- Observed: RT cut Control Center's longest submit (79-83 -> 52 ms) and nothing else; swaps/s inside run-to-run spread. No DeviceLost, no reset (B10's old GPU crash did not return). Garbled glyphs as before: lock-screen buttons, Control Center toggles, Accessibility icons (B29/B44). With RT on, a Control Center mid-open frame showed no backdrop, drawn over the home icons (mid-animation or a bug: unknown; one frame).
+- Guess: Reminders' 12 is limited by how little an empty list redraws, not by cost. At ~23 swaps/s and 16 ms/submit the GPU accounts for ~37 % of the frame on Home: the other ~27 ms is CPU + tick waits, so GPU savings alone may buy less than research/notes/fps-ladder-bc.md's guess. Settings reaches 32 swaps/s with GPU 75 % busy, so its limit may be different from Home's.
+- Scoping (research/notes/fps-ladder-bc.md, the Oct 24 trace gt1, home swipes): 1125x2436 passes are 98.2 % of render-pass time, no compute span, copy_buffer_to_image 3487 ms against 7708 ms of passes. So the "blur passes" in older notes are the composited full-screen pass; half-res blur is dropped. To confirm on a fresh trace.
+- New patch: xnu 0248 `sweetfb_2x` + `mkadt --2x` (kernel129): opt-in 750x1624 canvas at scale 2, upscaled in the present blit. Built (fcbf44e), not yet booted.
+
 ### 2026-10-30 11:30 es1: CA_EMPTY_SHADERS=1 in backboardd's launchd env: no change, and the UI looked normal; smoothness PARKED
 - launchd.plist com.apple.backboardd EnvironmentVariables CA_EMPTY_SHADERS=1 (backup .pre-emptyshaders, restored after): 22.4 / 24.8 swaps/s vs restored baseline 22.1 / 22.1; GPU busy 20-49 %, bb GPU 1.0-2.1 s per 5 s. The home screen looked normal, so CA probably ignores the variable in this build: the bound is still unmeasured.
 - Today's ios-redfin line: DEADFILL +0.5, UI threads on the A76s +0.5, CA blur keys 0. GPU busy stays ~20-45 %: the limit is the serial CPU->GPU frame with one frame in flight (research/notes/fps-limit.md), not GPU throughput. A real fix (two frames in flight / CA pipelining) is days of QuartzCore RE: parked (backlog O7), after ~3 h today.
