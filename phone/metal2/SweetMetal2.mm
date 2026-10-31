@@ -216,6 +216,19 @@ static bool listed(void)
 			}
 			fclose(ef);
 		}
+		/* debugging: a GPU trace is for backboardd only, one file per process instance: the other clients and a respawn
+		 * would truncate it. MESA_GPU_TRACES unset: nothing happens. /var/local/turnip is pre-created by root, mode 777 */
+		if (getenv("MESA_GPU_TRACES")) {
+			if (strcmp(getprogname(), "backboardd") != 0) {
+				unsetenv("MESA_GPU_TRACES");
+				unsetenv("MESA_GPU_TRACEFILE");
+			} else {
+				char trace[128];
+				snprintf(trace, sizeof(trace), "/var/local/turnip/trace-%d.log", getpid());
+				setenv("MESA_GPU_TRACEFILE", trace, 1);
+				sm2_log("GPU trace %s", trace);
+			}
+		}
 		/* debugging: Turnip options for this process from /var/local/mtl2-tu-debug (TU_DEBUG), its log to /var/local/turnip-<proc>.log (or /var/local/turnip/<proc>-<pid>.log) */
 		{
 			char opts[128] = { 0 }, knob[128];

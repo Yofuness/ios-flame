@@ -1,0 +1,47 @@
+diff --git a/src/util/perf/u_trace.c b/src/util/perf/u_trace.c
+index b3a9d20ddc7..1f2b6f7839f 100644
+--- a/src/util/perf/u_trace.c
++++ b/src/util/perf/u_trace.c
+@@ -24,6 +24,14 @@
+ #include "u_trace.h"
+ 
+ #include <inttypes.h>
++#include "util/detect_os.h"
++#if DETECT_OS_APPLE
++#include <errno.h>
++#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#endif
+ 
+ #include "util/list.h"
+ #include "util/u_call_once.h"
+@@ -135,6 +143,7 @@ print_txt_end_of_batch(struct u_trace_context *utctx)
+ {
+    uint64_t elapsed = utctx->last_time_ns - utctx->first_time_ns;
+    fprintf(utctx->out, "ELAPSED: %" PRIu64 " ns\n", elapsed);
++   fflush(utctx->out); /* sweet 0109: the client is killed, not exited, so atexit never runs */
+ }
+ 
+ static void
+@@ -336,6 +345,19 @@ u_trace_state_init_once(void)
+       if (u_trace_state.trace_file != NULL) {
+          atexit(trace_file_fini);
+       }
++#if DETECT_OS_APPLE
++      else {
++         /* sweet 0109: the fallback below is stdout, which nobody reads on the phone */
++         char text[256];
++         int n = snprintf(text, sizeof(text), "MTL2[%d %s]: MESA_GPU_TRACEFILE %s: fopen failed: %s\n",
++                          getpid(), getprogname(), tracefile_name, strerror(errno));
++         int fd = open("/dev/console", O_WRONLY | O_APPEND | O_NOCTTY);
++         if (fd >= 0) {
++            (void)!write(fd, text, MIN2(n, (int)sizeof(text) - 1));
++            close(fd);
++         }
++      }
++#endif
+    }
+    if (!u_trace_state.trace_file) {
+       u_trace_state.trace_file = stdout;

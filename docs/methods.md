@@ -95,8 +95,11 @@ Subagents that run these: `.claude/agents/` (phone-runner, ci-builder, implement
   `TUDBG=opts` sets TU_DEBUG.
 - **Clients run as mobile:** pre-create log files with mode 666, e.g. `/var/local/turnip-backboardd.log` or
   `/var/local/m2v-msg.log`.
-- **GPU time per operation:** `MESA_GPU_TRACES=print MESA_GPU_TRACEFILE=/var/local/turnip-backboardd.log`.
-  Sum `start_X`/`end_X` pairs.
+- **GPU time per operation** (turnip 0109, untested on the phone yet): as root `mkdir -p /var/local/turnip; chmod 777
+  /var/local/turnip`, put `MESA_GPU_TRACES=print` in mtl2-env (plus `TU_SWEET_DRAW_TRACE=1` for per-draw spans: ~25 MB/s
+  by estimate, shares only, not absolute ms), restart backboardd. Only backboardd traces, to
+  `/var/local/turnip/trace-PID.log` (path in mtl2.log). To stop: clear mtl2-env, wait a few s, restart backboardd.
+  `tools/flame-files.py get`, then `tools/gputrace-sum.py FILE [TOP=12]`.
 - **Bridge degradations:** `SWEET_M2V_MESSAGES=/var/local/m2v-msg.log`. These are shadowed textures and similar,
   and each kind is logged only once.
 - **Frontend telemetry:** `touch /var/local/mtl2-telemetry` makes `/var/local/mtl2.log` show per-commit
