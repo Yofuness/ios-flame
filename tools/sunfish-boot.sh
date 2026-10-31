@@ -58,11 +58,13 @@ fi
 echo "$cmdline" > "$P/$name.cmdline"
 # CAMERA=1: ADT with /arm-io/isp + /product/camera flash (mkadt.py --camera; Camera.app prerequisites,
 # camera.md); HAPTICS=1: /product/haptics (mkadt.py --haptics; iOS's Actuator, haptics.md); both: one tree with
-# both. Default the usual work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.
+# both. Boot-arg sweetfb_2x: the @2x canvas (mkadt.py --2x; smoothness.md). Default the usual
+# work/boot/sunfish-hi.adt. ADT=PATH picks any other tree.
 adt=${ADT:-$P/sunfish-hi.adt}
 adtflags= adtname=sunfish-hi
 [ "${CAMERA:-0}" = 1 ] && adtflags="$adtflags --camera" adtname=$adtname-camera
 [ "${HAPTICS:-0}" = 1 ] && adtflags="$adtflags --haptics" adtname=$adtname-haptics
+case " $cmdline " in *" sweetfb_2x "*|*" sweetfb_2x="[1-9]*) adtflags="$adtflags --2x" adtname=$adtname-2x;; esac
 if [ -n "$adtflags" ]; then
 	adt=$P/$adtname.adt
 	python3 -I tools/mkadt.py "$adt" --highmem $adtflags 2>/dev/null

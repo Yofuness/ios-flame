@@ -98,10 +98,11 @@ def product_haptics_node(ph):
     return node('haptics', [ph(), ('closed-loop', u32(1)), ('supports-3rd-party-haptics', u32(1))])
 
 
-def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False):
+def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False, twox=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py).
     camera=True: /arm-io/isp + /product/camera flash (Camera.app prerequisites, camera.md).
-    haptics=True: /product/haptics (closed-loop, supports-3rd-party-haptics; haptics.md)."""
+    haptics=True: /product/haptics (closed-loop, supports-3rd-party-haptics; haptics.md).
+    twox=True: 750x1624 @2x canvas (boot-arg sweetfb_2x=1; smoothness.md)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
@@ -126,8 +127,9 @@ def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False):
         # MobileGestalt's screen class: display-scale (u32, default 0) comes
         # from /chosen, the pixel size from IOMobileFramebuffer. Scale 0 makes
         # SpringBoard's FBSDisplayMode "infxinf@0x" invalid. The display is
-        # presented as the iPhone X's 1125x2436 @3x.
-        ('display-scale', u32(3)),
+        # presented as the iPhone X's 1125x2436 @3x (--2x: 750x1624 @2x, same
+        # points, kernel boot-arg sweetfb_2x=1).
+        ('display-scale', u32(2 if twox else 3)),
         # XNU derives IOPlatformUUID (gethostuuid) from these on arm; without
         # them CFPreferences cannot use kCFPreferencesCurrentHost (no ByHost
         # files), so e.g. DataMigration never records LastSystemVersion and
@@ -237,8 +239,8 @@ def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False):
             ph(),
             ('device_type', cstr('display-subsystem')),
             ('compatible', cstr('sweet,display')),
-            ('canvas-width', u32(1125)),
-            ('canvas-height', u32(2436)),
+            ('canvas-width', u32(750 if twox else 1125)),
+            ('canvas-height', u32(1624 if twox else 2436)),
         ])] + ([isp_node(ph)] if camera else []))
 
     fbcon = node('sweet-fbcon', [
@@ -296,7 +298,7 @@ def build(seed=None, qemu=False, highmem=False, camera=False, haptics=False):
 
 if __name__ == '__main__':
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, camera='--camera' in sys.argv,
-                 haptics='--haptics' in sys.argv)
+                 haptics='--haptics' in sys.argv, twox='--2x' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

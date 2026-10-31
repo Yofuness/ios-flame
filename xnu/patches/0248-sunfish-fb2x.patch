@@ -1,0 +1,95 @@
+From f816d31097d77b68f726968d0709f9fad7530689 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 20:11:53 -0400
+Subject: [PATCH] 0248 sunfish: sweetfb_2x=1 presents a 750x1624 @2x canvas
+ (same 375x812 points), GPU present upscales; touch fallback uses the logical
+ size, CPU copy unscaled at the panel's top left
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 19 +++++++++++++++++++
+ iokit/Kernel/arm/hid/SweetHID.cpp     | 16 ++++++++++++++--
+ 2 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index c50dea6..11b3f45 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -114,9 +114,13 @@ enum {
+  * presented as the iPhone X panel, 1125x2436 (375x812 points @3x), and the
+  * centered 1080x2400 part of it is shown on the 1080x2400 panel.
+  * Boot-arg sweetfb_native=1 presents the real panel size instead.
++ * 0248: boot-arg sweetfb_2x=1 presents the same 375x812 points @2x, and the
++ * GPU present upscales (ADT from mkadt.py --2x; sweetfb_native wins).
+  */
+ #define SWEET_FB_LOGICAL_W              1125
+ #define SWEET_FB_LOGICAL_H              2436
++#define SWEET_FB_LOGICAL_2X_W           750
++#define SWEET_FB_LOGICAL_2X_H           1624
+ #define SWEET_FB_FORMAT_BGRA            0x42475241
+ 
+ class IOMobileFramebuffer : public IOService {
+@@ -248,9 +252,24 @@ AppleCLCD::start(IOService *provider)
+ 	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
++		int twox = 0;
++		PE_parse_boot_argn("sweetfb_2x", &twox, sizeof(twox));
++		if (twox) {
++			fLogicalW = SWEET_FB_LOGICAL_2X_W;
++			fLogicalH = SWEET_FB_LOGICAL_2X_H;
++			IOLog("SWEET FB: sweetfb_2x on: canvas %ux%u @2x, upscaled to the %ux%u panel\n",
++			    fLogicalW, fLogicalH, fWidth, fHeight);
++		}
+ 	}
+ 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
+ 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
++	/* 0248: canvas smaller than the panel: the CPU copy (present()) draws it unscaled at the panel's top left */
++	if (fOffX < 0) {
++		fOffX = 0;
++	}
++	if (fOffY < 0) {
++		fOffY = 0;
++	}
+ 	fCornerRadius = SWEET_DISPLAY_CORNER_DEFAULT;
+ 	PE_parse_boot_argn("sweetfb_corner_radius", &fCornerRadius, sizeof(fCornerRadius));
+ 	if (fCornerRadius > SWEET_DISPLAY_CORNER_MAX) {
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 9ae9dd4..bf4ab89 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -443,10 +443,18 @@ SweetHIDTouch::start(IOService *provider)
+ 	}
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+-	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? SWEET_PANEL_H : 2436;
++	int twox = 0;	/* 0248: as SweetFramebuffer.cpp */
++	PE_parse_boot_argn("sweetfb_2x", &twox, sizeof(twox));
++	fLogicalW = native ? 1080 : (twox ? 750 : 1125);
++	fLogicalH = native ? SWEET_PANEL_H : (twox ? 1624 : 2436);
+ 	fOffX = (fLogicalW - SWEET_PANEL_W) / 2;
+ 	fOffY = (fLogicalH - SWEET_PANEL_H) / 2;
++	if (fOffX < 0) {
++		fOffX = 0;
++	}
++	if (fOffY < 0) {
++		fOffY = 0;
++	}
+ 	fCornerRadius = SWEET_DISPLAY_CORNER_DEFAULT;
+ 	PE_parse_boot_argn("sweetfb_corner_radius", &fCornerRadius, sizeof(fCornerRadius));
+ 	if (fCornerRadius > SWEET_DISPLAY_CORNER_MAX) {
+@@ -509,6 +517,10 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 	} else {
+ 		nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+ 		ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++		if (fLogicalW < SWEET_PANEL_W) {	/* 0248: the CPU copy's canvas ends before the panel does */
++			nx = nx > 0xffff ? 0xffff : nx;
++			ny = ny > 0xffff ? 0xffff : ny;
++		}
+ 	}
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+ 	if (was == down && !moved) {
+-- 
+2.56.0
+
