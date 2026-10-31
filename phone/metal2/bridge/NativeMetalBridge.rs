@@ -10,6 +10,12 @@
 
 #[path = "NativeMetalObjects.rs"]
 pub mod objects;
+#[path = "NativeMetalAlloc.rs"]
+mod alloc;
+
+/// 0116: per-thread free lists for small requests. Off: M2V_FAST_ALLOC=0.
+#[global_allocator]
+static ALLOCATOR: alloc::FastAlloc = alloc::FastAlloc;
 
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
