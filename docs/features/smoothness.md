@@ -94,6 +94,14 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 02:00 f1/f2: DEADFILL survey with a control: stale clock points at mode 2; Compass tears are capture artefacts
+- kernel132 sweetswapbig=6; f1 SWEET_DEADFILL=2 (20261031-012907.log), f2 env empty (20261031-014637.log). PNGs research/df2 (a_ mode 2, b_ control).
+- Compass: both modes: shots 1-2 clean, 3-5 torn; webcam clean. So flame-shot tears on moving content: the Compass "shear" in apps.md g1 was a capture artefact. Correction to that entry. Tips: black rectangles in the banner in both modes, webcam agrees: real, not mode 2. Photos: garbled thumbnails in both, webcam agrees: real or old files.
+- Clock: mode 2 tracked 1:32-1:34, jumped back to 1:32 at 01:35:16 in Settings, still 1:32 at 01:36:05, webcam agrees; fine again after Home. Control: current for 3.5 min. With e1's 12:59 at 1:0x, that's 2 events with mode 2, 0 without; small sample.
+- Hang: f1 mixed use, Maps: 905.879 s "GPU hang or fault (fence 23128, done 23111, fsr 0)", recover2 and recover3 failed, DeviceLost in Maps, then 10-20 fps. No panic. Control had no mixed run. Same shape as b1's (no mode 2). Hang rate is an open problem on its own, and a failed recover3 leaves CPU drawing until reboot.
+- Other screens with mode 2: Home, Control Center, Settings, Camera UI, Maps UI clean; Maps no tiles; page swipe shows ghosted icons in motion on the webcam, clean after.
+- Speed in this run: void: a script misuse set kern.sweet_ui_swapbig wrong: Settings 30.6 and ~40. Fixed fpsbench: mode 2 42.6, control 48.3 on Home (bench still alternates and pauses; not a steady load). Mode 2 stays off. Repeat with m0, m1, m2 and an 8 min clock watch running; code audit in research/notes/deadfill-audit.md.
+
 ### 2026-10-31 01:30 e1: first DEADFILL survey: 17 screens clean; three findings, likely test artefacts; Home 57 swaps/s
 - kernel132 sweetswapbig=6 SWEET_DEADFILL=2 before a fresh boot, boot 20261031-005605.log, 20261031-012256.log, 4455 mV, no reset, no hang. Clean (PNG read, research/df): lock, Home x2, Control Center, Today, Settings, Calendar, Mail, Notes, Reminders, Clock, Safari, Files, Calculator, Weather, App Library, Utilities folder. 5 sleep/wake cycles fine. Env set back to empty.
 - Not run: Tips, Maps retry, app switcher, Camera preview, mid-animation frames, 3 min of use. Maps showed only a spinner; Camera went to the lock screen.

@@ -48,6 +48,9 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 02:00 Correction to g1: Compass isn't garbled; Tips and Photos are
+- f1/f2 (smoothness.md): Compass tears only in flame-shot, in some shots, while the webcam stays clean: the tool reads a moving surface row by row. For anything that moves, use several shots and the webcam. Tips: black rectangles in the banner, in both modes, on the webcam too. Photos: garbled thumbnails on the webcam too; may be old files.
+
 ### 2026-10-31 00:50 g1: GLYPHS FIXED on the lock screen, Control Center, Settings, Home (xnu 0251, kernel132); Compass, Tips, Photos remain
 - kernel132 = kernel131 + 0251: a surface with an explicit row and at most 9 keys keeps its row. `CAMERA=1 tools/sunfish-test.sh -k work/kernel132/kernel.development.sweet g1 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweettrace=1 sweetcpusample=1`, boots 20261031-003522.log, 20261031-003949.log, 4455 mV, no reset, no DeviceLost.
 - Log: 75x144 asked 160 kept, 102x144 224, 105x144 224, 96x148 192, 230x186 480, 360x246 736, 312x202 640, 272x184 BGRA 1088, all 6 keys. Two 420f surfaces with 9 keys (1105x1160 row 4480, 512x512 row 2048) have no "kept" tag: planar, left as they were.
