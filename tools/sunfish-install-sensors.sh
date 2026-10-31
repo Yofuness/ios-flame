@@ -8,6 +8,9 @@
 # tools/sunfish-sensors-files.sh prints (setup.md step 8).
 # Off: touch /var/local/sensors.off (next boot). Audio tests that run adspboot by hand need
 # `touch /var/local/sensors.off` and a reboot first: only one adspboot may own the ADSP.
+# sp23: /var/local/speaker.on adds iOS audio to the speaker to this job (adspboot --amp --audio-fifo, FIFO /var/run/sunfish-audio,
+# read at the job's start, so it takes a reboot). The file's content, if a number like -20, is --amp-db; else -102, silent.
+# Needs sweetampreset=1 on the boot line, or the job logs "amp not ready" and runs the sensors alone.
 # Backup /System/Library/xpc/launchd.plist.pre-sensors (first run only). Idempotent. Reboot to apply.
 #   tools/sunfish-install-sensors.sh [--undo]    --undo: remove the job from launchd.plist (files left)
 set -euo pipefail
@@ -31,7 +34,14 @@ case "$b" in ''|*[!0-9]*) sleep 25 ;; *) up=$(( $(date +%s) - b )); [ $up -lt 25
 # dm12: "hdg" lines in the log only on request; the recorder is opt-in too (/var/local/motion-dump.on, read by adspboot)
 [ -e /var/local/sensors.trace ] && export SNS_HEADING_TRACE=1
 [ -f /var/local/sensors.log ] && mv -f /var/local/sensors.log /var/local/sensors.log.prev
-exec /var/local/bin/adspboot boot --rpc --root --sensors --unsafe --sns-motion --sns-rot --sns-secs 0 --watch 0 \
+# sp23: iOS audio on the speaker, with /var/local/speaker.on; its content, if a number like -20, is the level (else silent)
+spk=
+if [ -e /var/local/speaker.on ]; then
+	spk="--amp --audio-fifo /var/run/sunfish-audio"
+	db=$(cat /var/local/speaker.on 2>/dev/null)
+	case "$db" in -[0-9]|-[0-9][0-9]|-[0-9][0-9][0-9]) spk="$spk --amp-db $db" ;; esac
+fi
+exec /var/local/bin/adspboot boot --rpc --root --sensors --unsafe --sns-motion --sns-rot --sns-secs 0 --watch 0 $spk \
 	>/var/local/sensors.log 2>&1
 SH
 	F put $U/sensors-start.sh /var/local/bin/sensors-start.sh 755 >/dev/null

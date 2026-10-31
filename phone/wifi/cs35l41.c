@@ -61,11 +61,17 @@
 #define VOL_FLOOR_DB	(-102)		/* tlv minimum 0x4cf */
 #define AMP_OK(x)	((x) == 0x40 || (x) == 0x41)	/* ep1: 0x40 = top (earpiece, DT reset_pin_top), 0x41 = bottom loudspeaker */
 
-static int dry;
+static int dry, quiet;
 
 void cs_set_dry(int d)
 {
 	dry = d;
+}
+
+/* sp23: no line per register access (--audio-fifo: a daemon's log); errors still print */
+void cs_set_quiet(int q)
+{
+	quiet = q;
 }
 
 static int rd(struct cs_amp *a, uint32_t reg, uint32_t *v)
@@ -85,7 +91,8 @@ static int rd(struct cs_amp *a, uint32_t reg, uint32_t *v)
 		return err;
 	}
 	*v = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
-	printf("cs35l41 %#x: read %08x = %08x\n", a->addr, reg, *v);	/* sp1: every access logged */
+	if (!quiet)
+		printf("cs35l41 %#x: read %08x = %08x\n", a->addr, reg, *v);	/* sp1: every access logged */
 	return 0;
 }
 
@@ -100,7 +107,8 @@ static int wr(struct cs_amp *a, uint32_t reg, uint32_t v)
 		printf("cs35l41 %#x: write %08x refused (only 0x40/0x41)\n", a->addr, reg);
 		return -1;
 	}
-	printf("cs35l41 %#x: %swrite %08x = %08x\n", a->addr, dry ? "[dry] " : "", reg, v);
+	if (!quiet)
+		printf("cs35l41 %#x: %swrite %08x = %08x\n", a->addr, dry ? "[dry] " : "", reg, v);
 	if (dry)
 		return 0;
 	uint8_t p[8] = { reg >> 24, reg >> 16, reg >> 8, reg, v >> 24, v >> 16, v >> 8, v };
@@ -181,7 +189,8 @@ int cs_probe(struct cs_amp *a)
 				       a->addr == 0x40 ? 8 : 11);
 			return err;
 		}
-		printf("cs35l41 %#x: %s %08x = %08x\n", a->addr, regs[i].n, regs[i].r, v);
+		if (!quiet)
+			printf("cs35l41 %#x: %s %08x = %08x\n", a->addr, regs[i].n, regs[i].r, v);
 		/* sp1: abort unless devid 0x35a40, revid B2 (the errata below are B2's) and GLOBAL_EN still 0 */
 		if (!dry && ((regs[i].r == DEVID && (v & 0xffffff) != 0x35a40) ||
 			     (regs[i].r == REVID && (v & 0xff) != 0xb2) || (regs[i].r == PWR_CTRL1 && (v & 1)))) {
@@ -273,7 +282,8 @@ static int otp_unpack(struct cs_amp *a)
 			continue;	/* padding */
 		if (rd(a, f.reg, &v))
 			return -1;
-		printf("cs35l41 %#x: otp: trim %08x mask %08x val %08x\n", a->addr, f.reg, mask, val << f.shift);
+		if (!quiet)
+			printf("cs35l41 %#x: otp: trim %08x mask %08x val %08x\n", a->addr, f.reg, mask, val << f.shift);
 		err |= wr(a, f.reg, (v & ~mask) | (val << f.shift));
 		nw++;
 	}
@@ -398,7 +408,7 @@ int cs_verify(struct cs_amp *a)
 			printf("cs35l41 %#x: verify %08x MISMATCH: read %08x mask %08x want %08x got %08x\n", a->addr,
 			       a->exp[i].reg, v, a->exp[i].mask, a->exp[i].val, v & a->exp[i].mask);
 			bad = 1;
-		} else
+		} else if (!quiet)
 			printf("cs35l41 %#x: verify %08x ok (%08x & %08x)\n", a->addr, a->exp[i].reg, v, a->exp[i].mask);
 	}
 	if (lock(a))

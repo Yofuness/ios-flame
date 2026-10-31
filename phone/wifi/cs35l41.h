@@ -30,6 +30,7 @@ struct cs_amp {
 };
 
 void cs_set_dry(int dry);
+void cs_set_quiet(int quiet);				/* sp23: no line per register access */
 int cs_probe(struct cs_amp *a);				/* IDs + state, read-only; 0 = devid/revid B2/GLOBAL_EN 0 ok */
 int cs_config(struct cs_amp *a, int vol_db, int boost);	/* errata, OTP trims (sp6), ASP I2S 48k/16, clocks, volume (dB, <= -20), AMP_EN;
 							 * boost is ignored (bypass only) */

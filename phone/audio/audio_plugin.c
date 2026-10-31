@@ -3,8 +3,8 @@
  *
  * Sunfish (Pixel 4a) port of ios-redfin's RedwoodAudio.driver, which is HackiOS's
  * userland/src/audio_plugin.c (MIT, Copyright (c) 2026 OOSEX GANG, LICENSE.HackiOS).
- * Changed: names (Redwood -> Sunfish, /dev/sunfish-audio|-mic, which do not exist yet:
- * the null sink below counts the frames as refused and I/O runs on), a fresh factory UUID, and
+ * Changed: names (Redwood -> Sunfish, /dev/sunfish-mic, which does not exist yet), the speaker's sink is a FIFO
+ * (sp23, speaker_write(): without its reader the frames count as refused and I/O runs on), a fresh factory UUID, and
  * say() also goes to os_log and /var/local/camdev.log (mediaserverd's stderr goes nowhere here). Device UIDs unchanged.
  *
  * Audio devices reach the audio server's hardware layer (the "HAL" of CoreAudio, inside
@@ -22,8 +22,8 @@
  * with nothing plugged in plays through, with a volume, the volume display and the place in
  * Control Center that go with it. So this presents four devices under those names:
  *
- *   "Speaker"   a stereo output whose samples are written to /dev/sunfish-audio, where the
- *               kernel takes them to whatever can play them (see sys/sunfish_audio.h), and a
+ *   "Speaker"   a stereo output whose samples are written to the FIFO /var/run/sunfish-audio,
+ *               read by adspboot --audio-fifo, which plays them (see speaker_write()), and a
  *               stereo input that is always silent (on an iPhone: what the amplifiers measure)
  *   "Hawking"   one silent input and nothing else. The virtual audio device will not build the
  *               speaker route without a second virtual device of its own (its type 'vhaw', a
@@ -48,14 +48,13 @@
  * The device has no clock but the system's: it claims to play exactly SUNFISH_AUDIO_RATE frames
  * a second of mach_absolute_time(), and the HAL's I/O thread paces itself by that.
  *
- * The speaker's output has a volume control, as the iPhone's own speaker has: what is set on it
- * goes to the kernel (ioctl SUNFISH_AUDIO_SET_VOLUME), which sets the amplifiers' level by it -- on
- * the phone, so far under the loudest it allows. Its scale is 48 dB in a straight line of
+ * The speaker's output has a volume control, as the iPhone's own speaker has; what is set on it goes
+ * nowhere (sp23: the amplifier's level is fixed in adspboot, --amp-db). Its scale is 48 dB in a straight line of
  * decibels, 3 dB for each of iOS's sixteen steps; 0 is silence. What iOS does with it (the phone,
  * 15 October): the virtual audio device sets it once, to its top (0 dB), when it takes the
  * device, and leaves it there -- its routing tables keep the iPhone X's speaker in software volume
  * mode, so the volume buttons and Control Center scale the samples themselves, and at 0 what is
- * written is silence (on which the kernel keeps the amplifiers off).
+ * written is silence (on which adspboot turns the amplifier off).
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFPlugInCOM.h>
@@ -66,7 +65,6 @@
 #include <math.h>
 #include <notify.h>
 #include <dispatch/dispatch.h>
-#include <sys/ioctl.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
@@ -252,7 +250,6 @@ static struct device devices[] = {
 
 static AudioServerPlugInHostRef host;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static int sink = -1;                   /* /dev/sunfish-audio */
 static Float64 ticks_per_frame;
 static UInt64 written, refused;         /* frames since the speaker's I/O started */
 static Boolean inactive[OBJECT_LAST + 1];       /* streams the HAL has switched off */
@@ -310,18 +307,12 @@ db_to_scalar(Float32 db)
 	return scalar < 0 ? 0 : scalar > 1 ? 1 : scalar;
 }
 
-/* The volume, to the kernel. With the lock held. */
+/* The volume: said, no more (sp23: nothing below takes it). With the lock held. */
 static void
-volume_to_kernel(void)
+volume_said(void)
 {
-	struct sunfish_audio_volume v = { (uint32_t)lround(-scalar_to_db(volume) * 8), volume <= 0 };
-
-	if (sink < 0 || ioctl(sink, SUNFISH_AUDIO_SET_VOLUME, &v) < 0) {
-		say("sunfish: audio: the volume %.3f could not be given to the kernel (%s)\n", volume, strerror(errno));
-		return;
-	}
-	say("sunfish: audio: the volume is %.3f: %s%.1f dB under the loudest\n", volume, v.muted ? "silence, " : "",
-	    v.below / 8.0);
+	say("sunfish: audio: the volume is %.3f: %s%.1f dB under the loudest\n", volume, volume <= 0 ? "silence, " : "",
+	    -scalar_to_db(volume));
 }
 
 /* The device with this object number, or the one this stream belongs to; NULL = neither. */
@@ -435,8 +426,7 @@ initialize(__unused AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef 
 	host = the_host;
 	mach_timebase_info(&timebase);
 	ticks_per_frame = 1e9 * timebase.denom / timebase.numer / SUNFISH_AUDIO_RATE;
-	sink = open(SUNFISH_AUDIO_DEVICE, O_WRONLY);
-	say("sunfish: audio: the speaker is with the HAL (%s: %s)\n", SUNFISH_AUDIO_DEVICE, sink < 0 ? strerror(errno) : "open");
+	say("sunfish: audio: the speaker is with the HAL (%s)\n", SUNFISH_AUDIO_FIFO);
 	jack_start();
 	if (stat(JACK_OUT, &st) == 0) {
 		/* sunfish S4: devices[] is ours until the HAL first asks */
@@ -960,7 +950,7 @@ set_property_data(AudioServerPlugInDriverRef driver, AudioObjectID object, pid_t
 		    wanted < 0 ? 0 : wanted > 1 ? 1 : wanted;
 		pthread_mutex_lock(&lock);
 		volume = wanted;
-		volume_to_kernel();
+		volume_said();
 		pthread_mutex_unlock(&lock);
 		if (host != NULL) {
 			host->PropertiesChanged(host, OBJECT_SPEAKER_VOLUME, 2, changed);
@@ -1087,7 +1077,7 @@ stop_io(__unused AudioServerPlugInDriverRef driver, AudioObjectID object, __unus
 			codec_close();
 		} else if (d->output != 0) {
 			say("sunfish: audio: stopped after %llu.%02llu s (%llu frames not taken by %s)\n", written / SUNFISH_AUDIO_RATE,
-			    written % SUNFISH_AUDIO_RATE * 100 / SUNFISH_AUDIO_RATE, refused, SUNFISH_AUDIO_DEVICE);
+			    written % SUNFISH_AUDIO_RATE * 100 / SUNFISH_AUDIO_RATE, refused, SUNFISH_AUDIO_FIFO);
 		}
 	}
 	pthread_mutex_unlock(&lock);
@@ -1196,6 +1186,50 @@ actuator_write(const int16_t *samples, UInt32 frames)
 	}
 }
 
+/*
+ * sp23: what iOS plays on the speaker goes to the FIFO /var/run/sunfish-audio, whose reader, adspboot --audio-fifo
+ * (phone/wifi/adspboot.c), plays it through the ADSP. As actuator_write(): never waits; no reader (ENOENT, ENXIO), a full
+ * FIFO (EAGAIN) or a reader gone (EPIPE) count what is left as refused, and the open is tried again at most once a
+ * second. PIPE_BUF is a multiple of the frame, so only whole frames go in. Off: no adspboot --audio-fifo, no FIFO.
+ */
+static int speaker = -1;          /* the FIFO, -1: not open */
+static uint64_t speaker_tried;    /* when the open was last tried (ns, CLOCK_UPTIME_RAW) */
+
+static void
+speaker_write(const void *samples, UInt32 frames)
+{
+	size_t len = (size_t)frames * SUNFISH_AUDIO_FRAME, off = 0;
+
+	if (speaker < 0) {
+		uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+
+		if (speaker_tried == 0 || now - speaker_tried >= 1000000000ull) {
+			speaker_tried = now;
+			speaker = open(SUNFISH_AUDIO_FIFO, O_WRONLY | O_NONBLOCK);
+			if (speaker >= 0) {
+				(void)fcntl(speaker, F_SETNOSIGPIPE, 1);    /* a reader gone: EPIPE, not mediaserverd's death */
+				say("sunfish: audio: the speaker's FIFO %s open\n", SUNFISH_AUDIO_FIFO);
+			}
+		}
+	}
+	while (speaker >= 0 && off < len) {
+		size_t n = len - off < PIPE_BUF ? len - off : PIPE_BUF;
+
+		if (write(speaker, (const char *)samples + off, n) < 0) {
+			if (errno == EPIPE || errno == ENXIO) {
+				const char *why = errno == EPIPE ? "no reader" : "gone";
+
+				close(speaker);
+				speaker = -1;
+				say("sunfish: audio: the speaker's FIFO %s closed (%s)\n", SUNFISH_AUDIO_FIFO, why);
+			}
+			break;          /* EAGAIN (full): the rest refused */
+		}
+		off += n;
+	}
+	refused += (len - off) / SUNFISH_AUDIO_FRAME;
+}
+
 static OSStatus
 do_io_operation(__unused AudioServerPlugInDriverRef driver, __unused AudioObjectID object, AudioObjectID stream,
     __unused UInt32 client, UInt32 operation, UInt32 frames, __unused const AudioServerPlugInIOCycleInfo *cycle, void *buffer,
@@ -1216,10 +1250,7 @@ do_io_operation(__unused AudioServerPlugInDriverRef driver, __unused AudioObject
 	} else if (operation == kAudioServerPlugInIOOperationWriteMix && stream == OBJECT_ACTUATOR_OUTPUT) {
 		actuator_write(buffer, frames);
 	} else if (operation == kAudioServerPlugInIOOperationWriteMix && stream == d->output) {
-		/* the kernel takes it all or leaves it: this thread must not wait */
-		if (sink < 0 || write(sink, buffer, (size_t)frames * SUNFISH_AUDIO_FRAME) < 0) {
-			refused += frames;
-		}
+		speaker_write(buffer, frames);
 		written += frames;
 	}
 	return 0;

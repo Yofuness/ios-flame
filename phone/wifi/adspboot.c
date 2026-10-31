@@ -34,6 +34,8 @@
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *                     sp18: --sd0-noise SECS (with --amp, no boost): DSP silent, gpio10 driven from an LFSR, 3 bursts
  *                     sp19: --pin-watch (with --rec-echo, --amp-db -102): DSP silent, gpio10/11/8/9 sampled in place, then as inputs
+ *                     sp23: --audio-fifo PATH: iOS audio from a FIFO instead of the tone, stream up on demand and repeatable
+ *                     (speaker-daemon.md; section "--audio-fifo" below). Implies --amp, --swap-lanes (--no-swap-lanes), amp 0x41, -102 dB
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
@@ -65,6 +67,9 @@
 #include <signal.h>
 #include <math.h>
 #include <pthread.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include "af_ring.h"
 #include "pmem.h"
 #include "smem.h"
 #include "glink.h"
@@ -116,6 +121,7 @@ static int rpc_on;
 #define REC_BYTES	0x1000
 static int pcm_on, rec_on, rec_hex, rec_echo, lpi_slew;	/* sp15: rec_echo, lpi_slew */
 static int swap_lanes;	/* sp20: sp19 saw the amp drive gpio10, and nothing drive gpio11: play on SD1, capture on SD0 */
+static int af_on;	/* sp23: --audio-fifo */
 static uint32_t pcm_buf_len = PCM_BUF;	/* sp7: + REC_READS pages with --rec, same mapping */
 static uint32_t pcm_sid = 0x1b21, pcm_shift = 1;
 static uint64_t pcm_pa, pcm_dsp;
@@ -1467,12 +1473,13 @@ static void afe_i2s_pl(uint8_t *b, uint16_t port, uint16_t lane)
 }
 
 /* sp2: gpio8 SCK func3, gpio9 WS func3, gpio10 SD0 func4, 8 mA, no pull (live.dts:23261-23340). 0 = all read back.
- * sp7: --rec adds gpio11 SD1 func2 (0xc8: same 8 mA / no pull, function field 2; vi-loopback.md section 1). */
+ * sp7: --rec adds gpio11 SD1 func2 (0xc8: same 8 mA / no pull, function field 2; vi-loopback.md section 1).
+ * sp23: so does --swap-lanes, where gpio11 carries the playback. */
 static int lpi_pins(int on)
 {
 	static const uint32_t want[4] = { 0xcc, 0xcc, 0xd0, 0xc8 };
 	int bad = 0;
-	for (int i = 0; i < (rec_on ? 4 : 3); i++) {
+	for (int i = 0; i < (rec_on || swap_lanes ? 4 : 3); i++) {
 		uint64_t pa = LPI_PA + 0x1000u * (8 + i);
 		uint32_t cur = rd32(pa), v = on ? want[i] : lpi_saved[i];
 		if (on)
@@ -1701,6 +1708,14 @@ static void lpi_restore(void)	/* atexit too: pins back even if the devote never 
 	pw_join();	/* sp19: same reason as sd0_restore */
 	pw_unset();
 	sd0_restore();	/* sp18: before lpi_pins puts the saved cfg back */
+	if (lpi_set && af_on) {	/* sp23: ADSP crashed: the core vote may be gone, and an unclocked LPASS read can reset the phone (jack2) */
+		uint32_t v = 1;
+		if (smp2p_in(&v) || (v & 1)) {
+			printf("lpi: ADSP down (state %x): pins left as they are\n", v);
+			lpi_set = 0;
+			return;
+		}
+	}
 	if (lpi_set)
 		lpi_pins(0);
 }
@@ -1958,6 +1973,7 @@ static uint64_t amp_t0, amp_next;
  * down (the stalled stream then ends through the 1 s WRITE_DONE timeout) */
 static int amp_diag_n, amp_pcm_stop_test, pcm_stopped;
 static uint64_t amp_stop_t;
+static int af_amp_dead;	/* sp23: a fault or a failed setup: amp off until the next process */
 
 /* sp7: --rec ASP TX routing (vi-loopback.md step 2): VMON/IMON on, TX1 = VMON slot 0, TX2 = IMON slot 1, 16 bit,
  * TX1/2 enabled. on = 1 saves + writes + reads back, 0 restores (PWR_CTRL2 is left to cs_power_down: it zeroes it). */
@@ -2144,6 +2160,15 @@ static void amp_poll(void)
 {
 	if (!amp.up || now_ms() < amp_next)
 		return;
+	if (af_on) {	/* sp23: no cap, no tone tail, no snapshots; 200 ms: SE9's flock is shared with hapticd, and this holds up the glink loop */
+		amp_next = now_ms() + 200;
+		if (cs_check(&amp)) {
+			printf("amp: IRQ1 error: power down, no more amp in this run\n");
+			af_amp_dead = 1;
+			amp_off();
+		}
+		return;
+	}
 	amp_next = now_ms() + 50;
 	uint64_t on = now_ms() - amp_t0;
 	if (!amp_mid_read && on >= AMP_MAX_MS / 2) {	/* sp8: AMP_OUT_MUTE once at mid-tone */
@@ -2210,9 +2235,45 @@ static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl
 	pcm_due = now_ms() + 3000;
 }
 
+/*
+ * sp23: --audio-fifo PATH (research/notes/speaker-daemon.md): what the plug-in writes to the FIFO plays instead of the tone.
+ * The first non-zero sample starts the stream (AFE_VOTE .. P_PLAY), the amp goes on at the first WRITE_DONE, 1 s of
+ * silence or a DC mute turns it off, 10 s more take the stream down, and the next sound does it all again. The ADSP
+ * stays up, so the sensors go on. A fault, or a failed amp setup, means no amp until the next process; 3 failed
+ * streams in a row mean no more streams.
+ */
+#define AF_AMP_OFF_MS		1000
+#define AF_DOWN_MS		(AF_AMP_OFF_MS + 10000)
+#define AF_RETRY_MS		5000
+#define AF_MAX_FAILS		3
+static const char *af_path;
+static int af_fd = -1, af_keep = -1, af_up, af_want, af_stop_req, af_fails;
+static uint64_t af_last_sound, af_retry, af_next_crash;
+static struct af_ring af_r;
+static struct af_dc af_g;
+
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
+	if (af_on) {	/* sp23: both slots, as the tone; the amp reads slot 0 */
+		int16_t m[PCM_FRAMES];
+		int was = af_g.muted, sound = 0;
+		af_ring_pull(&af_r, m, PCM_FRAMES);
+		if (af_dc_feed(&af_g, m, PCM_FRAMES)) {
+			memset(m, 0, sizeof(m));
+			if (!was)
+				printf("audio: DC mean %d for %d x 100 ms: muted\n", af_g.last_mean, AF_DC_TRIP);
+		} else if (was)
+			printf("audio: DC gone: unmuted\n");
+		for (unsigned f = 0; f < PCM_FRAMES; f++) {
+			s[2 * f] = s[2 * f + 1] = m[f];
+			sound |= m[f];
+		}
+		if (sound)
+			af_last_sound = now_ms();
+		pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));
+		return;
+	}
 	int tone = !sd0_ms && !pw_on && pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec; sp18, sp19: DSP silent */
 	for (unsigned f = 0; f < PCM_FRAMES; f++)
 		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
@@ -2253,6 +2314,8 @@ static void rec_read(unsigned b)
 /* sp7: phase of what is being recorded now: 0 baseline (before the tone), 1 tone with the amp on, 2 the rest */
 static int rec_phase(void)
 {
+	if (af_on)	/* sp23: 1 = amp on; 0 = before it in this stream */
+		return amp.up ? 1 : amp_used ? 2 : 0;
 	if (sd0_ms)	/* sp18: 1 = a burst only, so "noise" rms is wide-band and free of the gaps */
 		return sd0_busy ? 1 : pcm_done < rec_lead ? 0 : 2;
 	if (pcm_done < rec_lead)
@@ -2453,8 +2516,11 @@ static void pcm_run(void)
 			return;
 		}
 		case P_PLAY:
-			printf("pcm: playing 1 kHz %d dBFS for %u x 10 ms, %u periods of %u B in flight\n", pcm_dbfs, pcm_tone_periods,
-			       PCM_PERIODS, PCM_BYTES);
+			if (af_on)	/* sp23 */
+				printf("pcm: playing the FIFO, %u periods of %u B in flight\n", PCM_PERIODS, PCM_BYTES);
+			else
+				printf("pcm: playing 1 kHz %d dBFS for %u x 10 ms, %u periods of %u B in flight\n", pcm_dbfs, pcm_tone_periods,
+				       PCM_PERIODS, PCM_BYTES);
 			pcm_op = 0;
 			pcm_t0 = pcm_t1 = now_ms();
 			for (unsigned p = 0; p < PCM_PERIODS; p++)
@@ -2553,6 +2619,15 @@ static void pcm_back(unsigned p)
 	pcm_due = pcm_t1 + 1000;
 	if (pcm_step != P_PLAY)
 		return;
+	if (af_on) {	/* sp23: no period limit; af_poll starts the amp and asks for the stop */
+		if (!af_stop_req)
+			pcm_write(p % PCM_PERIODS);
+		else if (!pcm_out) {
+			pcm_step = P_TEARDOWN;
+			pcm_run();
+		}
+		return;
+	}
 	if (pcm_done == 1)
 		amp_start();	/* sp1: stream running, BCLK present */
 	if (pcm_stopped)
@@ -2709,6 +2784,8 @@ static void apr_poll(void)
 {
 	pcm_poll();
 	if (apr_on && apr_step > 3) {	/* ap4: --afe sequence after the queries */
+		if (af_on && afe_step == AFE_IDLE && !af_want)	/* sp23: on demand */
+			return;
 		if (afe_on && afe_step == AFE_IDLE && !apr_ready && !getenv("ADSP_APR_NO_GATE")) {
 			printf("afe: skipped, ADSP audio not ready\n");	/* ap5 */
 			afe_step = AFE_DONE;
@@ -2742,6 +2819,145 @@ static void apr_poll(void)
 	} else if (now_ms() >= apr_due) {
 		printf("apr: op %x: no reply in 3 s\n", apr_q[apr_step - 1]);
 		apr_next(0);
+	}
+}
+
+/* sp23: GLOBAL_EN 0 on both amps, directly: cs_power_down does nothing unless this run configured the amp, and
+ * cs_probe stops at GLOBAL_EN 1. For the amp a killed run left on. An amp that doesn't answer is reported by cs_probe. */
+static void af_amp_clear(void)
+{
+	static const uint8_t addr[2] = { 0x40, 0x41 };
+	if (gi2c_init())
+		return;
+	for (int i = 0; i < 2; i++) {
+		struct cs_amp a = { .addr = addr[i] };
+		uint32_t v;
+		if (cs_read(&a, 0x2014, &v))	/* PWR_CTRL1 */
+			continue;
+		if (cs_write(&a, 0x2014, v & ~1u))
+			continue;
+		if (v & 1) {
+			printf("audio: amp %#x was on: GLOBAL_EN 0 written\n", addr[i]);
+			usleep(100000);	/* cs_power_down's PDN_DONE wait at most */
+		}
+	}
+}
+
+/* sp23: the FIFO, as hapticd's: our own writer keeps a closing plug-in from being an EOF. No FIFO: no audio, sensors go on */
+static void af_fifo_open(void)
+{
+	unlink(af_path);
+	if (mkfifo(af_path, 0666) || chmod(af_path, 0666)) {
+		printf("audio: %s: %s: no audio in this run\n", af_path, strerror(errno));
+		return;
+	}
+	af_fd = open(af_path, O_RDONLY | O_NONBLOCK);
+	af_keep = open(af_path, O_WRONLY | O_NONBLOCK);
+	if (af_fd < 0 || af_keep < 0) {
+		printf("audio: open %s: %s: no audio in this run\n", af_path, strerror(errno));
+		af_fd = -1;
+		return;
+	}
+	af_ring_clear(&af_r, 1);
+	printf("audio: reading %s (48 kHz stereo s16), amp %#x at %d dB\n", af_path, amp.addr, amp_db);
+}
+
+/* sp23: a stream is over (AFE_DONE): the one-shot state back, the next sound starts from AFE_VOTE */
+static void af_reset(void)
+{
+	int ok = afe_started && pcm_done && !pcm_failed;
+	af_fails = ok ? 0 : af_fails + 1;
+	printf("audio: stream down%s: %u periods, %u underflows, ring %llu short, %llu over, %llu dropped, %llu repeated, DC trips %u\n",
+	       ok ? "" : " (failed)", pcm_done, pcm_underflow, (unsigned long long)af_r.underrun, (unsigned long long)af_r.overrun,
+	       (unsigned long long)af_r.dropped, (unsigned long long)af_r.repeated, af_g.trips);
+	if (af_fails >= AF_MAX_FAILS)
+		printf("audio: %d failed streams in a row: no more in this run\n", af_fails);
+	af_retry = ok ? 0 : now_ms() + AF_RETRY_MS;
+	af_up = af_want = af_stop_req = 0;
+	amp_used = amp_mid_read = amp_diag_n = 0;
+	pcm_sent = pcm_done = pcm_out = pcm_underflow = pcm_werr = pcm_tone_at = 0;
+	pcm_failed = 0;
+	pcm_step = P_IDLE;
+	afe_started = afe_clk_ok = 0;
+	afe_clk_op = 0;
+	afe_step = AFE_IDLE;
+	rec_failed = rec_hexed = 0;
+	rec_reads = rec_errs = 0;
+	rec_untouched = rec_zero = rec_other = 0;
+	rec_win_n = 0;
+	memset(rec_win_ss, 0, sizeof(rec_win_ss));
+	memset(rec_win_pk, 0, sizeof(rec_win_pk));
+	memset(rec_win_z, 0, sizeof(rec_win_z));
+	memset(rec_ph_ss, 0, sizeof(rec_ph_ss));
+	memset(rec_ph_pk, 0, sizeof(rec_ph_pk));
+	memset(rec_ph_n, 0, sizeof(rec_ph_n));
+	af_ring_clear(&af_r, 1);
+	af_r.underrun = af_r.overrun = af_r.dropped = af_r.repeated = 0;
+}
+
+/* sp23: every edge_loop pass: crash check, drain the FIFO, the states */
+static void af_poll(void)
+{
+	if (!af_on)
+		return;
+	uint64_t now = now_ms();
+	if (now >= af_next_crash) {	/* before pcm_poll's 1 s timeout starts a teardown on a dead DSP */
+		uint32_t v;
+		af_next_crash = now + 200;
+		if (!smp2p_in(&v) && (v & 1)) {
+			printf("audio: ADSP CRASH (state %x): amp off, exit\n", v);
+			crash_reason();
+			amp_off();
+			exit(1);	/* lpi_restore sees the state and leaves the pins */
+		}
+	}
+	if (af_fd < 0)
+		return;
+	uint8_t b[4096];
+	ssize_t n;
+	for (int i = 0; i < 16 && (n = read(af_fd, b, sizeof(b))) > 0; i++)
+		af_ring_put(&af_r, b, (size_t)n);
+	if (!amp_ready && !amp.up && !af_amp_dead) {	/* cs_power_down cleared it; here, in silence, as it stalls this loop */
+		if (amp_prepare()) {
+			printf("audio: amp setup failed: no more amp in this run\n");
+			af_amp_dead = 1;
+		}
+	}
+	if (!af_up) {
+		if (af_amp_dead || af_fails >= AF_MAX_FAILS || now < af_retry || !af_r.n) {
+			af_ring_clear(&af_r, 1);	/* nothing to play it on, or nothing yet */
+			return;
+		}
+		printf("audio: sound: stream up\n");
+		af_up = af_want = 1;
+		af_last_sound = now;
+		return;
+	}
+	if (afe_step == AFE_DONE) {
+		af_reset();
+		return;
+	}
+	if (pcm_step != P_PLAY || af_stop_req)
+		return;
+	uint64_t quiet = now > af_last_sound ? now - af_last_sound : 0;
+	if (amp.up && (quiet >= AF_AMP_OFF_MS || af_g.muted)) {
+		printf("audio: %s: amp off\n", af_g.muted ? "DC mute" : "silence");
+		amp_off();
+		amp_used = 0;
+	} else if (!amp.up && pcm_done && amp_ready && quiet < AF_AMP_OFF_MS && !af_g.muted) {
+		amp_start();	/* sp1: stream running, BCLK present */
+		if (!amp.up) {
+			printf("audio: amp power-up failed: no more amp in this run\n");
+			af_amp_dead = 1;
+		}
+	}
+	if (quiet >= AF_DOWN_MS || af_amp_dead) {
+		printf("audio: stream stop\n");
+		af_stop_req = 1;	/* zeros are in flight: pcm_back tears down when the last is back */
+		if (!pcm_out) {
+			pcm_step = P_TEARDOWN;
+			pcm_run();
+		}
 	}
 }
 
@@ -3030,10 +3246,10 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			}
 			exit(1);
 		}
-		if (pcm_running && beat > now_ms() + 1000)	/* ap7: the first beat was 10 s out, after the pcm run */
+		if (pcm_running && !af_on && beat > now_ms() + 1000)	/* ap7: the first beat was 10 s out, after the pcm run; sp23: a long stream stays at 10 s */
 			beat = now_ms() + 1000;
 		if (now_ms() >= beat) {
-			beat = now_ms() + (pcm_running ? 1000 : 10000);	/* ap7: 1 s while --pcm plays */
+			beat = now_ms() + (pcm_running && !af_on ? 1000 : 10000);	/* ap7: 1 s while --pcm plays */
 			heartbeat();
 		}
 		int r;
@@ -3044,6 +3260,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 			return 0;
 		}
 		rpc_poll();
+		af_poll();	/* sp23 */
 		apr_poll();
 		if (swr_on && afe_step == AFE_DONE) {	/* hj0: probe over, exit */
 			swr_log("swr: probe done\n");
@@ -3066,7 +3283,7 @@ static int edge_loop(int ms, int stop, uint64_t t0)
 					return 1;	/* --rpc: keep serving until the watch ends or a crash */
 			}
 		}
-		usleep(sns_dark() ? 20000 : 2000);	/* o12: 20 ms while the screen is blanked (SNS_DARK=0: off) */
+		usleep(sns_dark() && !(af_on && afe_step != AFE_IDLE) ? 20000 : 2000);	/* o12: 20 ms while the screen is blanked (SNS_DARK=0: off); sp23: not while streaming, the DSP holds 80 ms */
 	}
 	return 0;
 }
@@ -3139,6 +3356,7 @@ int main(int argc, char **argv)
 	uint32_t sid = 0, mask = 0;
 	int one = 0, sstatus = 0, sdump = 0, root = 0, sensors = 0;
 	const char *cmd = "boot";
+	int amp_db_set = 0, amp_addr_set = 0, no_swap = 0;	/* sp23 */
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--watch") && i + 1 < argc)
 			watch = atoi(argv[++i]);
@@ -3200,8 +3418,14 @@ int main(int argc, char **argv)
 			rec_on = 1;
 		else if (!strcmp(argv[i], "--rec-echo"))	/* sp15: TX1 = VPMON, TX2 = ASPRX1 (amp echoes SD0 on SD1) */
 			rec_echo = 1;
-		else if (!strcmp(argv[i], "--swap-lanes"))	/* sp20: needs --rec, which also sets up gpio11 */
+		else if (!strcmp(argv[i], "--swap-lanes"))	/* sp20; sp23: --rec no longer needed, lpi_pins sets up gpio11 */
 			swap_lanes = 1;
+		else if (!strcmp(argv[i], "--no-swap-lanes"))	/* sp23: --audio-fifo's default off */
+			no_swap = 1;
+		else if (!strcmp(argv[i], "--audio-fifo") && i + 1 < argc) {	/* sp23: iOS audio from a FIFO; implies --amp */
+			af_path = argv[++i];
+			af_on = amp_on = apr_on = afe_on = pcm_on = smmu = 1;
+		}
 		else if (!strcmp(argv[i], "--lpi-slew"))	/* sp15: LPI slew-rate regs as stock bolero */
 			lpi_slew = 1;
 		else if (!strcmp(argv[i], "--sd0-noise") && i + 1 < argc) {	/* sp18: gpio10 from an LFSR, 3 bursts of <= 1 s; needs --amp */
@@ -3237,10 +3461,13 @@ int main(int argc, char **argv)
 			i2s_bits = 32;
 		else if (!strcmp(argv[i], "--adm-bits") && i + 1 < argc)	/* pcm32: ADM_CMD_DEVICE_OPEN_V5 bit width */
 			adm_bits = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "--amp-addr") && i + 1 < argc)	/* ep1: 0x41 = bottom loudspeaker */
+		else if (!strcmp(argv[i], "--amp-addr") && i + 1 < argc) {	/* ep1: 0x41 = bottom loudspeaker */
 			amp.addr = (uint8_t)strtoul(argv[++i], NULL, 0);
-		else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc)
+			amp_addr_set = 1;
+		} else if (!strcmp(argv[i], "--amp-db") && i + 1 < argc) {
 			amp_db = atoi(argv[++i]);
+			amp_db_set = 1;
+		}
 		else if (!strcmp(argv[i], "--pcm-dbfs") && i + 1 < argc) {	/* sp5: clamped -40..-6 */
 			pcm_dbfs = atoi(argv[++i]);
 			if (pcm_dbfs > -6)
@@ -3293,8 +3520,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "adspboot: --rec needs --pcm --amp\n");
 		return 2;
 	}
-	if (swap_lanes && (!rec_on || pw_on || sd0_ms)) {	/* sp20 */
-		fprintf(stderr, "adspboot: --swap-lanes needs --rec, not with --pin-watch or --sd0-noise\n");
+	if (af_on && (sd0_ms || pw_on || amp_pcm_stop_test || amp_check || swr_on || amp_boost || amp.amp_gain > 0 || no_lpi || strcmp(cmd, "boot"))) {	/* sp23 */
+		fprintf(stderr, "adspboot: --audio-fifo is for boot, not with --sd0-noise, --pin-watch, --amp-pcm-stop-test, --amp-check, --swr-*, --amp-boost, --amp-gain > 0 or --no-lpi\n");
+		return 2;
+	}
+	if (af_on) {	/* sp23: swap on; silent and the bottom amp unless told otherwise */
+		swap_lanes = !no_swap;
+		if (!amp_db_set)
+			amp_db = -102;
+		if (!amp_addr_set)
+			amp.addr = 0x41;
+	}
+	if (swap_lanes && (pw_on || sd0_ms)) {	/* sp20 */
+		fprintf(stderr, "adspboot: --swap-lanes: not with --pin-watch or --sd0-noise\n");
 		return 2;
 	}
 	if (rec_echo && !rec_on) {	/* sp15 */
@@ -3327,7 +3565,15 @@ int main(int argc, char **argv)
 		amp_off();
 		return r ? 1 : 0;
 	}
-	if (amp_on) {
+	if (af_on) {	/* sp23: no amp must not cost the sensors: without one, no FIFO, the rest runs */
+		af_amp_clear();
+		if (amp_prepare()) {
+			printf("audio: amp not ready (sweetampreset=1, sweetse9=2?): no audio in this run\n");
+			af_amp_dead = 1;
+		} else
+			af_fifo_open();
+		cs_set_quiet(1);	/* the first setup is in the log; 5 reads a second and each later setup are not */
+	} else if (amp_on) {
 		if (amp_prepare()) {
 			printf("amp: not ready: stop before the ADSP boot\n");
 			return 1;
@@ -3377,7 +3623,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew] [--sd0-noise SECS] [--pin-watch]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew] [--sd0-noise SECS] [--pin-watch]] [--audio-fifo PATH [--no-swap-lanes]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))
