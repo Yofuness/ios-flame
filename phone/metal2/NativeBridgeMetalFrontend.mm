@@ -806,7 +806,7 @@ static void cullWhy(int why,NSString *l,const char *extra="") {
 // colour 0 an 8-bit unorm single-sample 2D IOSurface, no depth/stencil/visibility; colours 1..7 may be attached (a clear is refused when
 // the fill writes one that is not memoryless). Uses sweet cull's deferral; the telemetry's "DF" row counts drops and clears.
 static int deadfillMode() {
- static const int mode=[]{const char *p=getenv("SWEET_DEADFILL");if(!p||!*p||strcmp(getprogname(),"backboardd"))return 0;return std::max(0,std::min(2,atoi(p)));}();
+ static const int mode=[]{const char *p=getenv("SWEET_DEADFILL");if(strcmp(getprogname(),"backboardd"))return 0;if(!p||!*p)return 1;return std::max(0,std::min(2,atoi(p)));}();   // default 1: drops only (m1, 53 swaps/s); 0 off
  return mode;
 }
 static std::atomic<uint64_t> gDfDropped,gDfCleared,gDfPasses;
