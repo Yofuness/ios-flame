@@ -1,0 +1,183 @@
+From cec129d12cbe89d6531c756452cf3bd54169e15f Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 31 Oct 2026 03:26:52 -0400
+Subject: [PATCH] 0252 sunfish: real IOSurface use counts (B49): traps 0/1
+ count per client and in the state page at +0x18, leftovers given back on
+ release/close/death; boot-arg sweetusecount=0 off;
+ kern.sweet_surf_use_calls/max
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ iokit/Kernel/arm/SweetSurface.cpp | 97 ++++++++++++++++++++++++++++++-
+ 1 file changed, 94 insertions(+), 3 deletions(-)
+
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index ef98322..2e624af 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -40,6 +40,7 @@
+ #include <libkern/c++/OSNumber.h>
+ #include <libkern/c++/OSUnserialize.h>
+ #include <sys/proc.h>
++#include <sys/sysctl.h>
+ #include <pexpert/pexpert.h>
+ 
+ enum {
+@@ -67,6 +68,8 @@ enum {
+ #define SWEET_SURFACE_ROW_ALIGN         64
+ #define SWEET_SURFACE_TIMESTAMPS        0x800   /* offset in the state page */
+ #define SWEET_SURFACE_STATE_SEED        0xc     /* u32 in the state page */
++#define SWEET_SURFACE_STATE_USE         0x18    /* 0252: u32[2] in the state page, one per category */
++#define SWEET_SURFACE_USE_CATEGORIES    2
+ #define kIOSurfaceLockReadOnly          0x1
+ 
+ static IOLock       *sweet_surface_lock;
+@@ -145,6 +148,35 @@ sweet_surface_seed(SweetSurface *s)
+ 	return (uint32_t *)((uint8_t *)s->state->getBytesNoCopy() + SWEET_SURFACE_STATE_SEED);
+ }
+ 
++/*
++ * 0252 (B49): global use count of a category in the state page, saturating at 0 and at the top.
++ * IOSurfaceIsInUse reads both u32s as one u64 from every process's read-only mapping.
++ */
++static uint64_t sweet_surf_use_calls;   /* kern.sweet_surf_use_calls: traps, both directions */
++static uint32_t sweet_surf_use_max;     /* kern.sweet_surf_use_max: highest count seen (racy, a statistic) */
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_surf_use_calls,
++    CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    &sweet_surf_use_calls, 0, sysctl_handle_quad, "Q", "IOSurface use count traps (0252)");
++SYSCTL_OID_MANUAL(_kern, OID_AUTO, sweet_surf_use_max,
++    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_NOAUTO,
++    &sweet_surf_use_max, 0, sysctl_handle_int, "IU", "highest IOSurface use count (0252)");
++
++static void
++sweet_surface_use_add(SweetSurface *s, uint32_t category, int64_t delta)
++{
++	volatile UInt32 *use = (volatile UInt32 *)((uint8_t *)s->state->getBytesNoCopy() +
++	    SWEET_SURFACE_STATE_USE + category * sizeof(uint32_t));
++	UInt32 old, val;
++	do {
++		old = *use;
++		int64_t sum = (int64_t)old + delta;
++		val = sum < 0 ? 0 : sum > UINT32_MAX ? UINT32_MAX : (UInt32)sum;
++	} while (!OSCompareAndSwap(old, val, use));
++	if (val > sweet_surf_use_max) {
++		sweet_surf_use_max = val;
++	}
++}
++
+ /*
+  * Give the surface an id and a table slot; the table holds one retain and a
+  * user count (creators, client mappings, kernel holders). Lock held.
+@@ -585,6 +617,7 @@ public:
+ 	IOMemoryMap  *data;
+ 	IOMemoryMap  *state;
+ 	uint32_t      count;
++	uint32_t      use[SWEET_SURFACE_USE_CATEGORIES];        /* 0252: this client's part of the global count */
+ 
+ 	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+@@ -598,6 +631,12 @@ SweetSurfaceRef::free()
+ 	OSSafeReleaseNULL(data);
+ 	OSSafeReleaseNULL(state);
+ 	if (surface != NULL) {
++		/* 0252: release, close or death with counts still held gives them back. */
++		for (uint32_t c = 0; c < SWEET_SURFACE_USE_CATEGORIES; c++) {
++			if (use[c] != 0) {
++				sweet_surface_use_add(surface, c, -(int64_t)use[c]);
++			}
++		}
+ 		sweet_surface_put(surface);
+ 		surface->release();
+ 		surface = NULL;
+@@ -635,6 +674,7 @@ class IOSurfaceRootUserClient : public IOUserClient {
+ 	OSArray *fRefs;
+ 
+ 	SweetSurfaceRef *findRef(uint32_t id, unsigned int *index);
++	IOReturn changeUseCount(uint32_t id, uint32_t category, bool increment);
+ 	IOReturn addRef(SweetSurface *s, SweetSurfaceRef **refOut, bool *existing);
+ 	IOReturn returnSurface(SweetSurface *s, IOExternalMethodArguments *args);
+ 	IOReturn create(IOExternalMethodArguments *args);
+@@ -649,6 +689,7 @@ public:
+ 	IOExternalTrap *getTargetAndTrapForIndex(IOService **targetP, UInt32 index) APPLE_KEXT_OVERRIDE;
+ 
+ 	IOReturn trapUseCount(void *id, void *category, void *, void *, void *, void *);
++	IOReturn trapUseCountDecrement(void *id, void *category, void *, void *, void *, void *);
+ 	IOReturn trapLock(void *id, void *options, void *seedOut, void *, void *, void *);
+ 	IOReturn trapUnlock(void *id, void *options, void *seedOut, void *, void *, void *);
+ 	IOReturn trapRelease(void *id, void *, void *, void *, void *, void *);
+@@ -1038,11 +1079,61 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
+ 	}
+ }
+ 
++/*
++ * 0252 (B49): real use counts. IOSurface.framework counts per client and traps only on its 0->1 and 1->0
++ * (id, category). Each ref remembers its part, so a stray decrement can't take another process's count and
++ * SweetSurfaceRef::free gives leftovers back. boot-arg sweetusecount=0: no-op as before (counters not registered).
++ */
++IOReturn
++IOSurfaceRootUserClient::changeUseCount(uint32_t id, uint32_t category, bool increment)
++{
++	static int use_on = -1;
++	static UInt32 oids_registered;
++	if (use_on < 0) {
++		uint32_t v = 1;
++		PE_parse_boot_argn("sweetusecount", &v, sizeof(v));
++		use_on = v != 0;
++	}
++	if (!use_on) {
++		return kIOReturnSuccess;
++	}
++	if (OSCompareAndSwap(0, 1, &oids_registered)) { /* manual OIDs, long after lockdown (like 0198) */
++		sysctl_register_oid(&sysctl__kern_sweet_surf_use_calls);
++		sysctl_register_oid(&sysctl__kern_sweet_surf_use_max);
++	}
++	OSIncrementAtomic64((volatile SInt64 *)&sweet_surf_use_calls);
++	if (category >= SWEET_SURFACE_USE_CATEGORIES) {
++		return kIOReturnBadArgument;
++	}
++	IOReturn ret = kIOReturnNotFound;
++	IOLockLock(fLock);
++	SweetSurfaceRef *ref = findRef(id, NULL);
++	if (ref != NULL) {
++		ret = kIOReturnSuccess;
++		if (increment && ref->use[category] != UINT32_MAX) {
++			ref->use[category]++;
++			sweet_surface_use_add(ref->surface, category, 1);
++		} else if (!increment && ref->use[category] != 0) {
++			ref->use[category]--;
++			sweet_surface_use_add(ref->surface, category, -1);
++		}
++	}
++	IOLockUnlock(fLock);
++	return ret;
++}
++
+ IOReturn
+-IOSurfaceRootUserClient::trapUseCount(__unused void *id, __unused void *category,
++IOSurfaceRootUserClient::trapUseCount(void *id, void *category,
+     void *, void *, void *, void *)
+ {
+-	return kIOReturnSuccess;
++	return changeUseCount((uint32_t)(uintptr_t)id, (uint32_t)(uintptr_t)category, true);
++}
++
++IOReturn
++IOSurfaceRootUserClient::trapUseCountDecrement(void *id, void *category,
++    void *, void *, void *, void *)
++{
++	return changeUseCount((uint32_t)(uintptr_t)id, (uint32_t)(uintptr_t)category, false);
+ }
+ 
+ static IOReturn
+@@ -1116,7 +1207,7 @@ IOSurfaceRootUserClient::trapRelease(void *id, void *, void *, void *, void *, v
+ 
+ static IOExternalTrap sweet_surface_traps[] = {
+ 	[kSweetSurfaceTrapIncrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUseCount },
+-	[kSweetSurfaceTrapDecrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUseCount },
++	[kSweetSurfaceTrapDecrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUseCountDecrement },
+ 	[kSweetSurfaceTrapLock]          = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapLock },
+ 	[kSweetSurfaceTrapUnlock]        = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUnlock },
+ 	[kSweetSurfaceTrapRelease]       = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapRelease },
+-- 
+2.56.0
+
