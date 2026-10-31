@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 THE SPEAKER PLAYS: test tone at -20 dB heard by the mic (sp22, 2026-10-31, `--swap-lanes`); AirPods play music; iOS audio to the speaker not connected yet. **Updated:** 2026-10-31.
+**State:** ✅ iOS sound plays through the bottom speaker (sp26, 2026-10-31, kernel134 + speaker.on + sweetampreset=1), capped at -20 dB, quiet; AirPods play music; earpiece and mics not done. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,14 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 06:00 sp26: iOS SOUND PLAYS THROUGH THE SPEAKER: the Clock timer alarm reaches the mic; streams no longer fail
+- sp25 fix: silence keeps the amp configured (GLOBAL_EN only), 3 s WRITE_DONE timeout, a stream whose periods all completed isn't a failure. Root cause was the amp's full re-prepare stalling the loop up to 1.6 s (375 ms in sp23).
+- kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1 CAMERA=1, /var/local/speaker.on = -20, boot 20261031-054536.log, 4439 mV.
+- 6 lock sounds ~15 s apart: 0 failed, periods 1108-1125, 0 underflows; amp steps on max 83-117 ms, off max 50-80 ms; setup ~1040-1090 ms after each stream down (the idle loop and sensors stall that long). 3 sounds 2 s apart: amp resumes, no failure lines.
+- Clock timer, Radar, default iOS volume: stream up, amp on 36.9 s, 4539 periods, 0 underflows, amp on max 511 ms. EM-01 (research/notes/sp26-timer1*.txt): rms 135 baseline, mean 225 and max 409 during; band 2.6-2.78 kHz 1.32 baseline, mean 5.32, max 20.0. Radar is heard at the mic. Not by a person yet.
+- 5 sleep and wake cycles, app opens: no GPU hang, no ADSP or mediaserverd crash, sensors alive. Not run: typing in Notes (click delay).
+- Open: `dropped` up to 4800 and `over` in some streams (the ring trims; effect on sound unknown); the first sound after a stream down waits for setup; ~37 dB below stock volume: ceiling stays -20 dB until the user has listened. speaker.on stays set.
 
 ### 2026-10-31 05:40 sp24: iOS plays into the speaker path; lock sound reaches the amp; not yet proven audible
 - kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1 CAMERA=1, boots 20261031-053028.log (-102), 053246 (-20), 4455 and 4440 mV. tools/sunfish-install-sensors.sh and sunfish-install-audio.sh run; /var/local/speaker.on empty = -102, holds a dB value otherwise.
