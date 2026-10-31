@@ -48,6 +48,14 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 03:50 u1: xnu 0252 (use counts, kernel133): clock still stale; Tips and Photos clean this run
+- `CAMERA=1 tools/sunfish-test.sh -k work/kernel133/kernel.development.sweet u1 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweettrace=1 sweetcpusample=1`, boot 20261031-032917.log, 4454 mV, no reset. sweet_surf_use_max 2.
+- Clock in Settings: stale 8 of 13, same as before: 3:30, 3:31, 3:35 images return. So use counts aren't B49's cause.
+- Tips: webcam clean (flame-shot stripes are tears). Photos: thumbnails fine on shot and webcam. Both had been wrong on the webcam on kernel132 (f1, f2). Single observation: could be 0252, or a different banner or cache state. Not confirmed by an A/B.
+- Memory: mediaserverd footprint 23 -> 29 MB (restarted, peak 136), backboardd 123 -> 97 MB, peak 340, after 5 min of app cycling; no kernel132 numbers to compare. Speed, 5 s windows: 258, 266 and 260 swaps: ~52 swaps/s at peak.
+- 1 GPU hang in the app cycling (766 s, fence 5594 done 5582, DEVLOST first backboardd). Hang analysis: research/notes/gpu-hangs-1031.md.
+- Stays on kernel133: nothing visibly broke; home screen after the final boot not checked by frame.
+
 ### 2026-10-31 02:00 Correction to g1: Compass isn't garbled; Tips and Photos are
 - f1/f2 (smoothness.md): Compass tears only in flame-shot, in some shots, while the webcam stays clean: the tool reads a moving surface row by row. For anything that moves, use several shots and the webcam. Tips: black rectangles in the banner, in both modes, on the webcam too. Photos: garbled thumbnails on the webcam too; may be old files.
 
