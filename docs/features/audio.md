@@ -34,6 +34,11 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:20 sp21: the speaker stream runs on one ADSP boot with the sensors stream, on kernel128
+- kernel128 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off for the run (removed after), boot 20261030-221402.log, 4454 mV. `adspboot boot --rpc --root --sensors --unsafe --sns-motion --sns-rot --sns-secs 0 --amp --rec --rec-echo --swap-lanes --amp-addr 0x41 --amp-db -102 --watch 90`, rc 0, silent.
+- Tone: ch0 rms 15402, ch1 rms 2287, peak 3277; baseline ch1 0. pcm 488 of 488 periods, 0 errors, 4854 ms, 0 underflows; rec 231 reads, 0 errors. Sensors rose throughout: accel 264 -> 2438, als 540 -> 4251, compass 160 -> 1548. State 6 at t=77 and t=87 s, sensors serving 590 calls at both (no growth in those 10 s; not looked into). No fault beyond "no fault" FSR lines, no reset.
+- So research/notes/speaker-daemon.md's design holds at this first test (audio inside the sensors process, FIFO from the plug-in), and kernel128 has what the stream needs. One stream on one boot only; repeated cycles aren't tested. Effort ~7-9 h estimated, after the audible check. /dev/sunfish-audio doesn't exist: the plug-in counts frames as refused.
+
 ### 2026-10-30 21:50 sp20 SAMPLES REACH BOTH AMPS: with the lines swapped the amp echoes the tone back
 - kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, fresh boot each, 35 s wait, `adspboot boot --amp --rec --rec-echo --swap-lanes --amp-addr ADDR --amp-db -102`: silent. AFE RX on SD1 (gpio11), TX on SD0 (gpio10). Outputs copied to the session scratchpad; battery 4454, 4440 mV.
 
