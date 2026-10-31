@@ -1,5 +1,5 @@
 # Audio
-**State:** 🟡 with `--swap-lanes` the DSP's tone reaches both amps and echoes back correctly (sp20, silent test); not heard yet, audible test next. **Updated:** 2026-10-30.
+**State:** 🟡 THE SPEAKER PLAYS: test tone at -20 dB heard by the mic (sp22, 2026-10-31, `--swap-lanes`); AirPods play music; iOS audio to the speaker not connected yet. **Updated:** 2026-10-31.
 
 ## Facts
 Hardware (../recon/live.dts):
@@ -33,6 +33,17 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 05:10 sp22 FIRST SOUND FROM THE SPEAKER: 1 kHz tone at the measurement mic, both runs
+- kernel134 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off for the run, 05:03 EDT, 4439 and 4454 mV. `adspboot boot --amp --rec --rec-echo --swap-lanes --amp-addr 0x41 --amp-db -20`, default gain, no boost, fresh boot each. `tools/sunfish-tone-detect.sh 12` with the EM-01:
+
+| run | baseline 1 kHz energy | tone windows | after | TONE windows | neighbours |
+|---|---|---|---|---|---|
+| A (research/notes/sp22-A.txt) | 0.12-0.35 | 10.20, 10.31, 10.27, 10.86, 10.37 | 2.07, then 0.09-0.32 | 5 | < 0.8 |
+| repeat, fresh boot (sp22-A3.txt) | low | 5.53, 10.63, 10.36, 10.33, 10.54, 5.68 | low | 6 | low |
+
+- Same boot, second adspboot: 0 TONE, as known (0 channels). rms stays 42-67: the tone is a small part of the room level at this volume: ~37 dB below stock. Echo during the tone: ch1 rms 2288, peak 3277; pcm 488 of 488 periods, 0 underflows. irq1_status3 20000000, status4 00000003: meaning not checked. No reset.
+- So the bug was the swapped data lines, since sp2: gpio11 is the amp's input, gpio10 its output. Not heard by a person yet. 0x40 not tried at volume. Next: iOS audio into this path (research/notes/speaker-daemon.md); ceiling stays -20 dB until the user has listened.
 
 ### 2026-10-30 22:20 sp21: the speaker stream runs on one ADSP boot with the sensors stream, on kernel128
 - kernel128 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off for the run (removed after), boot 20261030-221402.log, 4454 mV. `adspboot boot --rpc --root --sensors --unsafe --sns-motion --sns-rot --sns-secs 0 --amp --rec --rec-echo --swap-lanes --amp-addr 0x41 --amp-db -102 --watch 90`, rc 0, silent.

@@ -47,7 +47,7 @@ plan is [docs/plan.md](docs/plan.md).
 | [Charging](docs/features/charging.md) | 🟡 | charges (set up by the bootloader: 2 A charge, 1.5 A input); a weak USB port cannot keep up under load, a strong one gives ~+1 A |
 | [Apps](docs/features/apps.md) | ✅ | garbled icons fixed on lock screen, Control Center, Settings, Home (2026-10-31, kernel132), Tips banner and Photos thumbnails still wrong; 32 stock apps installed; survey 2026-10-29: 17 of 18 open fine; Files "On My iPhone" opens; app extensions work: widgets, share sheet, emoji keyboard (2026-10-30) |
 | [Sleep and wake](docs/features/sleep-wake.md) | ✅ | power-button sleep/wake; the OLED panel really switches off and back on (`sweetpanelsleep=1`, 10/10) |
-| [Audio](docs/features/audio.md) | 🟡 | AirPods play music; on the speaker path a test tone from the audio DSP now reaches both amps and echoes back correctly (lines swapped, sp20, 2026-10-30), not heard yet: audible test next |
+| [Audio](docs/features/audio.md) | 🟡 | AirPods play music; the speaker plays a test tone (first sound 2026-10-31, kernel134); iOS audio to the speaker is next |
 | [Camera](docs/features/camera.md) | 🟡 | iOS lists both cameras (Back 16 formats, Front 18); Camera.app works: live colour preview on both cameras, auto-exposure, autofocus and sharp saved photos (2026-10-30); switching cameras takes ~7 s + ~10 s until the picture shows; Live Photo off; both cameras stream from tools (rear 60 fps, front 30 fps) |
 | [Bluetooth](docs/features/bluetooth.md) | ✅ | iOS Settings: devices listed, Xbox controller and AirPods Pro 2 pair and connect (noise control works); AirPods play music (2026-10-30) |
 | [Cellular](docs/features/not-started.md) | ⬜ | not planned |
