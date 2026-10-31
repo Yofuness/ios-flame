@@ -1,5 +1,5 @@
 # Smoothness
-**State:** 🟡 53 swaps/s in steady Settings scrolling at full canvas (2026-10-31; was ~21 on Oct 30): dead fill mode 1 by default, render thread bound to an A76, LTO bridge. **Updated:** 2026-10-31.
+**State:** 🟡 50-58 swaps/s in steady Settings scrolling at full canvas (2026-10-31; ~21 on Oct 30): dead fill mode 1, render thread bound to an A76, LTO, bridge allocator; 60 not reached. **Updated:** 2026-10-31.
 
 ## How to use
 - Bench: `tools/sunfish-fpsbench.sh TAG SECONDS` (BENCH_TIGHT=1); config matrix `tools/sunfish-cfgbench.sh`; timeline `sweettrace=1` + `tools/sunfish-timeline.py`. Details in [methods.md](../methods.md).
@@ -93,6 +93,19 @@ Kernels:
 
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
+
+### 2026-10-31 06:35 al1: bridge allocator A/B: 50 -> 56 swaps/s average, up to 58.7; p50 at the tick in one boot
+- kernel134 sweetswapbig=6 sweetampreset=1 sweettrace=1 sweetcpusample=1; 4 boots A B A B, 20261031-062315, 062721, 063013, 063312; 4 Settings long swipes each, window 5-15 s:
+
+| boot | bundle | swaps/s | swap-to-swap p50 ms | p95 ms | 1st submit ms | CPU ms per swap |
+|---|---|---|---|---|---|---|
+| A1 | allocator | 55.5 54.4 52.4 50.3 | 17.4-18.1 | 25.3-31.7 | 13.0-13.1 | 14.0-15.6 |
+| B1 | without | 49.5 51.6 51.6 52.1 | 18.3-18.8 | 30.3-31.1 | 12.9-13.1 | 11.7-15.4 |
+| A2 | allocator | 58.2 57.4 58.4 58.7 | 16.8-17.0 | 19.9-21.5 | 13.0-13.2 | 14.5-15.2 |
+| B2 | without | 49.0 49.5 49.3 50.2 | 19.4-20.0 | 27.8-30.8 | 13.0-13.2 | 12.4-16.6 |
+
+- Observed: mean 55.7 against 50.3. Render thread CPU per swap isn't lower (14.7 vs 13.7, inside the spread), so how the allocator helps isn't explained: maybe other threads, or lock contention with the render thread. Boots differ a lot (A1 vs A2): 2 boots each is few. backboardd footprint +4-6 MB (72-73 against 68-69 MB). 0 hang lines in A2, B2 and the checked logs (two greps came back blank); no new crash files seen in A1.
+- Allocator bundle stays. Everyday: kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1 + bundle-alloc build. 60 is close: p50 16.8 ms in A2 is about one tick.
 
 ### 2026-10-31 03:30 pc3: profile of the render thread with the everyday setup: flat
 - kernel132 sweetswapbig=6 sweetcpusample=1, bundle with dead fill mode 1, boot 20261031-031919.log, 4454 mV, no reset. `tid 582 n 8000 user 7615 kernel 385 missed 0`. research/notes/pc3-hist.txt. Images: SweetMetal2 47.7 %, Turnip 11.7, QuartzCore 10.9, malloc 10.1, libsystem_platform 6.5, kernel 4.8, libobjc 4.0. Functions: sys_dcache_flush 4.5, draw_resident 3.4, memmove 2.4, settle_draw 2.1, unfair lock 1.7 + 1.0, tiny malloc 1.6, then all under 1.2.
