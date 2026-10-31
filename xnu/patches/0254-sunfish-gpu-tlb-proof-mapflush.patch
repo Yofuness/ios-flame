@@ -1,0 +1,314 @@
+From a9d3eb6150efeda31c7666f4dcc5641bbfb44cbb Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 31 Oct 2026 07:30:36 -0400
+Subject: [PATCH] 0254 sunfish: TLB sync proof log: busy-before, sync time
+ histogram, first timeout once, hang lines, kern.sweet_gpu_tlb_hist/flushes
+ (sweethangdiag=0 off); boot-arg sweetmapflush=0 skips the flush on map into
+ invalid entries (default 1: flush)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c |  58 +++++++++++++++++++--
+ bsd/dev/sweet_a6xx.h |   6 +++
+ bsd/dev/sweet_gpu.c  | 118 +++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 175 insertions(+), 7 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 3feb2b4..e116841 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -331,13 +331,60 @@ static int smmu_pick(int32_t *smr_out, int32_t *cb_out, int cb_min)
+ 
+ uint32_t a6_tlb_sync_timeouts;		/* 0253: a6_tlb_flush syncs that timed out (10 ms) */
+ 
+-void a6_tlb_flush(const struct a6_gpu *g)
++/* 0254: normal-path sync stats (not during a recovery); sweethangdiag=0: none, and the old 1 ms polling */
++int a6_tlb_stat_off;
++uint32_t a6_tlb_busy_before, a6_tlb_max_sync_us, a6_tlb_hist[5];
++uint64_t a6_tlb_last_timeout_us;
++
++__attribute__((noinline)) void a6_tlb_flush(const struct a6_gpu *g)
+ {
+ 	uint64_t c = SMMU_CB(g->gpu_cb);
++	if (a6_tlb_stat_off || !a6_hangdiag()) {
++		wr32(c + CB_TLBIALL, 0);
++		wr32(c + CB_TLBSYNC, 0);
++		if (wait_bit(c + CB_TLBSTATUS, 1, 0, 10))
++			a6_tlb_sync_timeouts++;		/* 0253 */
++		return;
++	}
++	if (rd32(c + CB_TLBSTATUS) & 1)
++		a6_tlb_busy_before++;
+ 	wr32(c + CB_TLBIALL, 0);
+ 	wr32(c + CB_TLBSYNC, 0);
+-	if (wait_bit(c + CB_TLBSTATUS, 1, 0, 10))
+-		a6_tlb_sync_timeouts++;		/* 0253 */
++	/* the time before the read: a preemption here can't turn a finished sync into a timeout */
++	uint64_t t0 = a6_now_us(), us;
++	int busy;
++	for (;;) {
++		us = a6_now_us() - t0;
++		busy = rd32(c + CB_TLBSTATUS) & 1;
++		if (!busy || us >= 10000)
++			break;
++		a6_delay_us(5);
++	}
++	if (us > a6_tlb_max_sync_us)
++		a6_tlb_max_sync_us = (uint32_t)us;
++	a6_tlb_hist[busy ? 4 : us < 10 ? 0 : us < 100 ? 1 : us < 1000 ? 2 : 3]++;
++	if (busy) {
++		a6_tlb_sync_timeouts++;			/* 0253 */
++		a6_tlb_last_timeout_us = t0 + us;
++		if (a6_tlb_sync_timeouts == 1)
++			sweet_gpu_tlb_first_timeout((uint64_t)__builtin_return_address(0));
++	}
++}
++
++/* 0254: first timeout's registers, same rules as a6_hang_diag: GMU with CX up, RBBM with GX up */
++void a6_tlb_regs_log(void)
++{
++	if (!a6_cx_up()) {
++		a6_log("tlb first timeout: cx off, no register reads\n");
++		return;
++	}
++	uint32_t cx = rd32(GPUCC + GPUCC_CX_GDSCR), gx = rd32(GPUCC + GPUCC_GX_GDSCR);
++	if (a6_gx_up())
++		a6_log("tlb first timeout: rbbm status %x status3 %x, gx gdsc %x cx gdsc %x, gmu rpmh %x cx busy %x\n",
++		    rd32(GREG(0x210)), rd32(GREG(0x213)), gx, cx, rd32(GMU_REG(GMU_RPMH_STATE)), rd32(GMU_REG(GMU_CX_BUSY)));
++	else
++		a6_log("tlb first timeout: gx off, gx gdsc %x cx gdsc %x, gmu rpmh %x cx busy %x\n", gx, cx,
++		    rd32(GMU_REG(GMU_RPMH_STATE)), rd32(GMU_REG(GMU_CX_BUSY)));
+ }
+ 
+ /* 0253: read-only, from the thread after a failed recovery; CX off would make the SMMU read unsafe */
+@@ -347,7 +394,10 @@ void a6_tlb_diag(const struct a6_gpu *g, unsigned secs)
+ 		a6_log("recover failed +%us: tlbstatus not read (cx off or no bank)\n", secs);
+ 		return;
+ 	}
+-	a6_log("recover failed +%us: tlbstatus %x\n", secs, rd32(SMMU_CB(g->gpu_cb) + CB_TLBSTATUS));
++	/* 0254: also the GMU bank's sync and the global one: is the wedge the bank's or the whole SMMU's? */
++	a6_log("recover failed +%us: tlbstatus %x, gmu cb tlbstatus %x, tlbgstatus %x\n", secs,
++	    rd32(SMMU_CB(g->gpu_cb) + CB_TLBSTATUS), g->gmu_cb >= 0 ? rd32(SMMU_CB(g->gmu_cb) + CB_TLBSTATUS) : 0,
++	    rd32(SMMU + 0x74));
+ }
+ 
+ /* 0180: raw CB FSR (a6_fault_status masks it to the fault bits) */
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index 4529776..dee7f4c 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -143,6 +143,12 @@ void a6_unmap(struct a6_gpu *g, uint64_t iova, uint64_t size);	/* clear 4K entri
+ void a6_unmap_high(struct a6_gpu *g);	/* drop all mappings above 1 GB, reset the arena */
+ void a6_tlb_flush(const struct a6_gpu *g);
+ extern uint32_t a6_tlb_sync_timeouts;	/* 0253 */
++extern int a6_tlb_stat_off;		/* 0254: set during a recovery */
++extern uint32_t a6_tlb_busy_before, a6_tlb_max_sync_us, a6_tlb_hist[5];	/* 0254: < 10 us, 100 us, 1 ms, 10 ms, timeout */
++extern uint64_t a6_tlb_last_timeout_us;	/* 0254 */
++void a6_tlb_regs_log(void);		/* 0254 */
++uint64_t a6_now_us(void);		/* 0254 */
++void sweet_gpu_tlb_first_timeout(uint64_t ra);	/* 0254 */
+ void a6_tlb_diag(const struct a6_gpu *g, unsigned secs);	/* 0253: logs TLBSTATUS */
+ bool a6_hangdiag(void);		/* 0253: boot-arg sweethangdiag (default 1) */
+ int a6_clear_fault(const struct a6_gpu *g);	/* 1 if an SMMU fault was cleared */
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 1cffe03..2f22476 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -21,6 +21,7 @@
+ #include <sys/proc_internal.h>
+ #include <sys/signal.h>
+ #include <sys/signalvar.h>
++#include <sys/sysctl.h>
+ #include <kern/thread_call.h>
+ #include <kern/locks.h>
+ #include <kern/thread.h>
+@@ -206,6 +207,14 @@ a6_delay_us(unsigned us)
+ 	delay((int)us);
+ }
+ 
++uint64_t
++a6_now_us(void)
++{
++	uint64_t ns;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns / 1000;
++}
++
+ void
+ a6_log(const char *fmt, ...)
+ {
+@@ -679,6 +688,83 @@ sweet_gpu_kill_backboardd(void)
+ 	}
+ }
+ 
++/*
++ * 0254: the first normal-path TLB sync timeout of a boot, with sweet_gpu_lock held: was the GPU already stuck?
++ * a6_log and proc_best_name take no lock of ours; the slide turns ra into a kernelcache address.
++ */
++extern vm_offset_t vm_kernel_slide;
++
++void
++sweet_gpu_tlb_first_timeout(uint64_t ra)
++{
++	uint64_t now = mach_absolute_time(), ns;
++	absolutetime_to_nanoseconds(now - progress_abs, &ns);
++	a6_log("tlb first timeout at %llu ms: ra %llx slide %llx, tid %llu pid %d %s, fence %u done %u, "
++	    "%llu ms since progress, recoveries %llu\n", a6_now_us() / 1000, ra, (uint64_t)vm_kernel_slide,
++	    thread_tid(current_thread()), proc_selfpid(), proc_best_name(current_proc()), gpu.fence,
++	    a6_fence_read(&gpu), ns / 1000000, recoveries);
++	a6_tlb_regs_log();
++}
++
++/* 0254: flushes by path, per second, and the map flushes sweetmapflush=0 skips */
++enum { TLBF_MAP, TLBF_UNMAP, TLBF_SKIPPED, TLBF_N };
++static uint64_t tlbf_total[TLBF_N], tlbf_win_us;
++static uint32_t tlbf_win[TLBF_N], tlbf_rate[TLBF_N];
++
++static void
++tlbf_note_locked(unsigned kind)
++{
++	uint64_t now = a6_now_us();
++	if (now - tlbf_win_us >= 1000000) {
++		for (unsigned i = 0; i < TLBF_N; i++) {
++			tlbf_rate[i] = (uint32_t)(tlbf_win[i] * 1000000ULL / (now - tlbf_win_us));
++			tlbf_win[i] = 0;
++		}
++		tlbf_win_us = now;
++	}
++	tlbf_win[kind]++;
++	tlbf_total[kind]++;
++}
++
++/* 0254: boot-arg sweetmapflush=0: no TLB flush after a map into invalid entries (default 1: flush) */
++static bool
++gpu_mapflush(void)
++{
++	static int v = -1;
++	if (v < 0) {
++		v = 1;
++		(void)PE_parse_boot_argn("sweetmapflush", &v, sizeof(v));
++	}
++	return v != 0;
++}
++
++/* Read without the GPU lock: stats only, and the wedge this looks at may be holding that lock. */
++static int
++sysctl_sweet_gpu_tlb_hist SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	char buf[160];
++	snprintf(buf, sizeof(buf), "lt10us %u lt100us %u lt1ms %u lt10ms %u timeout %u max_us %u busy_before %u last_timeout_ms %llu",
++	    a6_tlb_hist[0], a6_tlb_hist[1], a6_tlb_hist[2], a6_tlb_hist[3], a6_tlb_hist[4], a6_tlb_max_sync_us,
++	    a6_tlb_busy_before, a6_tlb_last_timeout_us / 1000);
++	return SYSCTL_OUT(req, buf, strlen(buf) + 1);
++}
++SYSCTL_PROC(_kern, OID_AUTO, sweet_gpu_tlb_hist, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
++    0, 0, sysctl_sweet_gpu_tlb_hist, "A", "SWEET GPU: TLB sync time histogram (0254)");
++
++static int
++sysctl_sweet_gpu_tlb_flushes SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	char buf[160];
++	snprintf(buf, sizeof(buf), "per_s map %u unmap %u skipped %u, window_age_ms %llu, total map %llu unmap %llu skipped %llu",
++	    tlbf_rate[TLBF_MAP], tlbf_rate[TLBF_UNMAP], tlbf_rate[TLBF_SKIPPED], (a6_now_us() - tlbf_win_us) / 1000,
++	    tlbf_total[TLBF_MAP], tlbf_total[TLBF_UNMAP], tlbf_total[TLBF_SKIPPED]);
++	return SYSCTL_OUT(req, buf, strlen(buf) + 1);
++}
++SYSCTL_PROC(_kern, OID_AUTO, sweet_gpu_tlb_flushes, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
++    0, 0, sysctl_sweet_gpu_tlb_flushes, "A", "SWEET GPU: TLB flushes per second, last full window (0254)");
++
+ /* 0253: TLBSTATUS 1, 5 and 30 s after a failed recovery: could a later retry work? */
+ static void
+ gpu_recover_diag_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -724,6 +810,15 @@ gpu_recover_locked(const char *why)
+ 	if (a6_hangdiag()) {
+ 		/* 0253: sync timeouts before this hang; owners of the oldest unfinished fences (first = stuck one) */
+ 		a6_log("%s: tlb sync timeouts %u\n", why, tlb_to);
++		/* 0254: was the last timeout before the hang? Compare with now and the time of the last progress */
++		uint64_t pns;
++		absolutetime_to_nanoseconds(mach_absolute_time() - progress_abs, &pns);
++		a6_log("%s: tlb now %llu ms, last timeout %llu ms, no progress for %llu ms; sync lt10us %u lt100us %u lt1ms %u "
++		    "lt10ms %u timeout %u, max %u us, busy before %u\n", why, a6_now_us() / 1000, a6_tlb_last_timeout_us / 1000,
++		    pns / 1000000, a6_tlb_hist[0], a6_tlb_hist[1], a6_tlb_hist[2], a6_tlb_hist[3], a6_tlb_hist[4],
++		    a6_tlb_max_sync_us, a6_tlb_busy_before);
++		a6_log("%s: tlb flushes map %llu unmap %llu skipped %llu\n", why, tlbf_total[TLBF_MAP], tlbf_total[TLBF_UNMAP],
++		    tlbf_total[TLBF_SKIPPED]);
+ 		for (uint32_t f = done + 1; (int32_t)(gpu.fence - f) >= 0 && f - done <= 6; f++)
+ 			a6_log("%s: fence %u pid %d ib1 %llx\n", why, f, gstat_pid[f % A6_TS_SLOTS], gstat_ib1[f % A6_TS_SLOTS]);
+ 	}
+@@ -731,6 +826,7 @@ gpu_recover_locked(const char *why)
+ 	lost[recoveries % LOST_RING].hi = gpu.fence;
+ 	recoveries++;
+ 	bool rec_ok = true;
++	a6_tlb_stat_off = 1;			/* 0254 */
+ 	int rrc = a6_recover(&gpu);
+ 	if (rrc && a6_recover_mode == 2 && a6_cold_enabled()) {
+ 		/* 0200: recover2 and the GBIF-halt path failed: GMU cold restart (sweetgpucold=0: off) */
+@@ -742,6 +838,7 @@ gpu_recover_locked(const char *why)
+ 		else
+ 			a6_log("recover3: done in %llu us\n", ns3 / 1000);
+ 	}
++	a6_tlb_stat_off = 0;			/* 0254 */
+ 	a6_tlb_sync_timeouts = tlb_to;		/* 0253: the count is of normal-path syncs, not the recovery's own */
+ 	if (rrc) {
+ 		a6_log("%s: GPU not recovered\n", why);
+@@ -841,7 +938,8 @@ sweet_gpu_map_surface(uint64_t key, const uint64_t *pages, uint32_t npages, uint
+ 		(void)present_wait_locked(k, "surface remap");
+ 	}
+ 	int rc = a6_map_pages(&gpu, SLOT_IOVA(s), pages, npages, page_size);
+-	a6_tlb_flush(&gpu);
++	a6_tlb_flush(&gpu);			/* always: this overwrites live entries */
++	tlbf_note_locked(TLBF_MAP);		/* 0254 */
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ 	if (rc) {
+ 		slot[s].npages = 0;
+@@ -1183,7 +1281,13 @@ sweet_gpu_map_user(uint64_t *iova_out, const uint64_t *pages, uint32_t npages, u
+ 		a6_unmap(&gpu, iova, size);
+ 		user_va_release(iova, size);
+ 	}
+-	a6_tlb_flush(&gpu);
++	/* 0254: only entries unmap_user cleared and flushed, or never used: see gpu_mapflush */
++	if (rc || gpu_mapflush()) {
++		a6_tlb_flush(&gpu);
++		tlbf_note_locked(TLBF_MAP);
++	} else {
++		tlbf_note_locked(TLBF_SKIPPED);
++	}
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ 	if (rc) {
+ 		return -1;
+@@ -1204,6 +1308,7 @@ sweet_gpu_unmap_user(uint64_t iova, uint64_t len)
+ 	if (gpu_ready) {
+ 		a6_unmap(&gpu, iova, size);
+ 		a6_tlb_flush(&gpu);
++		tlbf_note_locked(TLBF_UNMAP);	/* 0254 */
+ 	}
+ 	user_va_release(iova, size);
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+@@ -1472,7 +1577,13 @@ sweet_gpu_map_at(uint64_t iova, const uint64_t *pages, uint32_t npages)
+ 	if (rc) {
+ 		a6_unmap(&gpu, iova, (uint64_t)npages << 12);
+ 	}
+-	a6_tlb_flush(&gpu);
++	/* 0254: relies on the client: BoMap doesn't check that the range is free in its window */
++	if (rc || gpu_mapflush()) {
++		a6_tlb_flush(&gpu);
++		tlbf_note_locked(TLBF_MAP);
++	} else {
++		tlbf_note_locked(TLBF_SKIPPED);
++	}
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ 	return rc;
+ }
+@@ -1487,6 +1598,7 @@ sweet_gpu_unmap_at(uint64_t iova, uint64_t len)
+ 	if (gpu_ready) {
+ 		a6_unmap(&gpu, iova, len);
+ 		a6_tlb_flush(&gpu);
++		tlbf_note_locked(TLBF_UNMAP);	/* 0254 */
+ 	}
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ }
+-- 
+2.56.0
+
