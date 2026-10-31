@@ -94,3 +94,4 @@ output in /var/local.
 - 2026-10-31 Metal bundle with turnip 0109 and bridge 0115 installed (off unless the variables are set): tools/build-metal2-linux.sh + tools/sunfish-metal2-install.sh.
 - 2026-10-31 Metal bundle with dead fill mode 1 as default installed: tools/build-metal2-linux.sh + tools/sunfish-metal2-install.sh. Everyday boot: kernel132 sweetse9=2 sweetcampmic=2 sweetswapbig=6.
 - 2026-10-31 /var/local/bin/adspboot with --audio-fifo and /var/local/bin/af_feed: tools/build-userland-linux.sh + flame-files.py put. Leftover test outputs in /var/local (f*.out).
+- 2026-10-31 sensors job wrapper with speaker.on handling + SunfishAudio.driver with FIFO sink: tools/sunfish-install-sensors.sh, tools/sunfish-install-audio.sh. speaker.on absent = sensors only.

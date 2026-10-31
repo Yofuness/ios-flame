@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 05:40 sp24: iOS plays into the speaker path; lock sound reaches the amp; not yet proven audible
+- kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1 CAMERA=1, boots 20261031-053028.log (-102), 053246 (-20), 4455 and 4440 mV. tools/sunfish-install-sensors.sh and sunfish-install-audio.sh run; /var/local/speaker.on empty = -102, holds a dB value otherwise.
+- -102: `flame-cmd key 0 150`: lock sound goes through SunfishAudio.driver -> FIFO -> ADSP: stream up, PUP_DONE 3 ms, silence: amp off, stream down; 117-144 periods, 0 underflows, DC trips 0. No AirPods route. 5 sleep/wake cycles fine, sensors alive, no GPU hang.
+- -20: `amp 0x41 at -20 dB`, `amp: on for 1103 ms`; EM-01 rms stayed 78-116 with no step, 0 TONE (research/notes/sp24-lock.txt). A short click at -20 dB, and iOS scales the sample, so this proves nothing either way. Needs a long sound and a broadband measure. Keyboard clicks, timer alarm, app use not run: an unlock swipe failed.
+- Fault: every stream ends `pcm: done: FAILED`, `stream down (failed)`, with all periods done and 0 errors. Cause not found yet.
+- speaker.on removed for now; job runs sensors only. Everyday: `CAMERA=1 tools/sunfish-test.sh -k work/kernel134/kernel.development.sweet NAME sweetse9=2 sweetcampmic=2 sweetswapbig=6`.
+
 ### 2026-10-31 05:35 sp23: --audio-fifo works with repeat cycles and with sensors, silent
 - kernel134 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off, 4440 mV, -102 dB, boots 20261031-051913.log, 052215, 052533; research/notes/sp23-f*.txt; no reset, no ADSP crash.
 - Alone, af_feed 3 s: stream up, PUP_DONE 3 ms, ch1 rms 2317 peak 3277, ch1 0 at t=3.9, silence: amp off, stream down: 1380 periods, 0 underflows, ring 1081 short, 0 over, 0 dropped, 4 repeated. Second cycle same. --dc 3000: "DC mean 3000 for 5 x 100 ms: muted", amp off, ch1 0, unmuted when the feed ended, DC trips 1.
