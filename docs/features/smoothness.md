@@ -94,6 +94,23 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 22:45 ml1: bridge 0114 + LTO: CPU per swap ~24 -> ~18 ms, swaps/s unchanged: at full canvas the GPU now caps the rate
+- kernel130 sweettrace=1 sweetcpusample=1, boot 20261030-222005.log, 4454 mV, bundle UUID 4C4C4425 confirmed on the phone. Settings list, one 15 s swipe, window 5-15 s:
+
+| run | memo | swaps/s | swap -> first submit p50 / p95 ms | GPU per frame ms | busiest thread CPU ms per swap |
+|---|---|---|---|---|---|
+| m1 | on | 33.7 | 24.85 / 57.6 | 26.5 | 19.3, 18.5 |
+| m2 | on | 34.0 | 22.6 / 60.7 | 26.6 | 17.6, 18.3 |
+| m3 | on | 33.7 | 22.0 / 60.4 | 26.6 | 15.1, 18.6 |
+| o1 | off | 34.4 | 22.7 / 58.1 | 26.5 | ~22, 16 (windows misaligned) |
+| o2 | off | 34.5 | 21.8 / 56.7 | 26.5 | 18.7, 16.8 |
+| baseline c1b2, c1c2 | - | 33.7-33.8 | 24.4-24.6 | 26.5 | 22.7-24.2 |
+
+- Observed: memo on and off look the same, so the ~5 ms gain is LTO and the shared FormatAnswers (both in all five runs), not the table memo. supports_family 250-500 calls/s in motion (rough). PC capture pc2 (tid 6097, n 7721, kernel 254): SweetMetal2 48.1 %, QuartzCore 15.9, Turnip 12.0, malloc 9.2, memmove 5.3, kernel 3.3. No family function in the top 40. Top: draw_resident 4.4, sys_dcache_flush 2.9, settle_draw 2.6. No DeviceLost, no new garbling, no reset.
+- Reading (inference): GPU 26.5 ms per frame alone gives ~38 frames/s, and GPU busy was 84-93 % on this canvas (tl1). So on 1125x2436 the GPU caps the rate and the CPU gain can't show. Correction to my "GPU is not the limit" (20:55, 21:35 entries): that held only at @2x; the two limits sit close together, so both must come down. The dropped copy and pass work is back on the list for the full canvas.
+- fpsbench with --wait 0: unreliable this run (started on the lock screen, wrong screens). ml2s 24.9 on home pages. Not a reference.
+- Side notes: kernel130 reboot once failed ("phone not in fastboot after 120 s", retry worked). Installer ran twice, so SweetMetal2.bundle.prev holds the new bundle: --undo can't return to 0113 (rebuildable from git).
+
 ### 2026-10-30 22:15 Bridge 0114 family memo + fat LTO built (not run)
 - 0114: `supports_family` memo per device (lock-free, off with M2V_FAMILY_MEMO=0), FormatAnswers through Arc, counter `FM supports_family calls=N` in the 10 s telemetry (needs /var/local/mtl2-telemetry). A driver error on a format's first computation would stay frozen for that family.
 - tools/build-metal2-linux.sh: `lto="fat"`, `codegen-units=1`; `M2V_LTO=off` while iterating. Full script: 142 s -> 365 s clean; 64 s -> 289 s after touching one file. SweetMetal2 22.5 MB -> 16.0 MB. CI's build-m2v-bridge.sh stays non-LTO. Next: same long-swipe bench and PC capture against cs1 (33.8 swaps/s, ~24 ms CPU per swap).
