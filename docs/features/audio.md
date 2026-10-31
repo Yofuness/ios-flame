@@ -34,6 +34,12 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 05:35 sp23: --audio-fifo works with repeat cycles and with sensors, silent
+- kernel134 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off, 4440 mV, -102 dB, boots 20261031-051913.log, 052215, 052533; research/notes/sp23-f*.txt; no reset, no ADSP crash.
+- Alone, af_feed 3 s: stream up, PUP_DONE 3 ms, ch1 rms 2317 peak 3277, ch1 0 at t=3.9, silence: amp off, stream down: 1380 periods, 0 underflows, ring 1081 short, 0 over, 0 dropped, 4 repeated. Second cycle same. --dc 3000: "DC mean 3000 for 5 x 100 ms: muted", amp off, ch1 0, unmuted when the feed ended, DC trips 1.
+- With sensors (--rpc --root --sensors ..., --watch 120): 2 cycles, rms ~2316, peak 3277, 1380 and 1374 periods, 0 underflows; accel 264 -> 3172, als 484 -> 5688, compass 79 -> 2071. So the design holds: repeated streams on one ADSP boot, amp setup after ADSP boot fine. Fast cycles: 3 feeds 5 s apart + one 0.3 s: 4 amp cycles, one stream, 3437 periods, 0 underflows, 9 repeated.
+- Installed adspboot, af_feed. Next: plug-in, job flag, real iOS sound (running).
+
 ### 2026-10-31 05:10 sp22 FIRST SOUND FROM THE SPEAKER: 1 kHz tone at the measurement mic, both runs
 - kernel134 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, sensors.off for the run, 05:03 EDT, 4439 and 4454 mV. `adspboot boot --amp --rec --rec-echo --swap-lanes --amp-addr 0x41 --amp-db -20`, default gain, no boost, fresh boot each. `tools/sunfish-tone-detect.sh 12` with the EM-01:
 
