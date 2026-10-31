@@ -48,6 +48,13 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:50 g1: GLYPHS FIXED on the lock screen, Control Center, Settings, Home (xnu 0251, kernel132); Compass, Tips, Photos remain
+- kernel132 = kernel131 + 0251: a surface with an explicit row and at most 9 keys keeps its row. `CAMERA=1 tools/sunfish-test.sh -k work/kernel132/kernel.development.sweet g1 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweettrace=1 sweetcpusample=1`, boots 20261031-003522.log, 20261031-003949.log, 4455 mV, no reset, no DeviceLost.
+- Log: 75x144 asked 160 kept, 102x144 224, 105x144 224, 96x148 192, 230x186 480, 360x246 736, 312x202 640, 272x184 BGRA 1088, all 6 keys. Two 420f surfaces with 9 keys (1105x1160 row 4480, 512x512 row 2048) have no "kept" tag: planar, left as they were.
+- flame-shot PNGs (research/b44/g1-*.png), read one by one: clean: lock screen, Control Center (I checked this one too), Settings, Accessibility (VoiceOver, Zoom), Home, Voice Memos, Mail. Still wrong, same as before: Compass (big "113 SE" readout and top dial numbers sheared), Tips (hero image black bars and sheared rows). Photos thumbnails garbled blocks: may be old garbled files, can't tell.
+- Speed: Settings long swipe 34.3 / 34.6 swaps/s, swap-to-swap p50 29.1 / p95 31.7, first submit 26.0, second 0.56: same as kernel131. Home fpsbench 35.3 swaps/s (no earlier reference with the fixed bench).
+- kernel132 sweetswapbig=6 is the everyday boot. Key-count rule is a heuristic: a client with 10+ keys that ignores the rounded row would stay sheared (11-12 key candidates: 135x55, 787x1705): that may be Compass and Tips. Writer not proven: "CA archive decoder" is still a strong guess; the rule works anyway.
+
 ### 2026-10-31 00:25 B44/B29 CAUSE: client stride 32-byte aligned, our kernel's row rounded to 64
 - d1, kernel131, bridge 0115 M2V_SHADOW_DUMP=all, research/b44/d1 (lines.txt, 33 viewable dumps). Backboardd, new_texture_with_iosurface_plane, RG8, wider-alias:
 
