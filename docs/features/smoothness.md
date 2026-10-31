@@ -94,6 +94,23 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:35 cs1/cs2: the time before the first submit is CPU work, 22-24 ms per frame; the ~3 s stalls were the bench
+- Boots with sweettrace=1 sweetcpusample=1: cs1 kernel128 (20261030-211909.log, 4454 mV), cs2 kernel129 sweetfb_2x=1 (20261030-212522.log, 4455 mV). Settings list: a = old bench, b and c = one long swipe `swipe 540 2100 540 300 15000` with no finger lift.
+
+| run | swaps/s | swap-to-swap p50 / p95 ms | swap -> next first submit p50 / p95 ms | GPU per frame ms | gaps > 100 ms: n, ms | swaps/s without gaps | busiest thread CPU ms per swap |
+|---|---|---|---|---|---|---|---|
+| c1a | 28.6 | 23.8 / 58.3 | 23.5 / 56.7 | 26.3 | 6, 2997 | 33.9 | 17.1-23.5 |
+| c1b2 | 32.6 | 24.8 / 58.7 | 24.4 / 58.4 | 26.5 | 1, 495 | 33.8 | 23.5 |
+| c1c2 | 33.7 | 24.9 / 58.1 | 24.6 / 57.6 | 26.5 | 0 | 33.7 | 24.3 |
+| c2a | 33.7 | 22.6 / 47.5 | 22.3 / 47.2 | 12.5 | 6, 2951 | 39.9 | 22.1 |
+| c2b | 38.0 | 23.1 / 44.2 | 22.7 / 43.9 | 12.5 | 1, 382 | 39.1 | 22.1 |
+| c2c | 37.0 | 23.1 / 49.0 | 22.8 / 48.7 | 12.5 | 1, 345 | 37.9 | 23.4 |
+
+- Observed: one backboardd thread (tid 560 / 625, unnamed) takes 3.2-4.4 s CPU per 5 s; split A55 650-1370 ms, A76 2330-3580 ms. Its CPU per swap equals swap -> next first submit, on both canvases. Other backboardd threads 0.3-1.1 s, SpringBoard 280-421 ms; Preferences isn't listed. Swap-to-swap in ticks: 1 in 51-56 %, 2 in 27-40 %, 3+ in 5-13 %.
+- So this is run, not wait: the render thread burns ~23 ms per frame. The bound to reach 60 is CPU, and older notes' 10-15 ms is out of date. @2x gains +4-5 swaps/s at steady state (33.8 -> ~38.5) from removing GPU queueing; CPU per swap is unchanged.
+- Bench artefact: in tonight's bench each `flame-cmd swipe` took ~3.2 s (its default 3 s wait for results), so swipes came once per ~3.2 s and the 2-3 s gaps were idle time between flicks. Fpsbench runs on record likely understate motion too, wherever flame-cmd could bind the log port. Fixed: `--wait 0` in sunfish-fpsbench.sh, not yet run; new numbers may not compare with old ones. Long-swipe runs still show one 345-495 ms gap at +2.4-2.9 s in 3 of 4 runs, cause unknown (near when flame-cmd returned).
+- No SWEET CPUFREQ line in these boot logs (printed at ~20 s, files start ~21 s). Next: sampled PCs of that thread (xnu patch being written, tools/sunfish-pc-hist.py).
+
 ### 2026-10-30 21:15 tl1/tl2: frame timing against the tick, both canvases: the wait is before the first submit
 - Boots with sweettrace=1: tl1 kernel128 (20261030-205504.log, 4454 mV), tl2 kernel129 sweetfb_2x=1 (20261030-205952.log, 4455 mV). Settings vertical scroll, 10 s of full motion. Timeline tool has no clipping or tick output, so a new script read the SWEET TL records (mach clock 19.2 MHz, not 24). p50 / p95:
 
