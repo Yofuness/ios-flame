@@ -34,6 +34,17 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:00 sp17 (kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, adspboot with --rec-echo 0x3700): zeros on both amps with the monitors on
+- `/var/local/bin/adspboot boot --amp --rec --rec-echo --amp-addr 0x4N --amp-db -102`, fresh boot each, 35 s after boot, silent. sp16's exact flags weren't logged, so this was rebuilt from the --amp chain.
+
+| run | amp | pwr_ctrl2 | tx1src / tx2src | ch0, ch1 RMS, peak, zeros in all 45 rec lines |
+|---|---|---|---|---|
+| sp17a (20261030-204912.log) | 0x41 | 0x11 -> 0x3711, no MISMATCH | 0x28 / 0x8 | 0, 0, 5120/5120 |
+| sp17b (20261030-205121.log) | 0x40 | 0x11 -> 0x3711, no MISMATCH | 0x28 / 0x8 | 0, 0, 5120/5120 |
+
+- STATUS1 0x01400000, PLL_LOCK and PUP_DONE after 3 ms, STATUS3 0x2000002f, no faults; pcm 488 periods in ~4855 ms, 0 underflows; no reset; 4455 mV.
+- Reading: this is the "both zero" row of the sp17 table. A non-zero source (VPMON with its monitor on, read-back confirms the enable) still arrives as exact zeros, so the capture path stays unproven or dead: SD1 not wired to our pin, or the amp isn't driving it, or (guess) the AFE TX port reads another line. Still nothing learned about SD0. Next: SD0 noise injection (sp18), which needs no DSP and no capture path. sp16's conclusion stands after all, now with a working control.
+
 ### 2026-10-30 20:20 sp17 prepared (not run): sp16's control was probably off, so "SD1 is dead" does not follow
 - Observed: amp_txr sets only PWR_CTRL2 mask 0x3000 (VMON, IMON), and cs_power_down zeroes the register first; sp8 read back 0x3011 against reset 0x3321. So sp16's VPMON source on TX1 likely had its monitor off. sp16's read-back was not logged.
 - Guess: PWR_CTRL2 bit 8 = VPMON_EN, 9 VBSTMON_EN, 10 TEMPMON_EN (from memory; no Linux source on disk), and an off monitor reads 0. SD1 stays suspect anyway: sp8 read exact zeros with VMON/IMON on, though on 0x40; stock tx-lines = 0.
