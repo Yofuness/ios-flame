@@ -22,6 +22,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:55 s1: kernel134: 35 min app soak, 0 hangs; injector regression not exercised
+- s1: kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 (no trace flags), boot 20261031-041744.log: ~35 min with 8 apps (Preferences, Safari, Notes, Calendar, Clock, Photos, Maps, Compass) + 9 min Preferences only; 47 SWEET GPU 5 s lines, so ~4 min of GPU activity: a light load. 0 hangs, 0 recover lines, 0 resets. One open failure on Maps (FBS error Code=5).
+- r1, r2: sweethangtest=0xA0000200: injector never fired: under 512 present submits in 6-10 min. So 0253's new order has not run on a real recovery. Lower the count or make the load heavier next time.
+- r1 (20261031-035915.log): no GPU at all in that boot: SpringBoard never got the Turnip device, backboardd's Metal bridge closed at 89.8 s, 0 SWEET GPU lines, ~10 swaps/s by CPU copies, Settings sidebar torn on the webcam. No hang line. r2 with the same args had the GPU. Not explained: a boot-time failure seen once.
+
 ### 2026-10-31 04:05 xnu 0253 kernel134: GBIF released before the TLB sync poll, hang diagnostics (not run)
 - Release GBIF then poll up to 100 ms (sweetgbiforder=0 for the old order); `tlb sync timeouts N` at each hang; `fence F pid P ib1 X` for the oldest unfinished; `fastfail diag: gmu cb.. fsr`; `recover failed +1s/+5s/+30s: tlbstatus S`. sweettlbwait=2 opt-in, last try starting the SQE (k81/k82 reset risk). sweethangdiag=0 turns the logs off. Each reset can now spin 100 ms under sweet_gpu_lock.
 
