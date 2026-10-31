@@ -22,6 +22,11 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 06:20 kernel134: injected hangs still recover with the new order
+- htA 20261031-055651.log (sweethangtest=0xA0000040, present submit 64, SMMU stall): injected 48.866 s, "tlb sync -> done after 0 us, gbif released first, tlbstatus 0", timeouts 0, recover2 done after 35042 us, fsr 40000002, GPU lines and swipes after. htB 20261031-055920.log (0x00000040, bad client IB): 51.947 s, sync done after 0 us, recover2 done after 35083 us, backboardd killed, GPU after. Base was ~27 ms; 8 ms slower is the new path.
+- htC2 20261031-060809.log (0xC0000040, stall IB, fsr 0): injected 206.719 s, hang 208.754 s, recover2 done 208.780 s: recovered. Correction: the run's report called htC and htC2 "no GPU" boots; their logs have 43 and 34 SWEET GPU 5 s lines. Only r1 (035915) stands as the no-GPU boot. Also rc 2 from sunfish-test twice after these, phone in fastboot, rerun worked.
+- Real busy-pipe no-fault hangs (TLB sync timeout) still haven't run on 0253: wait for one; read gpu.md 04:05 entry's lines.
+
 ### 2026-10-31 04:55 s1: kernel134: 35 min app soak, 0 hangs; injector regression not exercised
 - s1: kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 (no trace flags), boot 20261031-041744.log: ~35 min with 8 apps (Preferences, Safari, Notes, Calendar, Clock, Photos, Maps, Compass) + 9 min Preferences only; 47 SWEET GPU 5 s lines, so ~4 min of GPU activity: a light load. 0 hangs, 0 recover lines, 0 resets. One open failure on Maps (FBS error Code=5).
 - r1, r2: sweethangtest=0xA0000200: injector never fired: under 512 present submits in 6-10 min. So 0253's new order has not run on a real recovery. Lower the count or make the load heavier next time.
