@@ -22,6 +22,12 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 08:10 z1: kernel135 soak, stopped early by the user at ~34 min: 151 k submits, 0 no-fault hangs
+- 20261031-073304.log, kernel135 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1, soak.sh. TLB sync histogram: lt10us 83667, lt100us 38314, lt1ms 241, lt10ms 7, timeout 0, max 2144 us, busy_before 0. Map 69243, unmap 52985 flushes.
+- 1 hang at 886.947 s: fence 62562 done 62495, fsr 40000002 (SMMU fault type), recover2 done after 28009 us: recovered. No tlb first timeout. kernel134 had 2 no-fault hangs in 113 k. Guess: 0254's change from 1 ms sleep to 5 us spin in the sync wait could matter, or chance: too few to say.
+- 3 times `submit failed: 0xe00002c2` (BadArgument), DEVLOST first turnip, backboardd exits and restarts (573, 1094, 1284 s); source unknown: under this soak about one per 6 min. It costs a UI restart and leaves the slower mode (2nd submit +6 ms) until reboot. Next item with the sync timing log.
+- Boot used to show the phone off: kernel135 with those args, tag showoff.
+
 ### 2026-10-31 07:25 soak1: kernel134 everyday args: 2 real no-fault hangs in ~113 k submits; the TLB sync never clears
 - App + long-swipe loop, boots 20261031-063606.log, 20261031-070415.log, research/notes/hang-soak1.txt. Hang 1 ~1423 s: fence 69595 done 69580, fsr 0, `tlb sync timeouts 174`. Hang 2 ~580 s: same, count 27. Every recovery: `tlb sync -> timeout after 100000 us, gbif released first, tlbstatus 1`; recover2, recover3, GBIF path failed; `recover failed +1s/+5s/+30s: tlbstatus 1`: the sync stays stuck. White screen in Safari; no GPU lines after. Owner lines not logged. DEVLOST at 1277 s in the first boot, 146 s before the hang.
 - So 0253's order doesn't clear it and a later retry wouldn't either. Correction after reading research/notes/gpu-tlb-wedge.md: timeouts cost 10 ms each, so 174 = 1.74 s and 27 = 0.27 s fit inside hang detection's 2 s window: they needn't come before the GPU stopped; the order is unproven (estimate ~60 % GPU first). 1277 s wasn't a GPU loss: submit error 0xe00002c2 (BadArgument), source unknown. Rate ~1.8 per 100 k submits: at full speed about one per 15-20 min of hard scrolling; a daily-use problem. Analysis running: research/notes/gpu-tlb-wedge.md.
