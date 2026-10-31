@@ -94,6 +94,20 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:55 p1b: SWEET_DEADFILL=2 at full canvas: 52-54 swaps/s, first submit 8.8 ms
+- kernel132 sweetswapbig=6 sweettrace=1 sweetcpusample=1, env set before a fresh boot, /var/local/mtl2-telemetry, boot 20261031-004812.log, 4454 mV, no hang, no DeviceLost. Settings long swipe, window 5-15 s. Base: 34.4 swaps/s, first submit 25.9:
+
+| run | swaps/s | 1st submit p50 / p95 ms | 2nd submit p50 / p95 ms | CPU ms per swap | GPU busy % | DF dropped / cleared / held per frame (estimate) |
+|---|---|---|---|---|---|---|
+| df1 | 52.3 | 8.77 / 10.63 | 0.57 / 3.54 | 14.7 | 61-66 | ~3.5 / ~0.87 / ~3.1 |
+| dg2 | 54.4 | 8.95 / 9.21 | 0.57 / 1.24 | 11.7 | 62-65 | ~3.3 / ~0.8 / ~3.4 |
+
+- Observed: the leading fills are dead: 3.4 drops per frame here, against 12 in ~720 frames in df1 (Oct 30 08:00), which was measured on other loads through a restart. Settings and Control Center look clean on the webcam; pixel-level not checked. So the DEADFILL scissor limit wasn't the blocker on this load, and the relaxed rule isn't needed yet.
+- p1a drawlog: the 20-pass cap is spent during boot, so no Settings pass. Boot passes lead with 3 identical full-canvas fills: PBGRAXm_A2Xhf, blend 0, mask 15, sc 0,0,1125,2436, then PBGRAXm_TimgA2Xhfn_Isrc.
+- A first run swiped over an open Control Center: 26.3 swaps/s, GPU 100 %, discarded; a blur-heavy screen stays costly.
+- Not default yet: mode 2 can draw wrong pictures: survey of all screens running. The fix gives a real chance at 60: CPU 11.7-14.7 ms is now the part to watch.
+- Part 2 of that run: with M2V_SHADOW_DUMP=all, Compass (130x90 BGRA row 544, 6 keys, kept) and Tips rendered clean in research/b44/d2-*.png, though g1 had them sheared on the same kernel: not explained; the survey opens each twice.
+
 ### 2026-10-31 00:40 gt3: the fixed GPU trace works: five draws with one shader are about half of the draw time
 - turnip 0109, fresh boots, research/gt3-pass.log (18.8 MB: boot + 20 s Settings swipe), research/gt3-draw.log (122 MB, with TU_SWEET_DRAW_TRACE=1: boot, launch, 5 s swipe). No fopen failure, the file grows with flush. Traces include boot and app launch, and the draw trace inflates times (1125x2436 pass mean 22.46 ms against 9.98): shares only.
 - Pass log: 1125x2436 passes n=420, mean 9.98 ms across idle and motion, 44 bins, load 0.39 ms, store 0.48, binning 0.13. draw_ib_gmem 4296.7 of 4455.9 ms of render-pass time. copy_buffer_to_image 7.2 per frame, 1.77 ms per frame (p50 0.18 ms in a frame buffer). So copies are a small part, not 31 % as the gt1 trace suggested on Oct 24.
