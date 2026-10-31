@@ -914,7 +914,7 @@ struct CullEntry {bool fill=false,clearOK=false;float col[4]={};uint64_t bind=0;
  for(unsigned k=0;k<8;k++) {
   if(k==pos||(_dfVbytes[k].empty()&&!_dfVb[k]))continue;
   mix(&k,sizeof k);size_t l=0;
-  if(const uint8_t *c=[self dfData:k length:&l])mix(c,std::min<size_t>(l,256));else{const void *o=(__bridge const void *)_dfVb[k];mix(&o,sizeof o);}
+  if(const uint8_t *c=[self dfData:k length:&l])mix(c,std::min<size_t>(l,256));else{const void *o=(__bridge const void *)_dfVb[k];mix(&o,sizeof o);mix(&_dfVbOff[k],sizeof _dfVbOff[k]);}
  }
  return h;
 }
@@ -924,6 +924,7 @@ struct CullEntry {bool fill=false,clearOK=false;float col[4]={};uint64_t bind=0;
  NBRenderPipeline *p=_pipe;CullEntry &e=_ops.back();
  if(!p||_dfDss||_cvis||inst!=1||!(prim==MTLPrimitiveTypeTriangle?count==6:prim==MTLPrimitiveTypeTriangleStrip&&count==4))return;
  if(![p.label isEqualToString:@"com.apple.coreanimation.draw.PBGRAXm_A2Xhf"]||!(p.opaqueMask&1)||p.dfSamples>1||p.dfA2C)return;
+ if(p.writtenMask&~p.opaqueMask)return;   // a blended or partly masked colour attachment isn't overwritten by the next fill
  NSNumber *cm=objc_getAssociatedObject(self,"cull"),*fm=objc_getAssociatedObject(self,"fill");
  if(cm.unsignedLongLongValue!=MTLCullModeNone||fm.unsignedLongLongValue!=MTLTriangleFillModeFill)return;   // every pixel, once
  if((p.dfPosFmt!=MTLVertexFormatFloat4&&p.dfPosFmt!=MTLVertexFormatFloat2)||!p.dfColFmt)return;
