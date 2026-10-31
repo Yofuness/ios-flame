@@ -1,0 +1,294 @@
+From ce7820bcd9d266e0a3ec49664dea60b41d9ca5d5 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Sat, 31 Oct 2026 03:56:59 -0400
+Subject: [PATCH] 0253 sunfish: no-fault GPU hang recovery: release GBIF before
+ polling the TLB sync, up to 100 ms (sweetgbiforder=0 old order); hang and
+ failed-recovery diagnostics (sweethangdiag=0 off); sweettlbwait=2 starts the
+ SQE on the last try
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_a6xx.c | 77 ++++++++++++++++++++++++++++++++++++++++++--
+ bsd/dev/sweet_a6xx.h |  3 ++
+ bsd/dev/sweet_gpu.c  | 46 +++++++++++++++++++++++---
+ 3 files changed, 118 insertions(+), 8 deletions(-)
+
+diff --git a/bsd/dev/sweet_a6xx.c b/bsd/dev/sweet_a6xx.c
+index 426b23a..3feb2b4 100644
+--- a/bsd/dev/sweet_a6xx.c
++++ b/bsd/dev/sweet_a6xx.c
+@@ -329,12 +329,25 @@ static int smmu_pick(int32_t *smr_out, int32_t *cb_out, int cb_min)
+ 	return smr < 0 || cb < 0 ? -1 : 0;
+ }
+ 
++uint32_t a6_tlb_sync_timeouts;		/* 0253: a6_tlb_flush syncs that timed out (10 ms) */
++
+ void a6_tlb_flush(const struct a6_gpu *g)
+ {
+ 	uint64_t c = SMMU_CB(g->gpu_cb);
+ 	wr32(c + CB_TLBIALL, 0);
+ 	wr32(c + CB_TLBSYNC, 0);
+-	wait_bit(c + CB_TLBSTATUS, 1, 0, 10);
++	if (wait_bit(c + CB_TLBSTATUS, 1, 0, 10))
++		a6_tlb_sync_timeouts++;		/* 0253 */
++}
++
++/* 0253: read-only, from the thread after a failed recovery; CX off would make the SMMU read unsafe */
++void a6_tlb_diag(const struct a6_gpu *g, unsigned secs)
++{
++	if (g->gpu_cb < 0 || !a6_cx_up()) {
++		a6_log("recover failed +%us: tlbstatus not read (cx off or no bank)\n", secs);
++		return;
++	}
++	a6_log("recover failed +%us: tlbstatus %x\n", secs, rd32(SMMU_CB(g->gpu_cb) + CB_TLBSTATUS));
+ }
+ 
+ /* 0180: raw CB FSR (a6_fault_status masks it to the fault bits) */
+@@ -865,6 +878,11 @@ static int gmu_hfi(struct a6_gpu *g)
+ 	int hs = wait_bit(GMU_REG(GMU_HFI_CTRL), 1, 1, 100);
+ 	a6_log("hfi: ctrl init -> status %x %s\n", rd32(GMU_REG(GMU_HFI_CTRL)), hs ? "TIMEOUT" : "ok");
+ 	if (hs && gmu_cold_recover && a6_fastfail()) {	/* 0208: 0 of 6 ctrl init timeouts ever got HFI up */
++		if (a6_hangdiag()) {		/* 0253: the diag below is skipped on this path */
++			uint64_t cb = SMMU_CB(g->gmu_cb);
++			a6_log("fastfail diag: gmu cb%u fsr %x far %x%08x fsynr0 %x\n", g->gmu_cb, rd32(cb + CB_FSR),
++			    rd32(cb + CB_FAR + 4), rd32(cb + CB_FAR), rd32(cb + CB_FSYNR0));
++		}
+ 		a6_log("fastfail: skipping HFI messages (recover3 hfi ctrl init timeout)\n");
+ 		return -1;
+ 	}
+@@ -1474,14 +1492,40 @@ static bool a6_fastfail(void)
+ }
+ static bool me_init_timed_out;
+ 
++/* 0253: sweethangdiag=0 turns off the extra hang and failed-recovery log lines (default 1) */
++bool a6_hangdiag(void)
++{
++	static int v = -1;
++	if (v < 0) {
++		v = 1;
++		(void)PE_parse_boot_argn("sweethangdiag", &v, sizeof(v));
++	}
++	return v != 0;
++}
++
++/* 0253: sweetgbiforder=0 keeps the old order: poll the TLB sync with GBIF still halted (default 1) */
++static bool a6_gbiforder(void)
++{
++	static int v = -1;
++	if (v < 0) {
++		v = 1;
++		(void)PE_parse_boot_argn("sweetgbiforder", &v, sizeof(v));
++	}
++	return v != 0;
++}
++
++/* 0253: set around the last CP init of a recovery; with sweettlbwait=2 it starts the SQE despite a busy sync */
++static bool tlb_last_try;
++
+ /* 0207: sweettlbwait=0 keeps the old unchecked TLB sync in the recovery and the ungated SQE start (default 1) */
++/* 0253: sweettlbwait=2 is 1 + the SQE start on the last try (reset risk, k81/k82; only on the boot line) */
+ static int a6_tlbwait(void)
+ {
+ 	static int tw = -1;
+ 	if (tw < 0) {
+ 		int v = 1;
+ 		(void)PE_parse_boot_argn("sweettlbwait", &v, sizeof(v));
+-		tw = v != 0;
++		tw = v;
+ 	}
+ 	return tw;
+ }
+@@ -1528,6 +1572,25 @@ static void a6_smmu_gbif_reset(const struct a6_gpu *g)
+ 	wr32(c + CB_SCTLR, sctlr & ~1u);
+ 	(void)rd32(c + CB_SCTLR);
+ 	wr32(c + CB_FSR, 0xffffffff);
++	if (a6_tlbwait() && a6_gbiforder()) {
++		/* 0253: a halted GBIF may be what holds the sync: release first (bank translating again), then poll */
++		unsigned us = 0;
++		wr32(c + CB_TLBIALL, 0);
++		wr32(c + CB_TLBSYNC, 0);
++		wr32(c + CB_SCTLR, sctlr | smmu_stall_bit());
++		(void)rd32(c + CB_SCTLR);
++		wr32(GREG(0x3c45), 0);		/* GBIF_HALT */
++		wr32(GREG(0x16), 0);		/* RBBM_GBIF_HALT */
++		(void)rd32(GREG(0x3c45));
++		while ((rd32(c + CB_TLBSTATUS) & 1) && us < 100000) {
++			a6_delay_us(10);
++			us += 10;
++		}
++		uint32_t ts = rd32(c + CB_TLBSTATUS);
++		a6_log("tlb sync -> %s after %u us, gbif released first, tlbstatus %x\n", ts & 1 ? "timeout" : "done", us, ts);
++		a6_log("recover2: smmu/gbif reset: sctlr %x fsr %x tlbstatus %x\n", rd32(c + CB_SCTLR), rd32(c + CB_FSR), ts);
++		return;
++	}
+ 	if (a6_tlbwait()) {
+ 		if (a6_tlb_sync_poll(c))
+ 			(void)a6_tlb_sync_poll(c);	/* 0207: one retry */
+@@ -1715,7 +1778,9 @@ int a6_recover_cold(struct a6_gpu *g)
+ 	a6_tlb_flush(g);
+ 	a6_smmu_gbif_reset(g);
+ 	recover2_active = true;			/* zap_load, then zap_resume if TZ still has it */
++	tlb_last_try = true;			/* 0253 */
+ 	rc = gpu_cp_init(g, false);
++	tlb_last_try = false;
+ 	recover2_active = false;
+ 	R3("cp init + zap", rc);
+ 	SWEET_CRUMB("recover3 %s rc %d", rc ? "failed" : "done", rc);
+@@ -1772,7 +1837,9 @@ int a6_recover(struct a6_gpu *g)
+ 	a6_delay_ms(10);
+ 	(void)a6_clear_fault(g);
+ 	a6_smmu_gbif_reset(g);
++	tlb_last_try = true;			/* 0253: last gate on the failing path: recover3 stops at HFI first */
+ 	rc = gpu_cp_init(g, true);
++	tlb_last_try = false;
+ 	a6_log("recover: GBIF halt + soft reset + CP init -> %d\n", rc);
+ 	return rc;
+ }
+@@ -1865,7 +1932,11 @@ static int gpu_cp_init(struct a6_gpu *g, bool resume)
+ 		/* 0207: the SQE fetches through the SMMU at once; with a TLB sync still pending that reset the SoC */
+ 		uint32_t ts = rd32(SMMU_CB(g->gpu_cb) + CB_TLBSTATUS);
+ 		SWEET_CRUMB("cp_init: tlbstatus %x before sqe start", ts);
+-		if (ts & 1) {
++		if ((ts & 1) && a6_tlbwait() == 2 && tlb_last_try) {
++			/* 0253: logged and crumbed first: this write is the k82 reset suspect */
++			a6_log("sweettlbwait=2: starting SQE with TLB sync busy (tlbstatus %x), reset possible\n", ts);
++			SWEET_CRUMB("cp_init: forced sqe start, tlbstatus %x", ts);
++		} else if (ts & 1) {
+ 			a6_log("recovery aborted: TLB sync busy, SQE not started\n");
+ 			return -1;
+ 		}
+diff --git a/bsd/dev/sweet_a6xx.h b/bsd/dev/sweet_a6xx.h
+index 4002792..4529776 100644
+--- a/bsd/dev/sweet_a6xx.h
++++ b/bsd/dev/sweet_a6xx.h
+@@ -142,6 +142,9 @@ int a6_map_pages(struct a6_gpu *g, uint64_t iova, const uint64_t *pages, uint32_
+ void a6_unmap(struct a6_gpu *g, uint64_t iova, uint64_t size);	/* clear 4K entries; then a6_tlb_flush */
+ void a6_unmap_high(struct a6_gpu *g);	/* drop all mappings above 1 GB, reset the arena */
+ void a6_tlb_flush(const struct a6_gpu *g);
++extern uint32_t a6_tlb_sync_timeouts;	/* 0253 */
++void a6_tlb_diag(const struct a6_gpu *g, unsigned secs);	/* 0253: logs TLBSTATUS */
++bool a6_hangdiag(void);		/* 0253: boot-arg sweethangdiag (default 1) */
+ int a6_clear_fault(const struct a6_gpu *g);	/* 1 if an SMMU fault was cleared */
+ uint32_t a6_smmu_fsr_raw(const struct a6_gpu *g);	/* 0180 */
+ void a6_smmu_stall_on_fault(const struct a6_gpu *g);	/* 0180: set CFCFG on the GPU context bank */
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 5354506..1cffe03 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -495,15 +495,17 @@ static uint32_t gstat_next = 1;
+ static uint64_t gstat_abs;
+ static uint64_t gstat_clk_cyc, gstat_clk_abs;	/* 0169: core cycle counter and mach time of the last 5 s sample */
+ static int gstat_pid[A6_TS_SLOTS];
++static uint64_t gstat_ib1[A6_TS_SLOTS];		/* 0253: first IB of each fence, for the hang log */
+ static struct { int pid; uint32_t n; uint64_t busy; } gstat_own[GSTAT_OWNERS + 1];     /* last: everyone else */
+ static uint32_t gstat_n, gstat_missed;
+ static uint64_t gstat_busy, gstat_longest;
+ 
+ static void
+-gpu_owner_locked(uint32_t fence, int pid)
++gpu_owner_locked(uint32_t fence, int pid, uint64_t ib1)
+ {
+ 	if (fence) {
+ 		gstat_pid[fence % A6_TS_SLOTS] = pid;
++		gstat_ib1[fence % A6_TS_SLOTS] = ib1;
+ 		sweet_tl(6, fence, (uint32_t)pid);
+ 	}
+ }
+@@ -677,6 +679,25 @@ sweet_gpu_kill_backboardd(void)
+ 	}
+ }
+ 
++/* 0253: TLBSTATUS 1, 5 and 30 s after a failed recovery: could a later retry work? */
++static void
++gpu_recover_diag_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	static int chan;
++	static const unsigned secs[] = { 1, 5, 30 };
++	unsigned prev = 0;
++	for (unsigned i = 0; i < sizeof(secs) / sizeof(secs[0]); i++) {
++		uint64_t deadline;
++		clock_interval_to_deadline(secs[i] - prev, NSEC_PER_SEC, &deadline);
++		(void)assert_wait_deadline(&chan, THREAD_UNINT, deadline);
++		thread_block(THREAD_CONTINUE_NULL);
++		a6_tlb_diag(&gpu, secs[i]);
++		prev = secs[i];
++	}
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
+ /* Soft reset + CP re-init; everything queued is lost, its fences complete at once (waiters return). */
+ static void
+ gpu_recover_locked(const char *why)
+@@ -699,6 +720,13 @@ gpu_recover_locked(const char *why)
+ 		    dg[2], (dg[2] >> 24) & 1, dg[3], dg[3] & A6_FSR_FAULT);
+ 	else
+ 		a6_log("%s: rbbm status1 %x status2 %x status3 %x (bit24 smmu stalled), cb fsr raw %x\n", why, dg[0], dg[1], dg[2], dg[3]);
++	uint32_t tlb_to = a6_tlb_sync_timeouts;
++	if (a6_hangdiag()) {
++		/* 0253: sync timeouts before this hang; owners of the oldest unfinished fences (first = stuck one) */
++		a6_log("%s: tlb sync timeouts %u\n", why, tlb_to);
++		for (uint32_t f = done + 1; (int32_t)(gpu.fence - f) >= 0 && f - done <= 6; f++)
++			a6_log("%s: fence %u pid %d ib1 %llx\n", why, f, gstat_pid[f % A6_TS_SLOTS], gstat_ib1[f % A6_TS_SLOTS]);
++	}
+ 	lost[recoveries % LOST_RING].lo = done;
+ 	lost[recoveries % LOST_RING].hi = gpu.fence;
+ 	recoveries++;
+@@ -714,10 +742,18 @@ gpu_recover_locked(const char *why)
+ 		else
+ 			a6_log("recover3: done in %llu us\n", ns3 / 1000);
+ 	}
++	a6_tlb_sync_timeouts = tlb_to;		/* 0253: the count is of normal-path syncs, not the recovery's own */
+ 	if (rrc) {
+ 		a6_log("%s: GPU not recovered\n", why);
+ 		gpu_ready = false;
+ 		rec_ok = false;
++		static bool diag_started;		/* 0253 */
++		thread_t diag_thread;
++		if (a6_hangdiag() && !diag_started &&
++		    kernel_thread_start(gpu_recover_diag_thread, NULL, &diag_thread) == KERN_SUCCESS) {
++			diag_started = true;
++			thread_deallocate(diag_thread);
++		}
+ 		/* 0179: a failed recovery leaves a black screen; try a backboardd restart once per boot (sweetgpukill=1) */
+ 		static bool failed_kill_done;
+ 		if (gpu_kill && gpu_kill_call && !failed_kill_done) {
+@@ -1033,7 +1069,7 @@ sweet_gpu_present(int s, uintptr_t kva, uint32_t offset, uint32_t w, uint32_t h,
+ 		}
+ 		a6_write(a6_pool_pa(&gpu, PRESENT_IB(k)), ib, 4ULL * n);
+ 		present_fence[k] = a6_submit_ib_async(&gpu, a6_pool_va(PRESENT_IB(k)), n, 100);
+-		gpu_owner_locked(present_fence[k], 0);
++		gpu_owner_locked(present_fence[k], 0, a6_pool_va(PRESENT_IB(k)));
+ 		rc = present_fence[k] ? 0 : -1;
+ 		present_next++;
+ 	}
+@@ -1184,7 +1220,7 @@ sweet_gpu_submit_user_async(uint64_t ib_iova, uint32_t dwords)
+ 	gpu_note_submit_locked();
+ 	gpu_hangtest_arm(false);
+ 	uint32_t fence = a6_submit_ib_async(&gpu, ib_iova, dwords, 1000);
+-	gpu_owner_locked(fence, proc_selfpid());
++	gpu_owner_locked(fence, proc_selfpid(), ib_iova);
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ 	return fence;
+ }
+@@ -1220,7 +1256,7 @@ sweet_gpu_submit_user(uint64_t ib_iova, uint32_t dwords, uint32_t timeout_ms, ui
+ 	}
+ 	lck_mtx_lock(&sweet_gpu_lock);
+ 	gpu_note_submit_locked();
+-	gpu_owner_locked(gpu.fence + 1, proc_selfpid());
++	gpu_owner_locked(gpu.fence + 1, proc_selfpid(), ib_iova);
+ 	int rc = a6_submit_ib(&gpu, ib_iova, dwords, timeout_ms ? timeout_ms : 1000);
+ 	if (rc) {
+ 		gpu_recover_locked("user submit");
+@@ -1472,7 +1508,7 @@ sweet_gpu_submit_v2(const uint64_t *iova, const uint32_t *dwords, unsigned n, bo
+ 	gpu_note_submit_locked();
+ 	gpu_hangtest_arm(false);
+ 	uint32_t fence = a6_submit_ibs_async(&gpu, iova, dwords, n, ring_wait_ms);
+-	gpu_owner_locked(fence, proc_selfpid());
++	gpu_owner_locked(fence, proc_selfpid(), fence ? iova[0] : 0);
+ 	lck_mtx_unlock(&sweet_gpu_lock);
+ 	*busy = fence == 0 && n > 0 && n <= A6_SUBMIT_MAX;
+ 	return fence;
+-- 
+2.56.0
+

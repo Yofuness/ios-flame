@@ -22,6 +22,9 @@
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 04:05 xnu 0253 kernel134: GBIF released before the TLB sync poll, hang diagnostics (not run)
+- Release GBIF then poll up to 100 ms (sweetgbiforder=0 for the old order); `tlb sync timeouts N` at each hang; `fence F pid P ib1 X` for the oldest unfinished; `fastfail diag: gmu cb.. fsr`; `recover failed +1s/+5s/+30s: tlbstatus S`. sweettlbwait=2 opt-in, last try starting the SQE (k81/k82 reset risk). sweethangdiag=0 turns the logs off. Each reset can now spin 100 ms under sweet_gpu_lock.
+
 ### 2026-10-31 04:00 Five no-fault hangs in one night; recovery fails at the TLB sync (research/notes/gpu-hangs-1031.md)
 - Hangs, all fsr 0, in a pass (sqe stat 0, CP_BUSY, SP, UCHE, VPC, VBIF busy): 20261030-222005:45752 (k130), 20261030-230323:8172 (k131), 20261031-012907:56047 (k132, Maps), 20261031-023756 at 654.099 s (k132), 20261031-032917 at 766 s (k133). Correction: h1's (654.099 s) did NOT recover: logs show a new backboardd with `device refused: OutOfMemory(Device)` and CPU drawing after it. CPU fallback reaches 60 swaps/s on some screens, so its low fps isn't a fixed sign.
 - Since Oct 29: SMMU-fault type recovered 2 of 2 in ~27 ms; no-fault type 0 of 8: `tlb sync -> timeout` x6, then `recovery aborted: TLB sync busy` x3 (the 0207 guard); recover3 fails at OOB 6, sptprac, HFI init. `gpu_ready=false` stays until reboot. Code: a6_smmu_gbif_reset polls the sync with GBIF still halted.
