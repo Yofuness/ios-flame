@@ -1974,6 +1974,11 @@ static uint64_t amp_t0, amp_next;
 static int amp_diag_n, amp_pcm_stop_test, pcm_stopped;
 static uint64_t amp_stop_t;
 static int af_amp_dead;	/* sp23: a fault or a failed setup: amp off until the next process */
+/* sp25: in a running stream only GLOBAL_EN moves (amp_standby); the full setup (0.4-1.6 s of I2C) waits for stream down,
+ * WRITE_DONE timeout 3 s. ADSP_AF_FULL_OFF=1: back to sp23 (full power-down + re-prepare in silence, 1 s timeout) */
+static int af_full_off, amp_standby_on, af_wd_timeout;
+static uint64_t af_setup_ms, af_on_max, af_off_max;
+static unsigned af_on_n, af_off_n;
 
 /* sp7: --rec ASP TX routing (vi-loopback.md step 2): VMON/IMON on, TX1 = VMON slot 0, TX2 = IMON slot 1, 16 bit,
  * TX1/2 enabled. on = 1 saves + writes + reads back, 0 restores (PWR_CTRL2 is left to cs_power_down: it zeroes it). */
@@ -2026,7 +2031,28 @@ static void amp_off(void)
 	amp_tx(0);	/* sp7: after GLOBAL_EN 0 */
 	if (amp_t0)
 		printf("amp: on for %llu ms\n", (unsigned long long)(now_ms() - amp_t0));
-	amp_ready = 0;
+	amp_t0 = 0;	/* sp25: a later pass over an amp that never went on again reports nothing */
+	amp_ready = amp_standby_on = 0;
+}
+
+/* sp25: silence in a running stream: GLOBAL_EN off, the configuration stays, amp_ready stays. Failure: full power-down */
+static void amp_standby(void)
+{
+	uint64_t t = now_ms();
+	int r = cs_standby(&amp);
+	if (amp_t0)
+		printf("amp: on for %llu ms\n", (unsigned long long)(t - amp_t0));
+	amp_t0 = 0;
+	amp_used = 0;
+	if (r) {
+		printf("amp: standby failed: full power-down\n");
+		amp_off();
+		af_amp_dead = 1;
+	} else
+		amp_standby_on = 1;
+	if (now_ms() - t > af_off_max)
+		af_off_max = now_ms() - t;
+	af_off_n++;
 }
 
 /* probe + configure + read back (no GLOBAL_EN); 0 = ready for amp_start */
@@ -2049,6 +2075,12 @@ static void amp_start(void)
 		return;
 	amp_used = 1;
 	printf("amp: power up (%d dB)\n", amp_db);
+	uint64_t t = now_ms();	/* sp25 */
+	if (amp_standby_on && cs_resume_check(&amp)) {
+		amp_off();
+		return;
+	}
+	amp_standby_on = 0;
 	uint32_t cd;
 	cs_read(&amp, 0x14000, &cd);	/* sp2: CLOCK_DETECT_1 before GLOBAL_EN (logged by cs_read) */
 	amp_tx(1);	/* sp7 */
@@ -2059,6 +2091,9 @@ static void amp_start(void)
 		return;
 	}
 	amp_t0 = now_ms();
+	if (amp_t0 - t > af_on_max)
+		af_on_max = amp_t0 - t;
+	af_on_n++;
 	amp_next = amp_t0 + 50;
 	sd0_next = pw_next = amp_t0 + SD0_SETTLE_MS;	/* sp18, sp19 */
 }
@@ -2252,6 +2287,8 @@ static uint64_t af_last_sound, af_retry, af_next_crash;
 static struct af_ring af_r;
 static struct af_dc af_g;
 
+#define PCM_WD_MS	(af_on && !af_full_off ? 3000 : 1000)	/* sp25: a stall must not kill a stream with its periods coming */
+
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
@@ -2392,7 +2429,10 @@ static void rec_summary(void)
 /* Run step pcm_step; teardown steps with nothing to undo are skipped. P_DONE hands back to the AFE (stop). */
 static void pcm_run(void)
 {
-	if (pcm_step > P_PLAY)
+	if (pcm_step > P_PLAY && af_on && !af_full_off) {	/* sp25: once, GLOBAL_EN only; af_reset does the rest */
+		if (amp.up)
+			amp_standby();
+	} else if (pcm_step > P_PLAY)
 		amp_off();	/* sp1: amp down before any PCM/AFE teardown */
 	int rec_go = rec_on && !rec_failed;	/* sp7: R_* setup steps */
 	for (;; pcm_step++) {
@@ -2531,7 +2571,7 @@ static void pcm_run(void)
 				for (unsigned b = 0; b < REC_READS; b++)
 					rec_read(b);
 			}
-			pcm_due = now_ms() + 1000;
+			pcm_due = now_ms() + PCM_WD_MS;
 			return;
 		case P_PAUSE:
 			if (!pcm_running)
@@ -2616,7 +2656,7 @@ static void pcm_back(unsigned p)
 	if (pcm_out)
 		pcm_out--;
 	pcm_t1 = now_ms();
-	pcm_due = pcm_t1 + 1000;
+	pcm_due = pcm_t1 + PCM_WD_MS;
 	if (pcm_step != P_PLAY)
 		return;
 	if (af_on) {	/* sp23: no period limit; af_poll starts the amp and asks for the stop */
@@ -2705,14 +2745,23 @@ static void pcm_start(void)
 	pcm_run();
 }
 
-/* replies overdue: 3 s per command, 1 s between WRITE_DONEs */
+static int pump_one(void);
+
+/* replies overdue: 3 s per command, 1 s between WRITE_DONEs (sp25: 3 s with --audio-fifo) */
 static void pcm_poll(void)
 {
 	if (pcm_step <= P_IDLE || pcm_step >= P_DONE || now_ms() < pcm_due)
 		return;
+	if (af_on && !af_full_off) {	/* sp25: after a stall in this pass the replies may be waiting unread: they refill, nothing is lost */
+		while (pump_one() > 0)
+			;
+		if (pcm_step <= P_IDLE || pcm_step >= P_DONE || now_ms() < pcm_due)
+			return;
+	}
 	if (pcm_step == P_PLAY) {
-		printf("pcm: no WRITE_DONE in 1 s (%u written, %u done)\n", pcm_sent, pcm_done);
+		printf("pcm: no WRITE_DONE in %d s (%u written, %u done)\n", PCM_WD_MS / 1000, pcm_sent, pcm_done);
 		pcm_failed = 1;
+		af_wd_timeout = 1;
 		pcm_step = P_TEARDOWN;
 		pcm_run();
 	} else {
@@ -2866,10 +2915,19 @@ static void af_fifo_open(void)
 static void af_reset(void)
 {
 	int ok = afe_started && pcm_done && !pcm_failed;
+	if (!af_full_off && afe_started && pcm_done && af_wd_timeout && pcm_done == pcm_sent && !pcm_werr)
+		ok = 1;	/* sp25: the timeout alone, every period completed: the DSP is fine */
 	af_fails = ok ? 0 : af_fails + 1;
 	printf("audio: stream down%s: %u periods, %u underflows, ring %llu short, %llu over, %llu dropped, %llu repeated, DC trips %u\n",
 	       ok ? "" : " (failed)", pcm_done, pcm_underflow, (unsigned long long)af_r.underrun, (unsigned long long)af_r.overrun,
 	       (unsigned long long)af_r.dropped, (unsigned long long)af_r.repeated, af_g.trips);
+	printf("audio: amp steps: setup %llu ms before this stream, on %u x max %llu ms, off %u x max %llu ms\n", (unsigned long long)af_setup_ms,	/* sp25 */
+	       af_on_n, (unsigned long long)af_on_max, af_off_n, (unsigned long long)af_off_max);
+	af_on_n = af_off_n = 0;
+	af_on_max = af_off_max = 0;
+	af_wd_timeout = 0;
+	if (!af_full_off)
+		amp_off();	/* sp25: no stream, no clock: the rest of the power-down; af_poll prepares again */
 	if (af_fails >= AF_MAX_FAILS)
 		printf("audio: %d failed streams in a row: no more in this run\n", af_fails);
 	af_retry = ok ? 0 : now_ms() + AF_RETRY_MS;
@@ -2901,7 +2959,7 @@ static void af_poll(void)
 	if (!af_on)
 		return;
 	uint64_t now = now_ms();
-	if (now >= af_next_crash) {	/* before pcm_poll's 1 s timeout starts a teardown on a dead DSP */
+	if (now >= af_next_crash) {	/* before pcm_poll's timeout starts a teardown on a dead DSP */
 		uint32_t v;
 		af_next_crash = now + 200;
 		if (!smp2p_in(&v) && (v & 1)) {
@@ -2917,11 +2975,14 @@ static void af_poll(void)
 	ssize_t n;
 	for (int i = 0; i < 16 && (n = read(af_fd, b, sizeof(b))) > 0; i++)
 		af_ring_put(&af_r, b, (size_t)n);
-	if (!amp_ready && !amp.up && !af_amp_dead) {	/* cs_power_down cleared it; here, in silence, as it stalls this loop */
+	if (!amp_ready && !amp.up && !af_amp_dead && (!af_up || af_full_off)) {	/* cs_power_down cleared it; sp25: only with no stream up, as it stalls this loop */
+		uint64_t t = now_ms();
 		if (amp_prepare()) {
 			printf("audio: amp setup failed: no more amp in this run\n");
 			af_amp_dead = 1;
 		}
+		af_setup_ms = now_ms() - t;
+		now = now_ms();
 	}
 	if (!af_up) {
 		if (af_amp_dead || af_fails >= AF_MAX_FAILS || now < af_retry || !af_r.n) {
@@ -2942,8 +3003,11 @@ static void af_poll(void)
 	uint64_t quiet = now > af_last_sound ? now - af_last_sound : 0;
 	if (amp.up && (quiet >= AF_AMP_OFF_MS || af_g.muted)) {
 		printf("audio: %s: amp off\n", af_g.muted ? "DC mute" : "silence");
-		amp_off();
-		amp_used = 0;
+		if (af_full_off) {
+			amp_off();
+			amp_used = 0;
+		} else
+			amp_standby();	/* sp25 */
 	} else if (!amp.up && pcm_done && amp_ready && quiet < AF_AMP_OFF_MS && !af_g.muted) {
 		amp_start();	/* sp1: stream running, BCLK present */
 		if (!amp.up) {
@@ -3566,6 +3630,7 @@ int main(int argc, char **argv)
 		return r ? 1 : 0;
 	}
 	if (af_on) {	/* sp23: no amp must not cost the sensors: without one, no FIFO, the rest runs */
+		af_full_off = getenv("ADSP_AF_FULL_OFF") != NULL;	/* sp25 */
 		af_amp_clear();
 		if (amp_prepare()) {
 			printf("audio: amp not ready (sweetampreset=1, sweetse9=2?): no audio in this run\n");

@@ -499,27 +499,61 @@ void cs_diag(struct cs_amp *a, const char *tag)
 	       v[3] & 0x80000000u ? " OTP_BOOT_ERR" : v[3] & 0x2 ? " OTP_BOOT_DONE" : "");
 }
 
+/* sp25: the GLOBAL_EN half of the power-down; 0 = GLOBAL_EN 0 written and PDN_DONE seen */
+static int global_off(struct cs_amp *a)
+{
+	int err = 0;
+	if (a->out_mute)	/* sp8: mute before GLOBAL_EN 0, as ios-redfin 0953 */
+		upd(a, AMP_OUT_MUTE, 0x10, 0x10);
+	err |= upd(a, PWR_CTRL1, 1, 0);
+	int i;
+	for (i = 0; i < 100 && !dry; i++) {
+		uint32_t s;
+		usleep(1000);
+		if (rd(a, IRQ1_STATUS1, &s) || (s & IRQ_PDN_DONE))
+			break;
+	}
+	if (i == 100) {
+		printf("cs35l41 %#x: no PDN_DONE in 100 ms\n", a->addr);
+		err = -1;
+	}
+	wr(a, IRQ1_STATUS1, 0xffffffffu);
+	patch(a, 0x002f1aa3);
+	a->up = 0;
+	return err;
+}
+
+/* sp25: GLOBAL_EN off, configuration kept: the state cs_verify leaves, so cs_power_up can follow */
+int cs_standby(struct cs_amp *a)
+{
+	if (!AMP_OK(a->addr) || !a->configured || !a->up)
+		return -1;
+	return global_off(a);
+}
+
+/* sp25: before a power-up from standby: amp enable and the volume ceiling still as verified. A few ms */
+int cs_resume_check(struct cs_amp *a)
+{
+	for (int i = 0; i < a->nexp; i++) {
+		uint32_t v;
+		if (a->exp[i].reg != PWR_CTRL2 && a->exp[i].reg != AMP_DIG_VOL)
+			continue;
+		if (rd(a, a->exp[i].reg, &v))
+			return -1;
+		if (!dry && (v & a->exp[i].mask) != a->exp[i].val) {
+			printf("cs35l41 %#x: standby lost %08x: read %08x want %08x\n", a->addr, a->exp[i].reg, v, a->exp[i].val);
+			return -1;
+		}
+	}
+	return 0;
+}
+
 void cs_power_down(struct cs_amp *a)
 {
 	if (!AMP_OK(a->addr) || !a->configured)
 		return;
-	if (a->up) {
-		if (a->out_mute)	/* sp8: mute before GLOBAL_EN 0, as ios-redfin 0953 */
-			upd(a, AMP_OUT_MUTE, 0x10, 0x10);
-		upd(a, PWR_CTRL1, 1, 0);
-		int i;
-		for (i = 0; i < 100 && !dry; i++) {
-			uint32_t s;
-			usleep(1000);
-			if (rd(a, IRQ1_STATUS1, &s) || (s & IRQ_PDN_DONE))
-				break;
-		}
-		if (i == 100)
-			printf("cs35l41 %#x: no PDN_DONE in 100 ms\n", a->addr);
-		wr(a, IRQ1_STATUS1, 0xffffffffu);
-		patch(a, 0x002f1aa3);
-		a->up = 0;
-	}
+	if (a->up)
+		global_off(a);
 	wr(a, PWR_CTRL2, 0);	/* AMP_EN 0, boost FET off */
 	if (a->err_bits) {	/* error release (cs35l41.c:379); not re-enabled in this run */
 		uint32_t rls = (a->err_bits & IRQ_AMP_SHORT ? 0x02 : 0) | (a->err_bits & IRQ_BST_SHORT ? 0x04 : 0) |

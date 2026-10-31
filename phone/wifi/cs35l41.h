@@ -42,5 +42,7 @@ void cs_out_mute(struct cs_amp *a, const char *tag);	/* sp8: read + log AMP_OUT_
 void cs_diag(struct cs_amp *a, const char *tag);		/* sp6: RAW IRQ1 1-4, clocks, ASP, PWR_CTRL3; read-only */
 int cs_check(struct cs_amp *a);				/* 0 = no IRQ1 error bit */
 void cs_power_down(struct cs_amp *a);			/* GLOBAL_EN 0, PDN_DONE, pdn patch, AMP_EN 0, gain back */
+int cs_standby(struct cs_amp *a);			/* sp25: GLOBAL_EN 0, PDN_DONE, pdn patch; stays configured + verified */
+int cs_resume_check(struct cs_amp *a);			/* sp25: PWR_CTRL2, AMP_DIG_VOL still as verified; 0 = yes */
 
 #endif

@@ -38,7 +38,7 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 - kernel134 sweetse9=2 sweetcampmic=2 sweetswapbig=6 sweetampreset=1 CAMERA=1, boots 20261031-053028.log (-102), 053246 (-20), 4455 and 4440 mV. tools/sunfish-install-sensors.sh and sunfish-install-audio.sh run; /var/local/speaker.on empty = -102, holds a dB value otherwise.
 - -102: `flame-cmd key 0 150`: lock sound goes through SunfishAudio.driver -> FIFO -> ADSP: stream up, PUP_DONE 3 ms, silence: amp off, stream down; 117-144 periods, 0 underflows, DC trips 0. No AirPods route. 5 sleep/wake cycles fine, sensors alive, no GPU hang.
 - -20: `amp 0x41 at -20 dB`, `amp: on for 1103 ms`; EM-01 rms stayed 78-116 with no step, 0 TONE (research/notes/sp24-lock.txt). A short click at -20 dB, and iOS scales the sample, so this proves nothing either way. Needs a long sound and a broadband measure. Keyboard clicks, timer alarm, app use not run: an unlock swipe failed.
-- Fault: every stream ends `pcm: done: FAILED`, `stream down (failed)`, with all periods done and 0 errors. Cause not found yet.
+- Fault: every stream ends `pcm: done: FAILED`, `stream down (failed)`, with all periods done and 0 errors: sensors.log.prev: "silence: amp off" -> "pcm: no WRITE_DONE in 1 s (144 written, 136 done)". After 3: "3 failed streams in a row: no more in this run", so sound stops until reboot. Guess: the amp re-prepare in silence stalls the single loop over 1 s. Fix being written.
 - speaker.on removed for now; job runs sensors only. Everyday: `CAMERA=1 tools/sunfish-test.sh -k work/kernel134/kernel.development.sweet NAME sweetse9=2 sweetcampmic=2 sweetswapbig=6`.
 
 ### 2026-10-31 05:35 sp23: --audio-fifo works with repeat cycles and with sensors, silent
