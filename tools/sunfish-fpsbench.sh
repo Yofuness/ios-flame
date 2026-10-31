@@ -6,7 +6,8 @@
 cd "$(dirname "$0")/.." || exit 1
 tag=$1 secs=${2:-30} L=../logs/usb-live.log
 # BENCH_TIGHT=1: back-to-back 400 ms swipes (continuous motion) instead of 250 ms swipes + 600 ms pauses
-sw=250 gap=0.6; [ -n "$BENCH_TIGHT" ] && sw=400 gap=0.05
+# flame-cmd --wait 0 returns at once while the swipe runs on the phone, so the gap includes the swipe (else they pile up)
+sw=250 gap=0.85; [ -n "$BENCH_TIGHT" ] && sw=400 gap=0.45
 C() { python3 -I tools/flame-cmd.py --wait 0 "$@" >/dev/null 2>&1; }
 C swipe 540 2330 540 1100 300; sleep 3
 echo "=== bench $tag start $(date +%T)" >> "$L"

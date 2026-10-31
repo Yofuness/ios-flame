@@ -94,6 +94,13 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 01:30 e1: first DEADFILL survey: 17 screens clean; three findings, likely test artefacts; Home 57 swaps/s
+- kernel132 sweetswapbig=6 SWEET_DEADFILL=2 before a fresh boot, boot 20261031-005605.log, 20261031-012256.log, 4455 mV, no reset, no hang. Clean (PNG read, research/df): lock, Home x2, Control Center, Today, Settings, Calendar, Mail, Notes, Reminders, Clock, Safari, Files, Calculator, Weather, App Library, Utilities folder. 5 sleep/wake cycles fine. Env set back to empty.
+- Not run: Tips, Maps retry, app switcher, Camera preview, mid-animation frames, 3 min of use. Maps showed only a spinner; Camera went to the lock screen.
+- Findings: (1) Compass digits and lower dial sheared, twice, with mode 2; also in g1 without it, but clean in d2. (2) Status-bar clock 12:59 at real time 1:0x in Settings, Calendar and others. (3) After the Home bench, research/df/fps_end.png is badly sheared and the webcam shows a page overlaid.
+- Reading (guess): (3) is my bug: with --wait 0 the bench sent swipes faster than the phone ran them, so it was still swiping; fixed with gaps that include the swipe, and that also invalidates any --wait 0 run's pacing. fps_end.png's stair steps look like a rolling shutter: flame-shot reading the live surface while it moves. So (1) may be a capture tear too: Compass moves constantly. Second survey with a control is running. (2) unexplained.
+- Numbers: Settings df1 52.3 swaps/s, swap-to-swap p50 19.96 / p95 24.19 ms, first submit 8.77 / 10.63, CPU 17.3 ms per swap on A76. Home fpsbench 57.4 swaps/s, 57.2 panel updates/s (2 samples; bench queue overrun, so continuous motion). Tick bins in this tool look offset by one at this spacing: use the ms columns.
+
 ### 2026-10-31 00:55 p1b: SWEET_DEADFILL=2 at full canvas: 52-54 swaps/s, first submit 8.8 ms
 - kernel132 sweetswapbig=6 sweettrace=1 sweetcpusample=1, env set before a fresh boot, /var/local/mtl2-telemetry, boot 20261031-004812.log, 4454 mV, no hang, no DeviceLost. Settings long swipe, window 5-15 s. Base: 34.4 swaps/s, first submit 25.9:
 
