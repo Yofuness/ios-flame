@@ -1,42 +1,87 @@
 --- a/crates/metal2vulkan-runtime/src/buffer_texture.rs
 +++ b/crates/metal2vulkan-runtime/src/buffer_texture.rs
-@@ -1262,6 +1262,8 @@
+@@ -1262,6 +1262,9 @@
              (Some(_), false) => "staging",
          };
          shadow_fill_log(self.texel_bytes, aspects, width, layout, at, path, &regions);
-+        // 0113 (B44): the texels' bytes of one chosen extent, for the PC (shadow_dump).
-+        shadow_dump(&self.buffer, self.texel_bytes, width, layout);
++        // 0113 (B44): the texels' bytes of one chosen extent, for the PC (shadow_dump). A shadow
++        // over a buffer dumped already, with its format (`Device::storage_over_buffer`).
++        self.dump("shadow_copies", 0, "shadow-other");
          let (bytes, tracked) = self.buffer.tracked(layout.offset..layout.end());
          Ok(ShadowCopies {
              source: ShadowSource::Bytes {
-@@ -1628,6 +1630,92 @@
+@@ -1287,6 +1290,13 @@
+         })
+     }
+ 
++    /// 0113 (B44): the texels' bytes for the PC, as `M2V_SHADOW_DUMP` chooses (shadow_dump): of a
++    /// texture made by `call`, of Metal format value `format` (0: not known here), on `route`.
++    pub(super) fn dump(&self, call: &'static str, format: usize, route: &'static str) {
++        let width = self.layout.row_bytes / self.texel_bytes.max(1);
++        shadow_dump(&self.buffer, self.texel_bytes, width, &self.layout, (call, format, route));
++    }
++
+     /// 0109 (B29): the staging buffer of a shadowed texture over the texels laid out as `layout`,
+     /// which start at `at` of the buffer's `VkBuffer`: its rows `pitch` bytes apart (a multiple
+     /// of 64), slices `pitch` x rows apart, copied in and back one row each.
+@@ -1628,6 +1638,125 @@
      }
  }
  
-+/// 0113 (B44): `M2V_SHADOW_DUMP=WxH`, read once: the first shadow fill of that extent over CPU
++/// 0113 (B44): `M2V_SHADOW_DUMP`, read once. `WxH`: the first shadow fill of that extent over CPU
 +/// bytes writes row pitch x rows of them, as of now to /var/local/b44-WxH-ROW-t0.bin and as of 5 s
-+/// later to /var/local/b44-WxH-ROW.bin (clients run as mobile: both pre-created, mode 666), and
-+/// logs one line as 0109's. The later read holds the buffer only weakly: the frontend runs a
++/// later to /var/local/b44-WxH-ROW.bin (clients run as mobile: both pre-created, mode 666). `all`:
++/// the first texture over CPU bytes, alias or shadow, of each extent up to 200x200, at most 40 a
++/// process, to /var/local/b44/b44-WxH-ROW-OFF-FMT-PID[-t0].bin (root makes the directory, mode 777).
++/// Each logs one line as 0109's. The later read holds the buffer only weakly: the frontend runs a
 +/// no-copy deallocator as its object goes, whatever the runtime's handles, so a clone would not
 +/// keep those pages; `write` returns EFAULT for pages gone, where a read here would crash.
-+fn shadow_dump(buffer: &Buffer, texel_bytes: u64, width: u64, layout: &BufferLayout) {
++fn shadow_dump(
++    buffer: &Buffer,
++    texel_bytes: u64,
++    width: u64,
++    layout: &BufferLayout,
++    (call, format, route): (&'static str, usize, &'static str),
++) {
 +    use std::io::Write;
-+    use std::sync::atomic::{AtomicBool, Ordering};
-+    static WANTED: std::sync::OnceLock<Option<(u64, u64)>> = std::sync::OnceLock::new();
-+    static DONE: AtomicBool = AtomicBool::new(false);
-+    let wanted = WANTED.get_or_init(|| {
-+        let value = std::env::var("M2V_SHADOW_DUMP").ok()?;
-+        let (w, h) = value.split_once('x')?;
-+        Some((w.parse().ok()?, h.parse().ok()?))
++    #[derive(Clone, Copy)]
++    enum Wanted {
++        Off,
++        All,
++        Extent(u64, u64),
++    }
++    static WANTED: std::sync::OnceLock<Wanted> = std::sync::OnceLock::new();
++    static SEEN: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
++    let wanted = *WANTED.get_or_init(|| {
++        let Ok(value) = std::env::var("M2V_SHADOW_DUMP") else {
++            return Wanted::Off;
++        };
++        if value == "all" {
++            return Wanted::All;
++        }
++        let extent = value.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
++        extent.map_or(Wanted::Off, |(w, h)| Wanted::Extent(w, h))
 +    });
-+    if *wanted != Some((width, layout.rows)) {
++    let cap = match wanted {
++        Wanted::Off => return,
++        Wanted::All if width <= 200 && layout.rows <= 200 => 40,
++        Wanted::Extent(w, h) if (w, h) == (width, layout.rows) && !route.ends_with("alias") => 1,
++        _ => return,
++    };
++    // Pages detached from the buffer may be gone, and this read is no `write`.
++    if buffer.detached() {
 +        return;
 +    }
 +    let Some(contents) = buffer.contents() else {
 +        return;
 +    };
-+    if DONE.swap(true, Ordering::Relaxed) {
-+        return;
++    {
++        let extent = (width, layout.rows);
++        let mut seen = lock(&SEEN);
++        if seen.len() >= cap || seen.contains(&extent) {
++            return;
++        }
++        seen.push(extent);
 +    }
 +    let (rows, row, offset) = (layout.rows, layout.row_pitch, layout.offset);
 +    // The last row may end at its row bytes, short of a whole pitch, at the buffer's end.
@@ -51,7 +96,11 @@
 +    let thread = std::thread::Builder::new().name("m2v-b44-dump".into());
 +    let _ = exit_guard::spawn(thread, move || {
 +        std::thread::sleep(std::time::Duration::from_secs(5));
-+        let name = format!("/var/local/b44-{width}x{rows}-{row}");
++        let pid = std::process::id();
++        let name = match wanted {
++            Wanted::All => format!("/var/local/b44/b44-{width}x{rows}-{row}-{offset}-{format}-{pid}"),
++            _ => format!("/var/local/b44-{width}x{rows}-{row}"),
++        };
 +        let early = shadow_dump_write(&format!("{name}-t0.bin"), first.as_ptr(), size);
 +        let late = match weak.upgrade() {
 +            Some(buffer) => match buffer.contents() {
@@ -66,8 +115,7 @@
 +            None => "buffer gone".to_string(),
 +        };
 +        let line = format!(
-+            "MTL2[{} {}]: B44 dump fmt {texel_bytes}B {width}x{rows} row {row} off {offset} bytes {size} {name}.bin: {late}; -t0.bin: {early}\n",
-+            std::process::id(),
++            "MTL2[{pid} {}]: B44 dump fmt {texel_bytes}B mtlfmt {format} call {call} route {route} {width}x{rows} row {row} off {offset} bytes {size} {name}.bin: {late}; -t0.bin: {early}\n",
 +            std::env::args().next().unwrap_or_default()
 +        );
 +        for path in ["/dev/console", "/var/local/mtl2.log"] {
@@ -102,3 +150,37 @@
  /// 0110 (B44): one line per distinct (texel size, aspects, extent, row, offset % texel, path)
  /// of a shadow fill, the first 64, into /dev/console and /var/local/mtl2.log as 0109's are:
  /// the texels' offset in the `VkBuffer` and its residues, the slices' pitch and each region's
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -2008,6 +2008,8 @@
+             match self.dma_buf_alias_image(plans, layout, descriptor, over, &facts)? {
+                 Ok(image) => {
+                     b29("alias (dma-buf)");
++                    // 0113 (B44): the bytes for the PC, as M2V_SHADOW_DUMP chooses.
++                    texels.dump(call, descriptor.pixel_format as usize, "dma-alias");
+                     return Ok(Storage::Alias { image, texels });
+                 }
+                 Err(why) => why,
+@@ -2017,12 +2019,14 @@
+             if wider != plan {
+                 if let Ok(image) = self.alias_image(wider, layout, descriptor, over, &facts)? {
+                     b29("wider alias");
++                    texels.dump(call, descriptor.pixel_format as usize, "wider-alias");
+                     return Ok(Storage::Alias { image, texels });
+                 }
+             }
+             match self.alias_image(plan.clone(), layout, descriptor, over, &facts)? {
+                 Ok(image) => {
+                     b29("alias");
++                    texels.dump(call, descriptor.pixel_format as usize, "alias");
+                     return Ok(Storage::Alias { image, texels });
+                 }
+                 Err(why) => why,
+@@ -2057,6 +2061,7 @@
+             }
+             false => self.new_image(plan, layout, descriptor, hazard)?,
+         };
++        texels.dump(call, descriptor.pixel_format as usize, "shadow");
+         let copies = texels.shadow_copies(image.raw.get(), image.identity, aspects)?;
+         // Its copies keep its own image, which it presents again once the bytes lie in pages.
+         self.stand_in_while_detached(&texels.buffer, &image)?;
