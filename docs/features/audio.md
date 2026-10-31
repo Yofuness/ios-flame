@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:20 sp18 ran: noise on gpio10 gives nothing, in the echo or at the mic, on either amp
+- kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, fresh boot each, 35 s wait, 21:08-21:13 EDT (before quiet hours), 4454-4456 mV, no reset. Boot tags sp18a, b, c.
+- All runs: `sd0: gpio10 cfg 0xd0 -> 0x2c1, read back 0x2c1`; `sd0: loopback out 1 -> in/out 0x3, out 0 -> in/out 0: follows, the pin is driven`; restored to 0xd0. Bursts in sp18a: 139661, 254235, 141138 toggles, 1000 ms each.
+- sp18a, 0x41, -102 dB, echo on: all 55 `rec t=` lines ch0 and ch1 rms 0, peak 0, zero 5120/5120; "0 samples still A5A5, 563520 zero, 0 other". Amp STATUS1 0x400000 before and after every burst, raw status, clock detect and ng_cfg identical, no faults, 0x3711 read back.
+- sp18b, 0x41, -20 dB, and sp18c, 0x40, -20 dB: mic rms flat 34-55 and 35-57 over 21 windows, no 1 s on/off steps, 0 TONE. The mic started ~2 s before adspboot; windows not aligned against bursts. The mic has never been shown hearing this phone's speaker, so it has no positive control; by ear not checked.
+- Reading (guess): by the sp18 table this is "amp output, speaker or wiring". But the test doesn't prove the noise enters the amp: gpio10 being the amps' data line rests on live.dts alone, and the echo path is dead. Both amps are silent, so a shared cause is likelier than two dead speakers. Not known whether the speakers ever worked on this phone under Android: asked the user. Next research: research/notes/speaker-next3.md (board wiring, rails and enables, amp-side monitors over I2C, an output test without ASP). Audible tests wait for 05:00.
+
 ### 2026-10-30 21:05 sp18 written (not run): --sd0-noise drives gpio10 from an LFSR, no DSP in the path
 - adspboot `--sd0-noise SECS`: 3 bursts of at most 1 s with 1 s gaps, wall-clock cap, pin ends low, DSP plays zeros, gpio10 restored in lpi_restore; refused with --amp-boost, --amp-gain > 0, --no-lpi, --amp-pcm-stop-test. A cfg read-back mismatch aborts. A kill or crash skips the restore.
 - Sources conflict on the pin bits: hakios mic_sm7150.c:511 has cfg bit 9 = OE and +4 bit 1 = level; redfin 0952 has the reverse. Unverified, so cfg is 0x2c1: bit 9 + pull-down, so toggling +4 bit 1 moves the pin under either reading. Also an on-device loopback prints whether the input follows (print only; "DOES NOT FOLLOW" makes silent results inconclusive).

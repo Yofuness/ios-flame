@@ -5,9 +5,9 @@ details and history in the feature Logs (`docs/features/<name>.md`).
 
 ## Priority (a couple at a time, easy first, dev speed on top; ▶ = being worked; ~half a day max each)
 Only items Claude can move now. Items waiting on the user are in "Waiting on you" below; parked ones in docs/backlog.md.
-1. ▶ **60 Hz / GPU speed** (the user's top ask, 2026-10-30; O7): the path can do 60 (camera preview: 300 swaps per 5 s); full-motion Settings ~36, Home ~27 swaps/s. Done: Reduce Transparency no gain; @2x canvas (kernel129, `sweetfb_2x=1`) halves GPU ms and swaps don't move, so GPU cost is not the limit; blur and copy work dropped for fps. Next: ▶ (a) swap-to-swap histogram + touch injector rate (is the bench itself the cap?), then CA CPU per frame on the big cores; (b) two frames in flight (QuartzCore RE), days; (c) redfin's list O9/O11. Stop rule in smoothness.md. (smoothness.md)
-2. **Speaker** (the user's ask; B16): amps, DSP, AFE run, silent; first prove samples reach the amp: sp17 built (echo with the monitor on, silent; audio.md), fallback SD0 noise injection (research/notes/speaker-next2.md); then feed /dev/sunfish-audio to the ADSP. Time-boxed retries; hard item. Quiet hours apply. (audio.md)
-3. **Garbled images** (B44/B29): glyphs sheared ~16 texels per row, offset lead dead (apps.md); next: one-shot byte dump of the glyph's buffer (M2V_SHADOW_DUMP), reshape on the PC to place the fault.
+1. ▶ **60 Hz / GPU speed** (the user's top ask, 2026-10-30; O7): the path can do 60 (camera preview: 300 swaps per 5 s); full-motion Settings ~36, Home ~27 swaps/s. Done: Reduce Transparency no gain; @2x canvas (kernel129, `sweetfb_2x=1`) halves GPU ms and swaps don't move, so GPU cost is not the limit; blur and copy work dropped for fps. Injector not the cap (100 events/s). Frames loop every ~22 ms, tied to neither tick nor GPU; stalls of 140-600 ms every ~3 s cost ~15 %. Next: ▶ (a) run vs wait (sweetcpusample + tick tool) and long-swipe stall check; (b) by that result: pstack or sampled PCs of the render thread; (c) two frames in flight (QuartzCore RE), days; (d) redfin's list O9/O11. Stop rule in smoothness.md. (smoothness.md)
+2. **Speaker** (the user's ask; B16): amps, DSP, AFE run, silent; echo stays zero with monitors on (sp17), noise on gpio10 unheard by the mic on both amps (sp18); next: board wiring, rails and enables, amp output test without ASP (research/notes/speaker-next3.md); then feed /dev/sunfish-audio to the ADSP. Time-boxed retries; hard item. Quiet hours apply. (audio.md)
+3. **Garbled images** (B44/B29): glyphs sheared ~16 texels per row, offset lead dead (apps.md); size-matched dump found no fill tonight; next: dump all glyph-size textures (M2V_SHADOW_DUMP=all), reshape on the PC to place the fault.
 4. **Battery + camera CPU** (O14): -9% in 10 min; preview takes ~5 cores (not profiled); needs a trustworthy battery % (U3).
 5. **Camera polish** (B48): shutter ignored in the first session after a boot, switch ~7 s + ~10 s, front colour cast, focus on open ~25 s. GPU device lost (gpu.md): read "DEVLOST first" if it returns.
 
@@ -18,7 +18,7 @@ Parked for later (the user, 2026-10-30): Compass accuracy (20-30 deg off, jumps;
 Finished items: [completed.md](completed.md) (not auto-loaded).
 
 ## Questions for you (Claude took the recommended path meanwhile)
-- (none open)
+- Did this phone's speakers work under Android before the port? Assumed yes; if not, the speaker hunt may be a hardware fault.
 
 ## Your tasks at the phone
 In [user-tasks.md](user-tasks.md) (not auto-loaded): 10 open. Claude doesn't wait on them; it moves to the next item.
