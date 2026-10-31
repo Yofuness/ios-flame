@@ -33,6 +33,7 @@
  *   adspboot boot --pcm --amp --rec [--rec-hex]  sp7: also record the left amp's VMON/IMON over SEC_MI2S_TX (0x1003,
  *                     SD1, gpio11) around the tone: RMS/peak per 100 ms and baseline vs tone (vi-loopback.md)
  *                     sp18: --sd0-noise SECS (with --amp, no boost): DSP silent, gpio10 driven from an LFSR, 3 bursts
+ *                     sp19: --pin-watch (with --rec-echo, --amp-db -102): DSP silent, gpio10/11/8/9 sampled in place, then as inputs
  *   adspboot boot --pcm [--pcm-sid 0x1b21] [--pcm-shift 1]  ap6: --afe, and while the port runs a 3 s 1 kHz -20 dBFS
  *                     sine through ASM + ADM (buffer through a translating bank for the SID; amps untouched)
  *   [--intent-once]  ap7: delete a remote intent on tx instead of waiting for the ADSP's RX_DONE[_W_REUSE] (or ADSP_INTENT_ONCE=1)
@@ -1589,8 +1590,115 @@ static void sd0_restore(void)
 	printf("sd0: gpio10 restored: cfg %#x (want %#x) in/out %#x\n", rd32(SD0_CFG), sd0_cfg_saved, rd32(SD0_IO));
 }
 
+/* sp19: --pin-watch (research/notes/speaker-next3.md step 1): which of gpio10/11 does the amp drive? Passes of PW_WIN_MS
+ * from a thread, so the main loop keeps refilling the PCM: first all pins in place (function mode, input bit expected
+ * dead, sp15), then gpio10, 11 as GPIO inputs. The clocks stay in function: as inputs they read 0 anyway and would leave
+ * the running amp without that clock. Input = cfg bit 9 clear and in/out bit 1 clear: under both readings of the sp18
+ * note nothing drives the pad. The control is the pull check: pull-up for a moment after each input window
+ * (bits 1:0 = 3 from memory, Linux pinctrl-lpi; printed, no abort). */
+#define PW_NPIN			4
+#define PW_NIN			2	/* the first PW_NIN of pw_pins also get an input pass */
+#define PW_CFG_IN		0x0c1	/* func 0, 8 mA, pull-down, bit 9 clear */
+#define PW_CFG_UP		0x0c3
+#define PW_WIN_MS		500
+#define PW_UP_READS		256
+static const int pw_pins[PW_NPIN] = { 10, 11, 8, 9 };
+static int pw_on, pw_i, pw_set, pw_thr_on, pw_done, pw_pin;
+static volatile int pw_stop;
+static volatile int pw_busy;
+static uint32_t pw_cfg_saved, pw_io_saved, pw_cfg_to, pw_up_back;
+static uint64_t pw_n, pw_ones, pw_trans, pw_up_ones, pw_next;
+static pthread_t pw_thr;
+
+static uint64_t pw_cfg_pa(int pin) { return LPI_PA + 0x1000u * pin; }
+
+/* the pin back as it was; no-op when already back or never taken */
+static void pw_unset(void)
+{
+	if (!pw_set)
+		return;
+	uint64_t pa = pw_cfg_pa(pw_pin);
+	wr32(pa, pw_cfg_saved);
+	wr32(pa + 4, pw_io_saved & 2);
+	pw_set = 0;
+}
+
+static void *pw_sample(void *arg)
+{
+	uint64_t pa = pw_cfg_pa(pw_pin), t0 = now_ms();
+	uint32_t last = 0;
+	pw_n = pw_ones = pw_trans = pw_up_ones = 0;
+	while (!pw_stop) {
+		if (!(pw_n & 63) && now_ms() - t0 >= PW_WIN_MS)
+			break;
+		uint32_t bit = rd32(pa + 4) & 1;
+		pw_trans += pw_n && bit != last;
+		pw_ones += bit;
+		pw_n++;
+		last = bit;
+	}
+	if (pw_set) {
+		wr32(pa, PW_CFG_UP);
+		pw_up_back = rd32(pa);
+		for (int i = 0; i < PW_UP_READS; i++)
+			pw_up_ones += rd32(pa + 4) & 1;
+		pw_unset();	/* at once, not at the next 50 ms poll */
+	}
+	pw_busy = 0;
+	return arg;
+}
+
+/* the running pass, if any: end it, join, print its numbers */
+static void pw_join(void)
+{
+	if (!pw_thr_on)
+		return;
+	pw_stop = 1;
+	pthread_join(pw_thr, NULL);
+	pw_thr_on = 0;
+	printf("pin-watch: gpio%d cfg %#x->%#x samples %llu ones %llu transitions %llu\n", pw_pin, pw_cfg_saved, pw_cfg_to,
+	       (unsigned long long)pw_n, (unsigned long long)pw_ones, (unsigned long long)pw_trans);
+	if (pw_cfg_to != pw_cfg_saved)
+		printf("pin-watch: gpio%d pull-up cfg %#x ones %llu of %d; back to cfg %#x (want %#x)\n", pw_pin, pw_up_back,
+		       (unsigned long long)pw_up_ones, PW_UP_READS, rd32(pw_cfg_pa(pw_pin)), pw_cfg_saved);
+}
+
+/* pass pw_i: 0..3 in place, 4..5 as inputs. 0 = sampling; a read-back mismatch restores the pin and aborts */
+static int pw_start(void)
+{
+	int in = pw_i >= PW_NPIN;
+	pw_pin = pw_pins[pw_i % PW_NPIN];
+	uint64_t pa = pw_cfg_pa(pw_pin);
+	pw_cfg_saved = rd32(pa);
+	pw_io_saved = rd32(pa + 4);
+	pw_cfg_to = in ? PW_CFG_IN : pw_cfg_saved;
+	if (in) {
+		pw_set = 1;
+		wr32(pa + 4, 0);	/* before cfg: no moment with the out bit set on a GPIO pin */
+		wr32(pa, PW_CFG_IN);
+		uint32_t back = rd32(pa);
+		if (back != PW_CFG_IN) {
+			printf("pin-watch: gpio%d cfg %#x->%#x, read back %#x MISMATCH\n", pw_pin, pw_cfg_saved, PW_CFG_IN, back);
+			pw_unset();
+			return -1;
+		}
+	}
+	pw_stop = 0;
+	pw_busy = 1;
+	if (pthread_create(&pw_thr, NULL, pw_sample, NULL)) {
+		pw_busy = 0;
+		printf("pin-watch: no thread\n");
+		pw_unset();
+		return -1;
+	}
+	pw_thr_on = 1;
+	return 0;
+}
+
 static void lpi_restore(void)	/* atexit too: pins back even if the devote never runs */
 {
+	pw_join();	/* sp19: same reason as sd0_restore */
+	pw_unset();
 	sd0_restore();	/* sp18: before lpi_pins puts the saved cfg back */
 	if (lpi_set)
 		lpi_pins(0);
@@ -1892,6 +2000,8 @@ static void amp_tx(int on)
 static void amp_off(void)
 {
 	sd0_join();	/* sp18: no burst outlives the amp */
+	pw_join();	/* sp19: nor a pin-watch pass */
+	pw_unset();
 	if (!amp.configured)
 		return;
 	printf("amp: power down%s\n", amp.up ? ", was on" : "");
@@ -1933,7 +2043,7 @@ static void amp_start(void)
 	}
 	amp_t0 = now_ms();
 	amp_next = amp_t0 + 50;
-	sd0_next = amp_t0 + SD0_SETTLE_MS;	/* sp18 */
+	sd0_next = pw_next = amp_t0 + SD0_SETTLE_MS;	/* sp18, sp19 */
 }
 
 /* sp18: IRQ1 STATUS1 (faults latch here; read only, nothing cleared), then the raw status + decode */
@@ -1990,6 +2100,44 @@ done:
 	pcm_tone_periods = 0;	/* the stream ends soon; gpio10 goes back in lpi_restore, before DEVICE_STOP */
 }
 
+/* sp19: status registers, meaning unknown (speaker-next3.md "Monitors over I2C"): before/during comparison only */
+static void pw_regs(const char *tag)
+{
+	static const uint32_t regs[5] = { 0x2908, 0x640c, 0x6410, 0x6418, 0x6450 };
+	for (int i = 0; i < 5; i++) {
+		uint32_t v = 0;
+		int r = cs_read(&amp, regs[i], &v);
+		printf("pin-watch: %s reg %#x = %#x%s\n", tag, regs[i], v, r ? " READ FAILED" : "");
+	}
+}
+
+/* sp19: amp on and BCLK running: the passes one after the other; 50 ms grain from amp_poll */
+static void pw_poll(void)
+{
+	if (!pw_on || pw_done)
+		return;
+	if (pw_thr_on) {
+		if (pw_busy)
+			return;
+		pw_join();
+		if (++pw_i >= PW_NPIN + PW_NIN) {
+			printf("pin-watch: %d passes done: off\n", pw_i);
+			goto done;
+		}
+	} else if (now_ms() < pw_next) {
+		return;
+	} else {
+		pw_regs("during");
+	}
+	if (!pw_start())
+		return;
+	printf("pin-watch: abort at pass %d\n", pw_i);
+done:
+	pw_done = 1;
+	amp_off();
+	pcm_tone_periods = 0;	/* the stream ends soon */
+}
+
 /* while on: IRQ1 errors every 50 ms, the 3 s cap, the tone tail */
 static void amp_poll(void)
 {
@@ -2024,14 +2172,15 @@ static void amp_poll(void)
 	if (cs_check(&amp)) {
 		printf("amp: IRQ1 error: power down now\n");
 		amp_off();
-	} else if (now_ms() - amp_t0 >= (sd0_ms ? SD0_AMP_MAX_MS : AMP_MAX_MS)) {	/* sp18 */
-		printf("amp: %d ms cap\n", sd0_ms ? SD0_AMP_MAX_MS : AMP_MAX_MS);
+	} else if (now_ms() - amp_t0 >= (sd0_ms || pw_on ? SD0_AMP_MAX_MS : AMP_MAX_MS)) {	/* sp18, sp19 */
+		printf("amp: %d ms cap\n", sd0_ms || pw_on ? SD0_AMP_MAX_MS : AMP_MAX_MS);
 		amp_off();
 	} else if (pcm_sent + AMP_TAIL_PERIODS >= rec_lead + pcm_tone_periods) {
 		printf("amp: tone ends in <= 0.5 s: off\n");
 		amp_off();
 	} else {
 		sd0_poll();	/* sp18 */
+		pw_poll();	/* sp19 */
 	}
 }
 
@@ -2063,7 +2212,7 @@ static void pcm_send(uint8_t svc, uint16_t port, uint32_t opcode, const void *pl
 static void pcm_fill(unsigned p)
 {
 	int16_t s[PCM_FRAMES * 2];
-	int tone = !sd0_ms && pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec; sp18: DSP silent */
+	int tone = !sd0_ms && !pw_on && pcm_sent >= rec_lead && pcm_sent < rec_lead + pcm_tone_periods;	/* sp7: rec_lead 0 without --rec; sp18, sp19: DSP silent */
 	for (unsigned f = 0; f < PCM_FRAMES; f++)
 		s[2 * f] = s[2 * f + 1] = tone ? pcm_sine[pcm_tone_at++ % 48] : 0;
 	pm_wr(pcm_pa + (uint64_t)PCM_STRIDE * p, s, sizeof(s));	/* pm_wr cleans to PoC: the DSP reads DRAM */
@@ -3059,7 +3208,9 @@ int main(int argc, char **argv)
 				fprintf(stderr, "adspboot: --sd0-noise takes seconds > 0\n");
 				return 2;
 			}
-		} else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
+		} else if (!strcmp(argv[i], "--pin-watch"))	/* sp19: sample gpio10/11/8/9 while the amp echoes; silent */
+			pw_on = 1;
+		else if (!strcmp(argv[i], "--rec-hex"))	/* sp7: hex of the first READ_DONE */
 			rec_hex = 1;
 		else if (!strcmp(argv[i], "--amp-pcm-stop-test"))	/* sp6: let the ADSP underflow with the amp on */
 			amp_pcm_stop_test = 1;
@@ -3153,6 +3304,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "adspboot: --sd0-noise needs --amp, and no --amp-boost, --amp-gain > 0, --no-lpi or --amp-pcm-stop-test\n");
 		return 2;
 	}
+	if (pw_on && (!amp_on || !rec_echo || amp_db != -102 || sd0_ms || amp_boost || amp.amp_gain > 0 || no_lpi || amp_pcm_stop_test || amp_check)) {	/* sp19 */
+		fprintf(stderr, "adspboot: --pin-watch needs --amp, --rec-echo and --amp-db -102, and no --sd0-noise, --amp-boost, --amp-gain > 0, --no-lpi, --amp-pcm-stop-test or --amp-check\n");
+		return 2;
+	}
 	if (rec_on)
 		rec_lead = REC_LEAD_PERIODS;
 	if (amp_db > -20)
@@ -3170,7 +3325,9 @@ int main(int argc, char **argv)
 			printf("amp: not ready: stop before the ADSP boot\n");
 			return 1;
 		}
-		pcm_tone_periods = sd0_ms ? SD0_TONE_PERIODS : AMP_TONE_PERIODS;	/* sp18 */
+		pcm_tone_periods = sd0_ms || pw_on ? SD0_TONE_PERIODS : AMP_TONE_PERIODS;	/* sp18, sp19 */
+		if (pw_on)
+			pw_regs("before");	/* sp19: configured, GLOBAL_EN 0, no stream */
 	}
 	if (!strcmp(cmd, "status"))
 		return status();
@@ -3213,7 +3370,7 @@ int main(int argc, char **argv)
 	if (!strcmp(cmd, "smmu"))
 		return adsp_smmu(one, sid, mask) ? 1 : 0;
 	if (strcmp(cmd, "boot")) {
-		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew] [--sd0-noise SECS]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
+		fprintf(stderr, "usage: adspboot [boot|status|shutdown|smmu] [--watch S] [--no-early] [--no-pdmap] [--smmu] [--rpc [--root [--sensors]]] [--apr] [--afe [--no-lpi] [--vote-block N]] [--swr-probe [--swr-clk | --swr-clk-first] [--swr-newlog] [--swr-only N] [--swr-init a|b|c|d] [--swr-mbhc SECONDS [--swr-mbhc-unmask]] [--swr-nohw]] [--pcm [--pcm-sid SID] [--pcm-shift N] [--pcm-dbfs N]] [--amp [--amp-addr 0x40|0x41] [--amp-db N] [--amp-gain N] [--amp-pcm-stop-test] [--amp-no-unmute] [--amp-no-clk] [--amp-fsmon] [--amp-boost] [--amp-invert-clk] [--rec [--rec-hex] [--rec-echo]] [--lpi-slew] [--sd0-noise SECS] [--pin-watch]] [--amp-check [--amp-db N] [--amp-gain N]] [--dry] [--status] [--sid SID MASK] [--sns-list | --sns-stream TYPE [--sns-rate HZ] | --sns-motion [--sns-motion-dev PATH]] [--sns-secs N] [--sns-delay S] [--sns-dump] [--sns-one-port] [--sns-unregistered]\n");
 		return 2;
 	}
 	if (smmu && adsp_smmu(one, sid, mask))

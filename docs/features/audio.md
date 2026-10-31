@@ -34,6 +34,13 @@ Firmware (adsp.*, cs35l41 bins) stays on the phone in /var/local, out of git.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:30 Stock speaker uses SEC_TDM, not MI2S; gpio10 isn't proven as the amp input (research/notes/speaker-next3.md, no phone)
+- Observed (vendor.img, live.dts): speaker interface SEC_TDM_RX_0 (audio_platform_info_bolero_snd.xml:202), RX 2 ch, TX 4 ch, S32_LE, 48 kHz (mixer_paths_bolero_snd.xml:435-440); DT TDM group 0x9110/0x9111, ports 0x9010/0x9011, 12.288 MHz, data-delay 1 (live.dts:21127-21170). live.dts:20326-20330 (rx-lines 1, tx-lines 0), our basis for "SD0 in", describes a DAI the speaker doesn't use. No DT node links the amps to pins.
+- Observed: no enable pin or supply in the amp nodes; firmware isn't needed (stock voice-handset uses PCM Source ASP, redfin plays in bypass). Stock level is 17.5 dB gain and 0 dB, so sp18 at 0.5 dB and -20 dB was ~37 dB below stock. No VMON, IMON or VP value register in re/cs35/cs35l41.h, so I2C can't prove current flow.
+- Differences from redfin's working recipe: NG_CFG sel 0x3f (ours 0), DRE PWR_CTRL3 bit 20 (ours off), gain 17, DSP_A, 32/24.
+- Guess: gpio8-11 are still the amp pins (~75 %), and gpio10/11 may be swapped (~30 %), which would explain sp17 and sp18 together. So sp18's silence is weak evidence about the output stage. LRCLK at the amp is unproven; PLL_LOCK only shows SCLK.
+- Next, ranked: sp19 pin watch (gpio10/11 as inputs while the amp echoes, silent); noise on gpio11 (audible); the stock TDM recipe, silent first (~half a day); recipe differences; a VPMON click only last, after a mic control (low but guessed DC risk). Never route VMON or IMON to the DAC.
+
 ### 2026-10-30 21:20 sp18 ran: noise on gpio10 gives nothing, in the echo or at the mic, on either amp
 - kernel112 CAMERA=1 sweetse9=2 sweetcampmic=2 sweetampreset=1, fresh boot each, 35 s wait, 21:08-21:13 EDT (before quiet hours), 4454-4456 mV, no reset. Boot tags sp18a, b, c.
 - All runs: `sd0: gpio10 cfg 0xd0 -> 0x2c1, read back 0x2c1`; `sd0: loopback out 1 -> in/out 0x3, out 0 -> in/out 0: follows, the pin is driven`; restored to 0xd0. Bursts in sp18a: 139661, 254235, 141138 toggles, 1000 ms each.
