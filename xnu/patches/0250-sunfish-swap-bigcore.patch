@@ -1,0 +1,165 @@
+From 2769f80cb8c554bb90a51152ab615f31234366f2 Mon Sep 17 00:00:00 2001
+From: Yofuness <compiledchickennuggets@gmail.com>
+Date: Fri, 30 Oct 2026 22:49:09 -0400
+Subject: [PATCH] 0250 sunfish: kern.sweet_ui_swapbig binds backboardd's IOMFB
+ SwapEnd thread to an A76 (6 or 7, 0 off by default, boot-arg sweetswapbig),
+ never when RT; counters kern.sweet_ui_swap_*
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bsd/dev/sweet_cpufreq.c               | 30 +++++++++++
+ iokit/Kernel/arm/SweetFramebuffer.cpp |  2 +
+ osfmk/kern/sched_prim.c               | 78 +++++++++++++++++++++++++++
+ 3 files changed, 110 insertions(+)
+
+diff --git a/bsd/dev/sweet_cpufreq.c b/bsd/dev/sweet_cpufreq.c
+index 472bc2d..66a5700 100644
+--- a/bsd/dev/sweet_cpufreq.c
++++ b/bsd/dev/sweet_cpufreq.c
+@@ -140,4 +140,34 @@ sysctl_sweet_ui_first SYSCTL_HANDLER_ARGS
+ }
+ SYSCTL_PROC(_kern, OID_AUTO, sweet_ui_first, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
+     0, 0, sysctl_sweet_ui_first, "A", "SWEET UI: first big-core placement (tid, cpu, idle|preempt)");
++
++/* 0250: kern.sweet_ui_swapbig CPU binds backboardd's SwapEnd thread to that A76 (osfmk/kern/sched_prim.c); 0 off */
++extern int sweet_ui_swapbig_mode(void);
++extern int sweet_ui_swapbig;
++extern uint64_t sweet_ui_swap_tid;
++extern uint32_t sweet_ui_swap_pri, sweet_ui_swap_a76, sweet_ui_swap_a55, sweet_ui_swap_binds, sweet_ui_swap_skip_rt, sweet_ui_swap_skip_cpu;
++static int
++sysctl_sweet_ui_swapbig SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	int value = sweet_ui_swapbig_mode(), changed = 0;
++	int error = sysctl_io_number(req, value, sizeof(value), &value, &changed);
++	if (error || !changed) {
++		return error;
++	}
++	if (value != 0 && value != 6 && value != 7) {
++		return EINVAL;
++	}
++	sweet_ui_swapbig = value;
++	return 0;
++}
++SYSCTL_PROC(_kern, OID_AUTO, sweet_ui_swapbig, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
++    0, 0, sysctl_sweet_ui_swapbig, "I", "SWEET UI: bind backboardd's SwapEnd thread to this A76 (6, 7; 0 off)");
++SYSCTL_QUAD(_kern, OID_AUTO, sweet_ui_swap_tid, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_tid, "SWEET UI: backboardd SwapEnd caller");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_pri, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_pri, 0, "SWEET UI: its sched_pri at the last swap");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_a76, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_a76, 0, "SWEET UI: swaps entered on an A76");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_a55, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_a55, 0, "SWEET UI: swaps entered on an A55");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_binds, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_binds, 0, "SWEET UI: binds done");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_skip_rt, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_skip_rt, 0, "SWEET UI: swaps not bound, thread is RT");
++SYSCTL_UINT(_kern, OID_AUTO, sweet_ui_swap_skip_cpu, CTLFLAG_RD | CTLFLAG_LOCKED, &sweet_ui_swap_skip_cpu, 0, "SWEET UI: swaps not bound, target CPU unavailable");
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 11b3f45..26724c4 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -61,6 +61,7 @@ extern uint64_t sweet_last_touch_abs;
+ void sweet_gpu_kill_backboardd(void);
+ extern volatile int flame_wdt_stop;
+ extern volatile int sweet_fb_swapped;	/* 0189: boot watchdog (SweetPlatformExpert.cpp) */
++extern "C" void sweet_ui_swap_end(void);	/* 0250: osfmk/kern/sched_prim.c */
+ extern int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ /* 0224: zero-copy E3c flip mode (sweet_mdpdump.c, SweetSurface.cpp; boot-arg sweetfb_zerocopy=1) */
+ int sweet_mdp_zc_flip(uint32_t pa);
+@@ -1370,6 +1371,7 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 			ret = kIOReturnBadArgument;
+ 			break;
+ 		}
++		sweet_ui_swap_end();    /* 0250: identifies backboardd's swapping thread; kern.sweet_ui_swapbig binds it */
+ 		memcpy(rec, args->structureInput, sizeof(rec));
+ 		fFB->swap(rec);
+ 		break;
+diff --git a/osfmk/kern/sched_prim.c b/osfmk/kern/sched_prim.c
+index b87e4f8..16840ec 100644
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -5090,6 +5090,84 @@ sweet_ui_count(thread_t thread, processor_t bp, int preempt)
+ 	}
+ }
+ 
++/*
++ * sunfish 0250: kern.sweet_ui_swapbig CPU (sysctl in bsd/dev/sweet_cpufreq.c), 0 off (default, boot-arg sweetswapbig),
++ * 6 or 7: the backboardd thread calling IOMFB SwapEnd is bound to that A76. A bind, not a choose_processor rule: a
++ * tagged thread still leaves the A76s through the shared run queue (any CPU dequeues it) and direct handoffs; bound
++ * threads skip choose_processor and are honoured at both. Never for RT threads: their queue is per-pset and
++ * realtime_setrun asserts unbound. Takes effect at the thread's next swap, so a live write can A/B.
++ */
++int sweet_ui_swapbig = -1;              /* -1 = boot-arg not parsed yet */
++uint64_t sweet_ui_swap_tid;
++uint32_t sweet_ui_swap_pri, sweet_ui_swap_a76, sweet_ui_swap_a55, sweet_ui_swap_binds, sweet_ui_swap_skip_rt, sweet_ui_swap_skip_cpu;
++static thread_t sweet_ui_swap_self;     /* compared only, never dereferenced */
++extern void proc_selfname(char *buf, int size);
++
++/* thread context only (sysctl, SwapEnd) */
++int sweet_ui_swapbig_mode(void);
++int
++sweet_ui_swapbig_mode(void)
++{
++	if (__improbable(sweet_ui_swapbig < 0)) {
++		int v = 0;
++		PE_parse_boot_argn("sweetswapbig", &v, sizeof(v));
++		sweet_ui_swapbig = (v == 6 || v == 7) ? v : 0;
++	}
++	return sweet_ui_swapbig;
++}
++
++/* SwapEnd, in the caller's thread, no locks held by us; may block once to migrate */
++void sweet_ui_swap_end(void);
++void
++sweet_ui_swap_end(void)
++{
++	thread_t self = current_thread();
++	if (__improbable(self != sweet_ui_swap_self)) {
++		char who[32];
++		proc_selfname(who, sizeof(who));
++		if (strcmp(who, "backboardd") != 0) {
++			return;
++		}
++		sweet_ui_swap_tid = thread_tid(self);
++		sweet_ui_swap_self = self;
++	}
++	/* stats only: the CPU may change under us */
++	sweet_ui_swap_pri = self->sched_pri;
++	os_atomic_inc(cpu_number() >= 6 ? &sweet_ui_swap_a76 : &sweet_ui_swap_a55, relaxed);
++
++	int cpu = sweet_ui_swapbig_mode();
++	processor_t want = cpu > 0 ? processor_array[cpu] : PROCESSOR_NULL;
++	if (want != PROCESSOR_NULL && (!want->is_recommended ||
++	    (want->state != PROCESSOR_IDLE && want->state != PROCESSOR_RUNNING && want->state != PROCESSOR_DISPATCHING))) {
++		want = PROCESSOR_NULL;
++		os_atomic_inc(&sweet_ui_swap_skip_cpu, relaxed);
++	}
++	if (cpu == 0 && self->bound_processor == PROCESSOR_NULL) {
++		return;
++	}
++
++	spl_t s = splsched();
++	thread_lock(self);
++	if (want != PROCESSOR_NULL && (self->sched_mode == TH_MODE_REALTIME || self->sched_pri >= BASEPRI_RTQUEUES)) {
++		want = PROCESSOR_NULL;
++		os_atomic_inc(&sweet_ui_swap_skip_rt, relaxed);
++	}
++	bool move = false;
++	if (self->bound_processor != want) {
++		/* plain store, not thread_bind_internal: it asserts non-RT, and a thread gone RT must still get unbound */
++		self->bound_processor = want;
++		move = want != PROCESSOR_NULL && current_processor() != want;
++		if (want != PROCESSOR_NULL) {
++			os_atomic_inc(&sweet_ui_swap_binds, relaxed);
++		}
++	}
++	thread_unlock(self);
++	splx(s);
++	if (move) {
++		thread_block(THREAD_CONTINUE_NULL);
++	}
++}
++
+ processor_t
+ choose_processor(
+ 	processor_set_t         starting_pset,
+-- 
+2.56.0
+
