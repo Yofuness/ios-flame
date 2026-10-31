@@ -88,3 +88,4 @@ output in /var/local.
 - 2026-10-30 Camera tools updated (cam34-af5: camd, camid, camrx, camclient, SunfishAudio.driver; tools/sunfish-install-camera.sh now installs the driver too); kernel128 everyday (xnu 0243-0247). af6 driver built, not yet installed; /var/local/camdev.af-old (absent by default) brings back the af5 search.
 - 2026-10-30 Camera.app prefs: Live Photo off and preserved (com.apple.camera.plist, backup .bak-lp): tools/sunfish-camera-prefs.sh.
 - 2026-10-30 /var/local/motion-dump.on (Compass raw recorder; 30 MB cap; delete to stop), /var/local/magcal.txt seeded from rec1 (work/magcal-rec1.txt; sensors.md dm12).
+- 2026-10-30 adspboot with --rec-echo 0x3700 + --sd0-noise, and the Metal bundle with bridge 0113 (M2V_SHADOW_DUMP, off when unset): tools/build-userland-linux.sh + flame-files.py put; tools/build-metal2-linux.sh + tools/sunfish-metal2-install.sh.

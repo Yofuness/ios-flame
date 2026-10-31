@@ -94,6 +94,29 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-30 21:15 tl1/tl2: frame timing against the tick, both canvases: the wait is before the first submit
+- Boots with sweettrace=1: tl1 kernel128 (20261030-205504.log, 4454 mV), tl2 kernel129 sweetfb_2x=1 (20261030-205952.log, 4455 mV). Settings vertical scroll, 10 s of full motion. Timeline tool has no clipping or tick output, so a new script read the SWEET TL records (mach clock 19.2 MHz, not 24). p50 / p95:
+
+| metric | 1125x2436 | 750x1624 |
+|---|---|---|
+| swaps/s in window | 30.2 | 33.5 |
+| swap-to-swap in ticks: 0 / 1 / 2 / 3 / 4+ | 4 / 56 / 26 / 8 / 5 % | 2 / 55 / 33 / 7 / 3 % |
+| swap-to-swap ms | 24.2 / 56.4 | 23.1 / 51.3 |
+| tick after previous swap -> first submit, ms | 17.1 / 51.0 | 15.0 / 43.1 |
+| first submit -> swap call, ms | 0.27 / 0.58 | 0.31 / 0.59 |
+| GPU per frame, sum of spans, ms | 26.3 / 27.1 | 12.6 / 13.2 |
+| first submit -> last GPU end, ms | 59.4 / 91.1 | 12.6 / 13.2 |
+| GPU end -> present call, ms | 12.8 / 46.6 | 13.9 / 40.0 |
+| CPU + GPU, ms | 43.3 / 77.3 | 27.3 / 55.7 |
+| frames with CPU + GPU <= 16.7 ms | 0 % | 6 % |
+| median overshoot of the rest, ms | 26.6 | 11.1 |
+| present within 2 ms of the first tick after GPU end | 65 % | 63 % |
+
+- Observed: the swap fires ~0.3 ms after the first submit, before the GPU ends, so 'one serial frame' in older notes is not exact: at 1125x2436 GPU work queues up (59 ms latency, GPU busy 84-93 %) while swaps go on. Each frame has two backboardd submits. Tick records 511 and 582 per 10 s, under 600: ticks late or records lost, unknown.
+- My tick-threshold guess at the @2x entry is refuted: at @2x the median frame is 11 ms over, not just above the line. Halving the GPU moved tick -> first submit only from 17.1 to 15.0 ms.
+- Inference: the rate is now set by the part before the first submit (p50 ~15 ms, p95 43-51), which is CPU or a wait inside it. Investigating clocks and what that time holds (research/notes/fps-cpu.md).
+- Part B of that run (B44 dump) didn't run: sizes 97x76, 92x64, 78x63 from kernel126's logs never appear tonight; lock-screen-scale shadows tonight are 86x86 row 352 off 32, 101x101, 103x103, A8 96x62 and 131x61. Bundle with 0113 installed (log only for now).
+
 ### 2026-10-30 20:55 @2x A/B (kernel129, xnu 0248, sweetfb_2x=1): GPU time more than halves, swaps/s stay: GPU is NOT the limit in Settings
 - Boot: `CAMERA=1 tools/sunfish-test.sh -k work/kernel129/kernel.development.sweet fb2x sweetse9=2 sweetcampmic=2 sweetfb_2x=1`, 4456 mV, log 20261030-203804.log, MobileGestalt cache rebuilt under @2x (8013 B), then restored (8012 B). No reset, no DeviceLost, no fallback lines. "swap 1 layer 0 surface 2 750x1624 ... frames now scaled to fit by the GPU". Upscale works, full screen, touch right (Settings icon, Notes).
 - Correction to the means in the 20:35 table: they include the partial first and last 5 s windows. Full-motion windows, swaps/s and backboardd GPU ms/submit, from the same runs:
