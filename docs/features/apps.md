@@ -48,6 +48,19 @@ from the backup with plistlib.
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:25 B44/B29 CAUSE: client stride 32-byte aligned, our kernel's row rounded to 64
+- d1, kernel131, bridge 0115 M2V_SHADOW_DUMP=all, research/b44/d1 (lines.txt, 33 viewable dumps). Backboardd, new_texture_with_iosurface_plane, RG8, wider-alias:
+
+| texture | logged row | row where the bytes are clean | image at logged row |
+|---|---|---|---|
+| 102x144 | 256 | 224 | sheared |
+| 105x144 | 256 | 224 | sheared |
+| 75x144 | 192 | 160 | sheared |
+| 96x148 (flashlight) | 192 | 192 (tight, a multiple of 64) | clean |
+
+- Observed: row-to-row difference is lowest at those rows (e.g. 102x144: 655 at row 224, 4995 at row 256). 32 B per row = 16 RG8 texels, or 8 RGBA8: this matches the shear measured earlier (16 and 8 per row). Other glyphs on the sheet with 64-aligned tight rows are clean.
+- Reading: the writer used a 32-byte-aligned stride; the reader uses the row xnu 0159 rounded up to 64 (sweetsurfalign, since Oct 24). That also means the offset, UBWC and repack leads were all off target. Not yet tested: fix, or which client writes them. Quick proof next: boot with sweetsurfalign off. Its speed cost is the question: 0159 avoided shadow copies.
+
 ### 2026-10-30 21:40 B44 all-sizes dump: the buffer-backed glyphs on the lock screen are clean; the garbled buttons never came through this path
 - kernel128, bridge 0113 M2V_SHADOW_DUMP=all, backboardd (pid 287), 20261030-213452.log. 5 dumps in research/b44/all/, reshaped at the logged row on the PC, with t0 and t+5 s non-zero counts equal:
 

@@ -94,6 +94,19 @@ Kernels:
 ## Log
 (Newest first, append-only. When this Log passes about 150 lines, move its oldest entries to the archive.)
 
+### 2026-10-31 00:30 m1: the slow mode comes from restarting backboardd; a fresh boot gets the fast one
+- kernel131 sweetswapbig=6 sweettrace=1 sweetcpusample=1, boots 20261031-001444.log, 20261031-002157.log, 4455 and 4454 mV, no hang, no DeviceLost. Settings long swipe:
+
+| step | swaps/s | swap-to-swap p50 / p95 ms | 1st / 2nd submit ms | CPU ms per swap |
+|---|---|---|---|---|
+| fresh boot | 32.8, 34.4 | 29.6 / 39.0, 29.1 / 31.5 | 25.9 / 0.57, 26.0 / 0.56 | 10.3, 9.1 |
+| backboardd restarted | 28.3, 28.3 | 35.3 / 37.8, 35.4 / 37.8 | 25.9 / 6.75, 26.0 / 6.76 | 9.3, 9.4 |
+| + TU_FETCH_GMEM_MIN_DRAWS=100000, restart | 29.3, 29.3 | 34.1 / 36.5, 34.1 / 36.3 | 26.0 / 5.50 | 6.6, 9.6 |
+| + TUDBG=sysmem | 30.5, 30.5 | 32.7 / 37.8, 32.5 / 49.4 | 24.6 / 5.56 | 8.0, 13.5 |
+| fresh boot + that setting | 33.1, 34.1 | 29.2 / 47.1, 29.3 / 32.1 | 25.9 / 0.77 | 14.0, 9.1 |
+
+- Correction to k1: TU_FETCH_GMEM_MIN_DRAWS isn't the fix; its good row there came from a different state and it doesn't restore the fast mode here, so it doesn't go in as a default. Trigger: a backboardd restart adds ~5-6 ms to the second submit, unchanged by the knobs. Not known why (guess: after a restart something re-uploads each frame, or a surface stays in a slower path). Daily use only hits this after a backboardd crash or recovery.
+
 ### 2026-10-31 00:10 k1: Turnip knobs at full canvas: first submit stays ~26 ms; a second mode with 28 swaps/s found and avoided
 - kernel131 sweetswapbig=6 sweettrace=1 sweetcpusample=1, boot 20261030-235443.log, 4440 mV, no hang, no DeviceLost. Settings long swipe, backboardd restarted per setting. GPU busy ~99 % in all:
 
